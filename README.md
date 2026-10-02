@@ -8,6 +8,30 @@ Renns Android Kitchen (RAK) is a desktop app for working with Android ROMs and p
 
 RAK can write supported changes directly into an EROFS image, without unpacking the entire partition first.
 
+## Preview
+
+**Projects**
+
+![Renns Android Kitchen project library](https://raw.githubusercontent.com/ahsanihlwn/RennsAndroidKitchen/main/preview/project_cap.PNG)
+
+**Firmware workspace**
+
+![Partition images and files in the RAK workspace](https://raw.githubusercontent.com/ahsanihlwn/RennsAndroidKitchen/main/preview/project1_cap.PNG)
+
+**Built-in editor**
+
+![Editing build.prop in Renns Android Kitchen](https://raw.githubusercontent.com/ahsanihlwn/RennsAndroidKitchen/main/preview/editor_cap.PNG)
+
+**Packages**
+
+![RAK Packages window](https://raw.githubusercontent.com/ahsanihlwn/RennsAndroidKitchen/main/preview/package_cap.PNG)
+
+**Themes**
+
+![RAK theme picker](https://raw.githubusercontent.com/ahsanihlwn/RennsAndroidKitchen/main/preview/theme_cap.PNG)
+
+[View all previews](https://github.com/ahsanihlwn/RennsAndroidKitchen/tree/main/preview).
+
 ## Edit EROFS without unpacking it
 
 Right-click a non-sparse EROFS `.img` and choose **Mount**. RAK shows its contents as a virtual folder in the project tree, including file permissions and SELinux contexts. It can read compressed EROFS contents too. Opening the mount does not extract a second copy of the partition.
@@ -78,4 +102,3 @@ The release folder also includes a `rak.bat` launcher. After you open a project,
 - The mounted editor works with existing, recognized text files. Creating files or folders, renaming them, and copying new files into a mounted image require the unpack/edit/repack workflow for now.
 - Some EROFS layouts and features do not support direct writes. An edit that adds blocks can increase image size; on images with an AVB footer, it can remove that footer and its signature. Check the resulting image and its verification requirements before flashing.
 - Direct edits change the image you opened. Keep an untouched copy if you need to return to the original.
-
