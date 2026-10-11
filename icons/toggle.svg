@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <linearGradient id="tgBody" x1="2" y1="8" x2="22" y2="16" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7DD3FF"/>
+      <stop offset="1" stop-color="#1E6FB8"/>
+    </linearGradient>
+    <linearGradient id="tgGloss" x1="2" y1="8" x2="12" y2="13" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="tgKnob" cx="0.4" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#d6e7f5"/>
+    </radialGradient>
+  </defs>
+  <rect x="2" y="8" width="20" height="8" rx="4" fill="url(#tgBody)"/>
+  <rect x="2" y="8" width="20" height="4" rx="4" fill="url(#tgGloss)"/>
+  <circle cx="18" cy="12" r="3.2" fill="url(#tgKnob)"/>
+  <circle cx="18" cy="12" r="3.2" stroke="#ffffff" stroke-opacity="0.7" stroke-width="0.4" fill="none"/>
+</svg>

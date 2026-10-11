@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- eraser body (pink) -->
+  <path d="M3.6 14.1l7.4-7.4a2 2 0 0 1 2.8 0l4.5 4.5a2 2 0 0 1 0 2.8l-5 5H8.1z" fill="#E0708A"/>
+  <!-- eraser top face (lighter) -->
+  <path d="M11 6.7a2 2 0 0 1 2.8 0l4.5 4.5a2 2 0 0 1 0 2.8l-2.6 2.6-7.3-7.3z" fill="#F0A0B4"/>
+  <!-- baseline -->
+  <rect x="3" y="19.4" width="18" height="1.8" rx="0.9" fill="#5A6678"/>
+</svg>

@@ -1,0 +1,48 @@
+# Generated builds
+/build/
+/release/
+/dist/
+/dist_nuitka/
+/dist_msix/
+/_msix_stage/
+/_nuitka_cache/
+*.build/
+*.dist/
+*.onefile-build/
+*nuitka_report*.xml
+
+# Python and native caches
+__pycache__/
+.pytest_cache/
+*.py[cod]
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.Python
+.venv/
+venv/
+env/
+/native/rak_native/target/
+*.lock
+!/native/rak_native/Cargo.lock
+
+# Local state
+*.log
+*.tmp
+*.bak
+icon_old*
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+.claude/
+$wd/
+apex_permission_16_2_swap/
+runtime_*.apk
+
+# Private integrations and keys
+/rennsproject/
+gemini.py
+neocat_api.py

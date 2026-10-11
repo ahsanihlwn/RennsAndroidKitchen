@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Document base with folded corner -->
+  <path d="M6 3.5h7.6L19.7 9.6v9.2c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V5.5c0-1.1.9-2 2-2z" fill="#3A567D"/>
+  <path d="M4 12.2h15.7v6.6c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2z" fill="#263B57"/>
+  <path d="M13.6 3.5v4.1c0 1.1.9 2 2 2h4.1z" fill="#2D4566"/>
+  <path d="M13.6 3.5L19.7 9.6h-4.1c-1.1 0-2-.9-2-2z" fill="#5D83B5"/>
+  <!-- Binary dashed track -->
+  <path d="M7.2 13h9.6" stroke="#88B4E8" stroke-width="0.9" stroke-linecap="round" stroke-dasharray="1.2 1.5" opacity="0.85"/>
+  <!-- SO label -->
+  <text x="12" y="18.8" font-family="Arial, Segoe UI, sans-serif" font-size="7.5" font-weight="900" fill="#B0D2FF" text-anchor="middle" letter-spacing="0.5">SO</text>
+</svg>

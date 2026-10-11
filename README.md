@@ -8,6 +8,8 @@ Renns Android Kitchen (RAK) is a desktop app for working with Android ROMs and p
 
 RAK can write supported changes directly into an EROFS image, without unpacking the entire partition first.
 
+The public kitchen source is available under [MPL-2.0](LICENSE). Contributions and maintenance help are welcome.
+
 ## Preview
 
 **Projects**
@@ -77,12 +79,46 @@ RAK identifies supported image types from their contents, so the available actio
 
 RAK is built for Windows 10 and 11.
 
-1. Download the Windows release package. Keep the extracted folder together and launch `run.exe`. If the package is an MSIX, install it and start RAK from Windows instead.
+1. Download a Windows release ZIP, extract it, keep the extracted files together, and launch `run.exe`.
 2. Create or open a project and add your firmware files, such as `payload.bin`, `super.img`, or partition `.img` files.
 3. Right-click a file to see the actions available for its format. Choose **Mount** on a supported image to inspect it in place, or **Unpack Image** to work with an extracted folder.
 4. Edit the files you need. Repack an extracted filesystem or build a flashable ZIP when you're done.
 
 Some operations use helper binaries managed by RAK. Install them through the app's **Packages** window when needed; the corresponding actions appear once the tools are available.
+
+### Run from source
+
+Use **Python 3.14.x** on Windows. Building the Rust backend also requires Visual Studio C++ tools and a Windows SDK; see the [Rust Windows prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html).
+
+```powershell
+git clone https://github.com/ahsanihlwn/RennsAndroidKitchen.git
+cd RennsAndroidKitchen
+python requirments.py
+python tools/build_native.py
+python app.py
+```
+
+`requirments.py` installs the pinned dependencies, checks Rust/Cargo, and installs the Rust toolchain when needed. It reports missing C++ tools or SDK libraries. To check availability without installing:
+
+```powershell
+python requirments.py --check
+```
+
+### Build a release
+
+Releases are built with **Nuitka**:
+
+```powershell
+python build.py
+```
+
+The builder prepares Python dependencies, rebuilds or reuses the Rust backend, and creates a ZIP with `run.exe` at its root. ZIPs are written to `release/OPSC/`, using the version and label from `core/flag.py`:
+
+```text
+RennsAndroidKitchen_OPSC-<APP_VERSION><APP_VERSION_LABEL>.zip
+```
+
+Use `python build.py --help` for debug, clean-build, job-count, and Rust-rebuild options.
 
 ### Command line
 
@@ -96,9 +132,17 @@ The packaged `run.exe` also exposes the RAK CLI:
 
 The release folder also includes a `rak.bat` launcher. After you open a project, RAK can register `rak` on the user PATH. Application data and managed helper binaries are stored under `%LOCALAPPDATA%\RennsAndroidKitchen`.
 
+From a source checkout, use `python app.py --rak-cli help` or `rak.bat help`.
+
 ## Current limits
 
 - Mounted sparse images are read-only. Convert one to raw before editing its contents directly.
 - The mounted editor works with existing, recognized text files. Creating files or folders, renaming them, and copying new files into a mounted image require the unpack/edit/repack workflow for now.
 - Some EROFS layouts and features do not support direct writes. An edit that adds blocks can increase image size; on images with an AVB footer, it can remove that footer and its signature. Check the resulting image and its verification requirements before flashing.
 - Direct edits change the image you opened. Keep an untouched copy if you need to return to the original.
+
+## License
+
+Project-authored source files are licensed under the **Mozilla Public License 2.0**. When distributing modified MPL-covered files, their source must remain available under MPL-2.0.
+
+See [LICENSE](LICENSE) for the license text and [NOTICE](NOTICE) for scope and third-party attribution. Vendored components retain their original licenses.

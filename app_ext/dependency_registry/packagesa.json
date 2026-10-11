@@ -1,0 +1,147 @@
+{
+  "ext_tool": {
+    "display": "EXT Unpacker",
+    "author": "ahsanihlwn, cubinator",
+    "license": "GPL-3.0",
+    "version": "ahsanihlwn, cubinator | 1.0",
+    "url": "https://github.com/ahsanihlwn/ext-unpacker-tool/releases/download/v1/ext_tool.zip",
+    "binaries": [
+      {
+        "name": "ext_tool.exe",
+        "size": 6180352
+      }
+    ]
+  },
+
+  "make_ext4fs": {
+    "display": "EXT Repacker",
+    "author": "anpaza",
+    "license": "-",
+    "version": "1.0",
+    "url": "https://github.com/ahsanihlwn/make_ext4fs/releases/download/v1/make_ext4fs.zip",
+    "binaries": [
+      {
+        "name": "img2simg.exe",
+        "size": 94208
+      },
+      {
+        "name": "make_ext4fs.exe",
+        "size": 198144
+      },
+      {
+        "name": "simg2img.exe",
+        "size": 94208
+      }
+    ]
+  },
+
+  "erofs_env": {
+    "display": "EROFS Environment",
+    "author": "sekaiacg",
+    "license": "GPL-3.0",
+    "version": "1.7",
+    "url": "https://github.com/sekaiacg/erofs-utils/releases/download/v1.8.10-251217/erofs-utils-v1.8.10-gee46dd74-251217-Cygwin_x86_64.zip",
+    "binaries": [
+      {
+        "name": "mkfs.erofs.exe",
+        "size": 2073600
+      },
+      {
+        "name": "cygwin1.dll",
+        "size": 3012149
+      },
+      {
+        "name": "extract.erofs.exe",
+        "size": 3077632
+      },
+      {
+        "name": "fsck.erofs.exe",
+        "size": 1965568
+      },
+      {
+        "name": "dump.erofs.exe",
+        "size": 1964544
+      }
+    ]
+  },
+
+  "platform-tools": {
+    "display": "ADB Fastboot",
+    "author": "Google",
+    "license": "Apache-2.0",
+    "version": "35.0",
+    "url": "https://dl.google.com/android/repository/platform-tools-latest-windows.zip",
+    "binaries": [
+      {
+        "name": "adb.exe",
+        "size": 7741592
+      },
+      {
+        "name": "AdbWinApi.dll",
+        "size": 108184
+      },
+      {
+        "name": "AdbWinUsbApi.dll",
+        "size": 73368
+      },
+      {
+        "name": "etc1tool.exe",
+        "size": 449688
+      },
+      {
+        "name": "fastboot.exe",
+        "size": 2096280
+      },
+      {
+        "name": "hprof-conv.exe",
+        "size": 52888
+      },
+      {
+        "name": "libwinpthread-1.dll",
+        "size": 243016
+      },
+      {
+        "name": "make_f2fs.exe",
+        "size": 468120
+      },
+      {
+        "name": "make_f2fs_casefold.exe",
+        "size": 468120
+      },
+      {
+        "name": "mke2fs.conf",
+        "size": 1157
+      },
+      {
+        "name": "mke2fs.exe",
+        "size": 759960
+      },
+      {
+        "name": "NOTICE.txt",
+        "size": 1161702
+      },
+      {
+        "name": "source.properties",
+        "size": 38
+      },
+      {
+        "name": "sqlite3.exe",
+        "size": 3005080
+      }
+    ]
+  },
+
+  "lpunpack": {
+    "display": "Lpunpack (SUPER)",
+    "author": "ahsanihlwn - unix3dgforce",
+    "license": "LGPL-3.0",
+    "version": "1.1",
+    "url": "https://github.com/ahsanihlwn/lpunpack/releases/download/v1.1/lpunpack_win.zip",
+    "binaries": [
+      {
+        "name": "lpunpack.exe",
+        "size": 6008320
+      }
+    ]
+  }
+}

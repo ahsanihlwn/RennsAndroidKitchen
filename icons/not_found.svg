@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- file body -->
+  <path d="M6 3.5h7.6L19.7 9.6v9.2c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V5.5c0-1.1.9-2 2-2z"
+        fill="#B84040"/>
+  <!-- file bottom shade -->
+  <path d="M4 12.2h15.7v6.6c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2z"
+        fill="#8A2828"/>
+  <!-- folded corner -->
+  <path d="M13.6 3.5L19.7 9.6h-4.1c-1.1 0-2-.9-2-2z"
+        fill="#D06060"/>
+  <!-- ? mark -->
+  <path d="M10.5 11.8c0-0.9 0.68-1.6 1.5-1.6s1.5 0.7 1.5 1.6c0 0.6-0.32 1.1-0.8 1.4l-0.5 0.35v0.65"
+        stroke="#FFD0D0" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <circle cx="12" cy="15.8" r="0.6" fill="#FFD0D0"/>
+</svg>

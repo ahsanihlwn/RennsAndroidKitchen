@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <g transform="rotate(45 12 12)">
+    <!-- eraser (atas) -->
+    <path d="M8.6 3.2h6.8v2.3H8.6z" fill="#C8A010"/>
+    <!-- pita logam -->
+    <path d="M8.6 5.5h6.8v1.5H8.6z" fill="#9A7C0C"/>
+    <!-- badan pensil: sisi terang -->
+    <path d="M8.6 7h3.4v10.2H8.6z" fill="#3B7DBE"/>
+    <!-- badan pensil: sisi gelap -->
+    <path d="M12 7h3.4v10.2H12z" fill="#244B72"/>
+    <!-- tip kayu (lancip) -->
+    <path d="M8.6 17.2h6.8L12 21.4z" fill="#C2A067"/>
+    <!-- grafit (ujung) -->
+    <path d="M10.7 19.8L12 21.4l1.3-1.6z" fill="#1A2028"/>
+  </g>
+</svg>

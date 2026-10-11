@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- antenna -->
+  <path d="M8.5 6V4" stroke="#3DA84A" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M15.5 6V4" stroke="#3DA84A" stroke-width="1.4" stroke-linecap="round"/>
+  <circle cx="8.5" cy="3.5" r="0.9" fill="#3DA84A"/>
+  <circle cx="15.5" cy="3.5" r="0.9" fill="#3DA84A"/>
+  <!-- body -->
+  <rect x="4" y="6" width="16" height="10" rx="2" fill="#3DA84A"/>
+  <rect x="4" y="11" width="16" height="5" rx="2" fill="#2A8A36"/>
+  <!-- mata -->
+  <circle cx="9.5" cy="9" r="1.1" fill="#FFFFFF"/>
+  <circle cx="14.5" cy="9" r="1.1" fill="#FFFFFF"/>
+  <!-- lengan -->
+  <rect x="1.2" y="6.5" width="2.2" height="6" rx="1.1" fill="#3DA84A"/>
+  <rect x="20.6" y="6.5" width="2.2" height="6" rx="1.1" fill="#3DA84A"/>
+  <!-- kaki -->
+  <rect x="7" y="16" width="2.5" height="3.5" rx="1.25" fill="#2A8A36"/>
+  <rect x="14.5" y="16" width="2.5" height="3.5" rx="1.25" fill="#2A8A36"/>
+</svg>

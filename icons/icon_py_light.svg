@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- blue snake top -->
+  <path d="M12.2 3.5H9c-1.9 0-3.2 1.2-3.2 3v3.5h6.4c1.1 0 1.8.7 1.8 1.8V13" stroke="#1A60D8" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- yellow snake bottom -->
+  <path d="M11.8 20.5H15c1.9 0 3.2-1.2 3.2-3v-3.5h-6.4c-1.1 0-1.8-.7-1.8-1.8V11" stroke="#C89000" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- dots -->
+  <circle cx="9" cy="7" r="1.1" fill="#1A60D8"/>
+  <circle cx="15" cy="17" r="1.1" fill="#C89000"/>
+</svg>

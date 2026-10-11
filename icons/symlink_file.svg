@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Bottom-Left Loop: shadow base -->
+  <path d="M14 10a3.5 3.5 0 0 0-5 0l-3.5 3.5a3.5 3.5 0 0 0 4.95 4.95l1.5-1.5"
+        stroke="#8C6514" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Bottom-Left Loop: main yellow/gold -->
+  <path d="M14 10a3.5 3.5 0 0 0-5 0l-3.5 3.5a3.5 3.5 0 0 0 4.95 4.95l1.5-1.5"
+        stroke="#F5B027" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Bottom-Left Loop: highlight lip -->
+  <path d="M5.5 13.5l1.5-1.5a3.5 3.5 0 0 1 4.5-0.5"
+        stroke="#FDE68A" stroke-width="0.6" stroke-linecap="round" opacity="0.75"/>
+
+  <!-- Top-Right Loop: shadow base -->
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l3.5-3.5a3.5 3.5 0 0 0-4.95-4.95l-1.5 1.5"
+        stroke="#8C6514" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Top-Right Loop: main yellow/gold -->
+  <path d="M10 14a3.5 3.5 0 0 0 5 0l3.5-3.5a3.5 3.5 0 0 0-4.95-4.95l-1.5 1.5"
+        stroke="#F5B027" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Top-Right Loop: highlight lip -->
+  <path d="M15 8.5l1.5-1.5a3.5 3.5 0 0 1 2 2"
+        stroke="#FEF3C7" stroke-width="0.6" stroke-linecap="round" opacity="0.85"/>
+</svg>

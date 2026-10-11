@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <path d="M6 3.5h7.6L19.7 9.6v9.2c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V5.5c0-1.1.9-2 2-2z" fill="#B84A20"/>
+  <path d="M4 12.2h15.7v6.6c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2z" fill="#8C3010"/>
+  <path d="M13.6 3.5v4.1c0 1.1.9 2 2 2h4.1z" fill="#9A3818"/>
+  <path d="M13.6 3.5L19.7 9.6h-4.1c-1.1 0-2-.9-2-2z" fill="#D87050"/>
+  <!-- < > tags -->
+  <text x="12" y="19.2" font-family="Arial, sans-serif" font-size="6.5" font-weight="900" fill="#FFB898" text-anchor="middle" letter-spacing="-0.3">&lt;/&gt;</text>
+</svg>

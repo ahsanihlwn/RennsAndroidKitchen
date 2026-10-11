@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <style>
+    .main{stroke:#D7E3FF}.accent{stroke:#8AB4F8}
+  </style>
+  <path class="main" d="M4.25 11.25 12 4.65l7.75 6.6" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <path class="main" d="M6.15 10.25v8.1c0 1.08.87 1.95 1.95 1.95h7.8c1.08 0 1.95-.87 1.95-1.95v-8.1" stroke-width="1.9" stroke-linejoin="round"/>
+  <path class="accent" d="M10.25 20.15v-4.6c0-.52.43-.95.95-.95h1.6c.52 0 .95.43.95.95v4.6" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

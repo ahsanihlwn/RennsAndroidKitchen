@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- kertas sertifikat -->
+  <rect x="2.5" y="2" width="16" height="20" rx="1.2" fill="#C8A84A"/>
+  <rect x="2.5" y="2" width="16" height="20" rx="1.2" fill="#EDD070"/>
+  <rect x="2.5" y="2" width="16" height="11" rx="1.2" fill="#F5E090"/>
+  <!-- border dekoratif dalam -->
+  <rect x="4" y="3.5" width="13" height="17" rx="0.7" fill="none" stroke="#C8A84A" stroke-width="0.7"/>
+  <!-- garis teks -->
+  <path d="M6 7h10" stroke="#C8A84A" stroke-width="0.9" stroke-linecap="round"/>
+  <path d="M6 9.5h10" stroke="#C8A84A" stroke-width="0.9" stroke-linecap="round"/>
+  <path d="M6 12h6" stroke="#C8A84A" stroke-width="0.9" stroke-linecap="round"/>
+  <!-- tanda tangan -->
+  <path d="M5.5 16.5 Q7 15.5 8.5 16.5 Q10 17.5 11.5 16.5" stroke="#C8A84A" stroke-width="0.9" stroke-linecap="round" fill="none"/>
+  <!-- medal/seal pojok kanan bawah -->
+  <circle cx="17.5" cy="18.5" r="3.5" fill="#C8A84A"/>
+  <circle cx="17.5" cy="18.5" r="2.5" fill="#EDD070"/>
+  <circle cx="17.5" cy="18.5" r="1.5" fill="#C8A84A"/>
+  <!-- ribbon bawah medal -->
+  <path d="M16 21.5 L17.5 20 L19 21.5 L18.5 23 L17.5 22.5 L16.5 23z" fill="#C8A84A"/>
+</svg>

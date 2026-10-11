@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAK Terminal</title>
+    <link rel="stylesheet" href="xterm.css">
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #121417;
+        }
+        #terminal-container {
+            width: 100%;
+            height: 100%;
+            margin: 0;
+            padding: 4px 6px;
+            overflow: hidden;
+            position: relative;
+        }
+        /* Custom scrollbar matching RAK theme */
+        .xterm .xterm-viewport::-webkit-scrollbar {
+            width: 8px;
+        }
+        .xterm .xterm-viewport::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        .xterm .xterm-viewport::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.15);
+            border-radius: 4px;
+        }
+        .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.28);
+        }
+    </style>
+    <script src="qwebchannel.js"></script>
+    <script src="xterm.js"></script>
+    <script src="xterm-addon-fit.js"></script>
+    <script src="xterm-addon-web-links.js"></script>
+</head>
+<body>
+    <div id="terminal-container"></div>
+    <script>
+        let term = null;
+        let fitAddon = null;
+        let bridge = null;
+        let debouncedResizeTimer = null;
+        let requestFitTimer = null;
+
+        window.requestFit = function() {
+            if (requestFitTimer) cancelAnimationFrame(requestFitTimer);
+            requestFitTimer = requestAnimationFrame(() => {
+                const container = document.getElementById('terminal-container');
+                if (!container || container.clientWidth < 200 || container.clientHeight < 80) {
+                    return;
+                }
+                if (window.fitAddon && window.term) {
+                    try {
+                        window.fitAddon.fit();
+                        window.term.scrollToBottom();
+                    } catch (e) {}
+                }
+            });
+        };
+
+        function initTerminal() {
+            term = new Terminal({
+                cursorBlink: true,
+                cursorStyle: 'bar',
+                fontFamily: "'JetBrains Mono', 'Cascadia Mono', Consolas, 'Courier New', monospace",
+                fontSize: 15,
+                lineHeight: 1.3,
+                scrollback: 10000,
+                windowsMode: true,
+                convertEol: true,
+                theme: {
+                    background: '#121417',
+                    foreground: '#e2e8f0',
+                    cursor: '#38bdf8',
+                    cursorAccent: '#121417',
+                    selectionBackground: 'rgba(56, 189, 248, 0.35)',
+                    black: '#1e293b',
+                    red: '#ef4444',
+                    green: '#22c55e',
+                    yellow: '#eab308',
+                    blue: '#3b82f6',
+                    magenta: '#a855f7',
+                    cyan: '#06b6d4',
+                    white: '#f8fafc',
+                    brightBlack: '#475569',
+                    brightRed: '#f87171',
+                    brightGreen: '#4ade80',
+                    brightYellow: '#fde047',
+                    brightBlue: '#60a5fa',
+                    brightMagenta: '#c084fc',
+                    brightCyan: '#22d3ee',
+                    brightWhite: '#ffffff'
+                }
+            });
+
+            fitAddon = new FitAddon.FitAddon();
+            term.loadAddon(fitAddon);
+
+            window.term = term;
+            window.fitAddon = fitAddon;
+
+            if (window.WebLinksAddon) {
+                term.loadAddon(new WebLinksAddon.WebLinksAddon());
+            }
+
+            const container = document.getElementById('terminal-container');
+            term.open(container);
+
+            // Focus immediately
+            term.focus();
+
+            // ResizeObserver: only fit when dimensions are sensible
+            const resizeObserver = new ResizeObserver(entries => {
+                for (const entry of entries) {
+                    const cr = entry.contentRect;
+                    if (cr.width < 200 || cr.height < 80) return;
+                }
+                if (debouncedResizeTimer) clearTimeout(debouncedResizeTimer);
+                debouncedResizeTimer = setTimeout(() => {
+                    window.requestFit();
+                }, 40);
+            });
+            resizeObserver.observe(container);
+
+            window.addEventListener('resize', () => {
+                window.requestFit();
+            });
+
+            // Prevent browser from navigating on dropped files
+            window.addEventListener('dragover', event => {
+                event.preventDefault();
+                if (event.dataTransfer) event.dataTransfer.dropEffect = 'copy';
+            });
+            window.addEventListener('drop', event => {
+                event.preventDefault();
+            });
+
+            term.attachCustomKeyEventHandler(event => {
+                if (event.type === 'keydown') {
+                    if (event.ctrlKey && event.key === 'c' && term.hasSelection()) {
+                        document.execCommand('copy');
+                        return false;
+                    }
+                    if (event.ctrlKey && event.key === 'v') {
+                        return true;
+                    }
+                }
+                return true;
+            });
+
+            // Zooming support with Ctrl + MouseWheel
+            window.addEventListener('wheel', event => {
+                if (event.ctrlKey) {
+                    event.preventDefault();
+                    let current = term.options.fontSize || 15;
+                    if (event.deltaY < 0) {
+                        term.options.fontSize = Math.min(32, current + 1);
+                    } else {
+                        term.options.fontSize = Math.max(10, current - 1);
+                    }
+                    window.requestFit();
+                }
+            }, { passive: false });
+
+            // Keyboard shortcut zooming (Ctrl+=, Ctrl+-, Ctrl+0)
+            window.addEventListener('keydown', event => {
+                if (event.ctrlKey) {
+                    if (event.key === '=' || event.key === '+') {
+                        event.preventDefault();
+                        term.options.fontSize = Math.min(32, (term.options.fontSize || 15) + 1);
+                        window.requestFit();
+                    } else if (event.key === '-' || event.key === '_') {
+                        event.preventDefault();
+                        term.options.fontSize = Math.max(10, (term.options.fontSize || 15) - 1);
+                        window.requestFit();
+                    } else if (event.key === '0') {
+                        event.preventDefault();
+                        term.options.fontSize = 15;
+                        window.requestFit();
+                    }
+                }
+            });
+
+            container.addEventListener('click', () => {
+                term.focus();
+            });
+
+            if (typeof qt !== 'undefined' && qt.webChannelTransport) {
+                new QWebChannel(qt.webChannelTransport, channel => {
+                    bridge = channel.objects.bridge;
+                    window.bridge = bridge;
+
+                    term.onData(data => {
+                        bridge.sendInput(data);
+                    });
+
+                    term.onResize(size => {
+                        // Strict floor: NEVER resize PTY below 80 columns
+                        const cols = Math.max(80, size.cols);
+                        const rows = Math.max(15, size.rows);
+                        bridge.resizePty(cols, rows);
+                    });
+
+                    bridge.outputReceived.connect(chunk => {
+                        term.write(chunk);
+                    });
+
+                    bridge.themeChanged.connect(themeJson => {
+                        try {
+                            const th = JSON.parse(themeJson);
+                            if (th.theme) {
+                                term.options.theme = th.theme;
+                            }
+                            if (th.fontFamily) {
+                                term.options.fontFamily = th.fontFamily;
+                            }
+                            if (th.fontSize) {
+                                term.options.fontSize = th.fontSize;
+                            }
+                            if (th.bg) {
+                                document.body.style.backgroundColor = th.bg;
+                            }
+                            window.requestFit();
+                        } catch (err) {
+                            console.error('Failed to parse theme JSON', err);
+                        }
+                    });
+
+                    bridge.clearRequested.connect(() => {
+                        term.clear();
+                    });
+
+                    // Initial fit, focus, and handshake
+                    requestAnimationFrame(() => {
+                        window.requestFit();
+                        term.focus();
+                        const initialCols = Math.max(80, term.cols || 80);
+                        const initialRows = Math.max(15, term.rows || 24);
+                        bridge.onTerminalReady(initialCols, initialRows);
+                    });
+                });
+            }
+        }
+
+        window.addEventListener('DOMContentLoaded', initTerminal);
+    </script>
+</body>
+</html>

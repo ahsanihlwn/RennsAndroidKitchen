@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- IBM blue background chip -->
+  <rect x="2" y="5" width="20" height="14" rx="2.5" fill="#1F70C1"/>
+  <!-- COB text -->
+  <text x="12" y="15" font-family="Arial, sans-serif" font-size="8" font-weight="900" fill="#FFFFFF" text-anchor="middle" letter-spacing="-0.5">COB</text>
+</svg>

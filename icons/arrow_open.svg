@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <linearGradient id="aoBody" x1="4" y1="7" x2="20" y2="17" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C8D4E2"/>
+      <stop offset="1" stop-color="#566879"/>
+    </linearGradient>
+    <linearGradient id="aoGloss" x1="4" y1="7" x2="12" y2="12" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.7"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <path d="M4 8.5h16L12 17z" fill="url(#aoBody)"/>
+  <path d="M4 8.5h16L12 17z" fill="url(#aoGloss)"/>
+  <path d="M4.3 8.7h15.4L12 16.5z" stroke="#ffffff" stroke-opacity="0.55" stroke-width="0.7" stroke-linejoin="round" fill="none"/>
+</svg>

@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <!-- inti menyala HIJAU (kesan 'on/active process') -> transparan -->
+    <radialGradient id="dm_core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#C8F7CE"/>
+      <stop offset="45%" stop-color="#5BE07A"/>
+      <stop offset="100%" stop-color="#2FA84F"/>
+    </radialGradient>
+    <radialGradient id="dm_halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#5BE07A" stop-opacity="0.85"/>
+      <stop offset="60%" stop-color="#42C765" stop-opacity="0.30"/>
+      <stop offset="100%" stop-color="#42C765" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- outer disk (sama dgn drive.svg) -->
+  <circle cx="12" cy="12" r="9.5" fill="#5A7A9E"/>
+  <circle cx="12" cy="12" r="9.5" fill="none" stroke="#7AA0C8" stroke-width="1.8"/>
+  <!-- inner ring separator + label -->
+  <circle cx="12" cy="12" r="5.8" fill="#3D5A78"/>
+  <circle cx="12" cy="12" r="5.8" fill="#4A6D8C"/>
+
+  <!-- HALO cahaya (menyebar dari tengah) -->
+  <circle cx="12" cy="12" r="5.0" fill="url(#dm_halo)"/>
+  <!-- INTI menyala (gantikan spindle hole gelap) -->
+  <circle cx="12" cy="12" r="2.2" fill="url(#dm_core)"/>
+  <circle cx="12" cy="12" r="1.0" fill="#E6FBEA"/>
+
+  <!-- shine arc (sama dgn drive.svg) -->
+  <path d="M5.5 8.5 A7.5 7.5 0 0 1 17.5 7" stroke="#A8C8E8" stroke-width="0.9" stroke-linecap="round" fill="none" opacity="0.55"/>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- antenna -->
+  <path d="M12 3v2.1" stroke="#2F3A4F" stroke-width="1.75" stroke-linecap="round"/>
+  <circle cx="12" cy="2.55" r="1.15" fill="#2F3A4F"/>
+  <!-- head -->
+  <rect x="5.1" y="5.6" width="13.8" height="11" rx="3.6"
+        fill="#2F3A4F" fill-opacity="0.06"
+        stroke="#2F3A4F" stroke-width="1.75"/>
+  <!-- side ears -->
+  <path d="M5.1 9.2H3.9a1 1 0 0 0-1 1v2.4a1 1 0 0 0 1 1h1.2"
+        stroke="#2F3A4F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M18.9 9.2h1.2a1 1 0 0 1 1 1v2.4a1 1 0 0 1-1 1h-1.2"
+        stroke="#2F3A4F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- eyes (accent) -->
+  <path d="M9.4 9.85v2.1M14.6 9.85v2.1"
+        stroke="#1A73E8" stroke-width="2.1" stroke-linecap="round"/>
+  <!-- neck -->
+  <path d="M9.6 16.6v1.4a2.4 2.4 0 0 0 2.4 2.4 2.4 2.4 0 0 0 2.4-2.4v-1.4"
+        stroke="#2F3A4F" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" opacity="0.62"/>
+</svg>

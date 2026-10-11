@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- folder tab -->
+  <path d="M3.4 8.1c0-1.1.9-2 2-2h4.05c.62 0 .95.18 1.35.62l.9 1h6.9c1.1 0 2 .9 2 2v8.05c0 1.1-.9 2-2 2H5.4c-1.1 0-2-.9-2-2z"
+        fill="#6A40C8"/>
+  <!-- folder body -->
+  <path d="M3.4 9.85h17.2v7.92c0 1.1-.9 2-2 2H5.4c-1.1 0-2-.9-2-2z"
+        fill="#5030B0"/>
+  <!-- tab highlight line -->
+  <path d="M5.25 7.25h3.85c.5 0 .78.14 1.1.5l.95 1.05h7.35"
+        stroke="#C8A8FF" stroke-width="0.8" stroke-linecap="butt" opacity="0.65"/>
+  <!-- AI spark: 4-point star center-right of body -->
+  <path d="M15.5 13.5 L16.2 12 L16.9 13.5 L18.4 14.2 L16.9 14.9 L16.2 16.4 L15.5 14.9 L14 14.2 Z"
+        fill="#E0C8FF" opacity="0.90"/>
+  <!-- small dot sparks -->
+  <circle cx="13.2" cy="12.2" r="0.55" fill="#C8A8FF" opacity="0.75"/>
+  <circle cx="14.6" cy="16.8" r="0.42" fill="#B090F0" opacity="0.65"/>
+  <circle cx="17.8" cy="12.6" r="0.38" fill="#D8B8FF" opacity="0.60"/>
+</svg>

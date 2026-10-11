@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- antenna -->
+  <path d="M8.5 6V4" stroke="#3DA84A" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M15.5 6V4" stroke="#3DA84A" stroke-width="1.4" stroke-linecap="round"/>
+  <circle cx="8.5" cy="3.5" r="0.9" fill="#3DA84A"/>
+  <circle cx="15.5" cy="3.5" r="0.9" fill="#3DA84A"/>
+  <!-- body -->
+  <rect x="4" y="6" width="16" height="10" rx="2" fill="#3DA84A"/>
+  <rect x="4" y="11" width="16" height="5" rx="2" fill="#2A8A36"/>
+  <!-- mata -->
+  <circle cx="9.5" cy="9" r="1.1" fill="#FFFFFF"/>
+  <circle cx="14.5" cy="9" r="1.1" fill="#FFFFFF"/>
+  <!-- lengan -->
+  <rect x="1.2" y="6.5" width="2.2" height="6" rx="1.1" fill="#3DA84A"/>
+  <rect x="20.6" y="6.5" width="2.2" height="6" rx="1.1" fill="#3DA84A"/>
+  <!-- kaki -->
+  <rect x="7" y="16" width="2.5" height="3.5" rx="1.25" fill="#2A8A36"/>
+  <rect x="14.5" y="16" width="2.5" height="3.5" rx="1.25" fill="#2A8A36"/>
+  <!-- gear badge: menandakan apk ini sedang/sudah di-decompile via apktool -->
+  <circle cx="17.5" cy="17.5" r="6.3" fill="#FFFFFF"/>
+  <polygon fill="#5C6670" points="22.9,17.5 21.22,19.65 20.2,22.18 17.5,21.8 14.8,22.18 13.78,19.65 12.1,17.5 13.78,15.35 14.8,12.82 17.5,13.2 20.2,12.82 21.22,15.35"/>
+  <circle cx="17.5" cy="17.5" r="1.8" fill="#FFFFFF"/>
+</svg>

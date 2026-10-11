@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- file body -->
+  <path d="M6 3.5h7.6L19.7 9.6v9.2c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2V5.5c0-1.1.9-2 2-2z"
+        fill="#7A50C0"/>
+  <!-- file bottom shade -->
+  <path d="M4 12.2h15.7v6.6c0 1.1-.9 2-2 2H6c-1.1 0-2-.9-2-2z"
+        fill="#5A30A0"/>
+  <!-- folded corner -->
+  <path d="M13.6 3.5L19.7 9.6h-4.1c-1.1 0-2-.9-2-2z"
+        fill="#A070E0"/>
+  <!-- shield -->
+  <path d="M12 10.2l-3.2 1.4v2.6c0 1.8 1.4 3.4 3.2 3.9 1.8-0.5 3.2-2.1 3.2-3.9v-2.6z"
+        fill="#E0D0FF" opacity="0.95"/>
+  <!-- shield inner check / lock slot -->
+  <path d="M12 10.2l-3.2 1.4v2.6c0 1.8 1.4 3.4 3.2 3.9 1.8-0.5 3.2-2.1 3.2-3.9v-2.6z"
+        fill="none" stroke="#C0A0F0" stroke-width="0.5"/>
+  <!-- keyhole dot -->
+  <circle cx="12" cy="13.5" r="0.8" fill="#7A50C0"/>
+  <rect x="11.65" y="13.5" width="0.7" height="1.1" rx="0.2" fill="#7A50C0"/>
+</svg>

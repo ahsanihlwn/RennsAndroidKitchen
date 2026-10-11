@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <style>
+    text{fill:#6A1B9A;font-family:Segoe UI,Arial,sans-serif;font-size:11.2px;font-weight:900;letter-spacing:-.65px}
+  </style>
+  <text x="12" y="16.1" text-anchor="middle">C#</text>
+</svg>

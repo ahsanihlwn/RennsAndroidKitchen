@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <!-- inti menyala HIJAU versi light: lebih lembut biar nyatu di bg terang -->
+    <radialGradient id="dml_core" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#D4F5D9"/>
+      <stop offset="50%" stop-color="#5CCB74"/>
+      <stop offset="100%" stop-color="#2E9E4C"/>
+    </radialGradient>
+    <radialGradient id="dml_halo" cx="50%" cy="50%" r="50%">
+      <stop offset="0%"  stop-color="#5CCB74" stop-opacity="0.70"/>
+      <stop offset="60%" stop-color="#46B863" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#46B863" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- disk (sama dgn drive_light.svg) -->
+  <circle cx="12" cy="12" r="9.2" fill="#5D7893"/>
+  <circle cx="12" cy="12" r="9.2" fill="none" stroke="#7F98AE" stroke-width="1.5"/>
+  <circle cx="12" cy="12" r="5.6" fill="#8FB0C8"/>
+
+  <!-- HALO cahaya -->
+  <circle cx="12" cy="12" r="4.8" fill="url(#dml_halo)"/>
+  <!-- INTI menyala (gantikan spindle terang biasa) -->
+  <circle cx="12" cy="12" r="2.1" fill="url(#dml_core)"/>
+  <circle cx="12" cy="12" r="0.9" fill="#EAFBEE"/>
+
+  <!-- shine arc (sama dgn drive_light.svg) -->
+  <path d="M6.1 8.6 A7 7 0 0 1 17.1 7.6" stroke="#B8C9D8" stroke-width="0.8" stroke-linecap="round" fill="none" opacity="0.45"/>
+</svg>

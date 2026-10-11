@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- kelopak mata -->
+  <path d="M2.5 12 Q6 7 12 7 Q18 7 21.5 12 Q18 17 12 17 Q6 17 2.5 12z" fill="#4A8FD4"/>
+  <!-- putih mata -->
+  <circle cx="12" cy="12" r="3.5" fill="#FFFFFF"/>
+  <!-- iris -->
+  <circle cx="12" cy="12" r="2.2" fill="#1A5FA8"/>
+  <!-- pupil -->
+  <circle cx="12" cy="12" r="1" fill="#0A1E38"/>
+  <!-- highlight -->
+  <circle cx="10.9" cy="11" r="0.75" fill="#FFFFFF" opacity="0.85"/>
+</svg>

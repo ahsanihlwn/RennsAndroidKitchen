@@ -1,0 +1,20 @@
+Renns Android Kitchen
+Copyright (c) 2025-2026 ahsanihlwn (rennsproject)
+
+Project-authored public source files are licensed under the Mozilla Public
+License, version 2.0. See LICENSE. The source is available at:
+https://github.com/ahsanihlwn/RennsAndroidKitchen
+
+Third-party files retain their original licenses and copyright notices:
+- core/img2sdat/ and core/sdat2img/: see their LICENSE files and source
+  headers; the AOSP files use Apache-2.0.
+- core/fspatch.py: Apache-2.0, copyright affggh.
+- core/update_metadata_pb2.py: generated from AOSP update_metadata.proto;
+  the upstream schema uses Apache-2.0.
+- core/qwebchannel.js: LGPL-3.0, as an available option in its source header.
+- core/xterm* and core/marked.min.js: MIT.
+- assets/monaco/: see the included license and third-party notices.
+- fonts/: see OFL.txt.
+
+Copies of additional vendored license texts are in licenses/.
+Installed and bundled dependencies retain their respective licenses.

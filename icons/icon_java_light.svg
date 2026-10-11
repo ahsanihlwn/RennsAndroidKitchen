@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <style>
+    .steam{stroke:#E37400}.cup{stroke:#1A73E8}
+  </style>
+  <path class="steam" d="M10.4 3.55c1.7 1.25-1.35 2.25.25 3.55M13.4 3.2c1.9 1.45-1.55 2.55.25 4.15"
+        stroke-width="1.65" stroke-linecap="round"/>
+  <path class="cup" d="M6.2 10.3h9.2v3.05c0 2.35-1.9 4.25-4.25 4.25H10.4c-2.35 0-4.2-1.9-4.2-4.25z"
+        stroke-width="1.9" stroke-linejoin="round"/>
+  <path class="cup" d="M15.4 11.2h1.15c1.15 0 1.95.72 1.95 1.75 0 1.1-.85 1.8-2 1.8h-1.1"
+        stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+  <path class="steam" d="M7.2 20.1h9.6"
+        stroke-width="1.85" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <style>
+    .c{fill:#1A9870;font-family:Segoe UI,Arial,sans-serif;font-size:14.5px;font-weight:900}
+    .pp{fill:#1A9870;font-family:Segoe UI,Arial,sans-serif;font-size:8px;font-weight:900;letter-spacing:-.8px}
+  </style>
+  <text class="c" x="10" y="17" text-anchor="middle">H</text>
+  <text class="pp" x="17" y="14.7" text-anchor="middle">++</text>
+</svg>

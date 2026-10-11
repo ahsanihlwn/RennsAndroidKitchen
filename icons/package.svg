@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- sisi kiri -->
+  <path d="M4 7.5v9l8 4v-9z" fill="#8A5A28"/>
+  <!-- sisi kanan -->
+  <path d="M20 7.5v9l-8 4v-9z" fill="#B07A3A"/>
+  <!-- tutup atas -->
+  <path d="M4 7.5l8-4 8 4-8 4z" fill="#D4A050"/>
+  <!-- strip tengah atas -->
+  <path d="M8.5 5.5l8 4M9.5 6l2 1" stroke="#C08840" stroke-width="1.2" stroke-linecap="round"/>
+  <!-- garis tengah vertikal -->
+  <path d="M12 11.5v9" stroke="#8A5A28" stroke-width="0.8"/>
+</svg>

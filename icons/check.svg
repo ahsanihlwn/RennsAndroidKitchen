@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <defs>
+    <linearGradient id="ckBody" x1="4" y1="4" x2="20" y2="20" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7CDB91"/>
+      <stop offset="1" stop-color="#1F8035"/>
+    </linearGradient>
+    <linearGradient id="ckGloss" x1="4" y1="4" x2="12" y2="13" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <circle cx="12" cy="12" r="8.5" fill="url(#ckBody)"/>
+  <path d="M4 7.5a8.5 8.5 0 0 1 8-4.5 8.5 8.5 0 0 1 6 2.5" fill="url(#ckGloss)" opacity="0.6"/>
+  <path d="M5.5 8.5a8.5 8.5 0 0 1 13-2" stroke="#ffffff" stroke-opacity="0.55" stroke-width="0.6" stroke-linecap="round" fill="none"/>
+  <path d="M7.5 12.3l3 3 6-6" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke-opacity="0.98"/>
+</svg>
