@@ -1,18 +1,21 @@
 # SPDX-License-Identifier: MPL-2.0
 import time
+import math
 
 from PySide6.QtCore import (
-    QObject, QEvent, QPoint, QTimer, Qt, Property, QPropertyAnimation,
+    QObject, QEvent, QPoint, QRectF, QTimer, Qt, Property, QPropertyAnimation,
     QEasingCurve,
 )
-from PySide6.QtGui import QPainter
+from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import (
     QAbstractButton, QGraphicsEffect, QWidget, QPushButton, QStyleOptionButton, QStyle,
 )
+from core.skia_gpu import gpu_available, render_gpu
+from core.skia_button import render_button
 
 _CONTROL_EVENTS = frozenset((
     QEvent.Polish, QEvent.Show, QEvent.Hide, QEvent.EnabledChange,
-    QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.KeyPress,
+    QEvent.MouseButtonPress, QEvent.MouseButtonRelease, QEvent.KeyPress, QEvent.Paint,
 ))
 
 
@@ -22,6 +25,9 @@ class PressScaleEffect(QGraphicsEffect):
     def __init__(self, parent):
         super().__init__(parent)
         self._scale = 1.0
+        self._gpu_frame_key = None
+        self._gpu_frame = None
+        self._gpu_source = None
 
     def _get_scale(self):
         return self._scale
@@ -33,7 +39,15 @@ class PressScaleEffect(QGraphicsEffect):
     scale = Property(float, _get_scale, _set_scale)
 
     def draw(self, painter):
-        if self._scale >= 0.9999:
+        widget = self.parent()
+        if isinstance(widget, QPushButton) and not widget.property("skipButtonGpuRendering"):
+            image = render_button(widget, self._scale, include_children=True)
+            if image is not None:
+                painter.drawImage(0, 0, image)
+                return
+        if self._scale == 1.0:
+            # Widget surfaces already use Skia; an idle card needs no source
+            # capture, texture upload or readback for the identity transform.
             self.drawSource(painter)
             return
         bounds = self.sourceBoundingRect(Qt.LogicalCoordinates)
@@ -41,7 +55,34 @@ class PressScaleEffect(QGraphicsEffect):
         source = self.sourcePixmap(Qt.LogicalCoordinates, offset, QGraphicsEffect.NoPad)
         if source.isNull():
             return
+        # Qt can return a fresh pixmap cache key for an unchanged effect source
+        # on every animation tick. Reuse its texture when the Qt pixels match;
+        # checked/hover/font/child-content updates still invalidate naturally.
+        if (self._gpu_source is not None
+                and self._gpu_source.devicePixelRatioF() == source.devicePixelRatioF()
+                and self._gpu_source.toImage() == source.toImage()):
+            source = self._gpu_source
+        else:
+            self._gpu_source = source
         center = bounds.center()
+        ratio = source.devicePixelRatioF()
+        size = source.deviceIndependentSize()
+        key = (source.cacheKey(), ratio, self._scale, center.x(), center.y(), offset.x(), offset.y())
+        if key != self._gpu_frame_key:
+            def draw(canvas, bridge):
+                canvas.translate(center.x() - offset.x(), center.y() - offset.y())
+                canvas.scale(self._scale, self._scale)
+                canvas.translate(offset.x() - center.x(), offset.y() - center.y())
+                bridge.draw_image(canvas, source, QRectF(0, 0, size.width(), size.height()))
+
+            self._gpu_frame = render_gpu(size, ratio, draw)
+            self._gpu_frame_key = key if self._gpu_frame is not None else None
+        if self._gpu_frame is not None:
+            painter.drawImage(offset, self._gpu_frame)
+            return
+        if abs(self._scale - 1.0) < 0.0001:
+            self.drawSource(painter)
+            return
         painter.save()
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
         painter.translate(center)
@@ -56,17 +97,61 @@ class PressAnimatedButton(QPushButton):
 
     _paints_button_press_feedback = True
 
+    def event(self, event):
+        if event.type() in (QEvent.StyleChange, QEvent.FontChange, QEvent.PaletteChange,
+                            QEvent.LayoutDirectionChange, QEvent.DynamicPropertyChange):
+            self._qt_button_texture_key = None
+        return super().event(event)
+
     def paintEvent(self, event):
         scale = button_press_scale(self)
-        if scale >= 0.9999:
-            super().paintEvent(event)
+        image = render_button(self, scale)
+        if image is not None:
+            painter = QPainter(self)
+            painter.drawImage(0, 0, image)
+            painter.end()
             return
         option = QStyleOptionButton()
         self.initStyleOption(option)
+        ratio = self.devicePixelRatioF()
+        # QStyle/QPainter own font shaping and glyph rasterization. Skia only
+        # uploads and transforms these Qt pixels, including at fractional DPI.
+        texture_key = (self.width(), self.height(), ratio, option.state.value,
+                       option.features.value, option.text, option.icon.cacheKey(),
+                       option.iconSize.width(), option.iconSize.height(),
+                       option.palette.cacheKey(), self.font().toString())
+        if texture_key != getattr(self, "_qt_button_texture_key", None):
+            source = QImage(math.ceil(self.width() * ratio), math.ceil(self.height() * ratio),
+                            QImage.Format_RGBA8888_Premultiplied)
+            source.setDevicePixelRatio(ratio)
+            source.fill(Qt.transparent)
+            capture = QPainter(source)
+            capture.setFont(self.font())
+            self.style().drawControl(QStyle.CE_PushButton, option, capture, self)
+            capture.end()
+            self._qt_button_texture = source
+            self._qt_button_texture_key = texture_key
+        source = self._qt_button_texture
+        center = self.rect().toRectF().center()
+
+        def draw(canvas, bridge):
+            canvas.translate(center.x(), center.y())
+            canvas.scale(scale, scale)
+            canvas.translate(-center.x(), -center.y())
+            bridge.draw_image(canvas, source, QRectF(self.rect()))
+
+        image = render_gpu(self.size(), ratio, draw)
+        if image is not None:
+            painter = QPainter(self)
+            painter.drawImage(0, 0, image)
+            painter.end()
+            return
+        if scale >= 0.9999:
+            super().paintEvent(event)
+            return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
-        center = self.rect().toRectF().center()
         painter.translate(center)
         painter.scale(scale, scale)
         painter.translate(-center)
@@ -119,7 +204,6 @@ class _ButtonPressController(QObject):
         self._animation.finished.connect(self._animation_finished)
         if self._painted:
             self._animation.valueChanged.connect(self.widget.update)
-        self._manager._active.add(self)
         return True
 
     def press(self):
@@ -131,6 +215,7 @@ class _ButtonPressController(QObject):
         if not self._ensure_effect():
             return
         self._pressed = True
+        self._manager._active.add(self)
         self._press_started = time.monotonic()
         self._animate(0.96)
 
@@ -160,7 +245,11 @@ class _ButtonPressController(QObject):
         self._animation.start()
 
     def _animation_finished(self):
-        if not self.owns_effect() or (not self._pressed and self._effect.scale >= 0.9999):
+        if not self.owns_effect():
+            self.reset()
+        elif not self._pressed and self._effect.scale >= 0.9999:
+            # Native paint filtering handles idle vectors without forcing
+            # every button and its descendants into an offscreen Qt effect.
             self.reset()
 
     def reset(self):
@@ -211,6 +300,19 @@ class _ButtonPressManager(QObject):
                 controller.press()
             elif kind == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
                 controller.release()
+        # A foreign opacity effect can own a button during popup handoff. Its
+        # native source paint still gets vector geometry, before the effect
+        # captures the Qt-rendered widget. Active press effects draw directly.
+        if (kind == QEvent.Paint and isinstance(widget, QPushButton)
+                and not controller._painted
+                and not widget.property("skipButtonGpuRendering")
+                and not isinstance(widget.graphicsEffect(), PressScaleEffect)):
+            image = render_button(widget)
+            if image is not None:
+                painter = QPainter(widget)
+                painter.drawImage(0, 0, image)
+                painter.end()
+                return True
         return False
 
 

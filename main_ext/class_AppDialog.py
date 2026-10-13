@@ -3,10 +3,24 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QWidget, QPlainTextEdit, QApplication
 )
-from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer
+from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve, QTimer, QRect, QPoint
 from PySide6.QtGui import QColor, QFontDatabase
 from main_ext.class_ThemeUi import theme as _th
 from app_ext.class_BlurOverlay import BlurOverlay, BlurCard
+
+
+def _dialog_bounds(parent):
+    owner = parent.window() if parent is not None else None
+    while isinstance(owner, QDialog) and owner.parentWidget() is not None:
+        owner = owner.parentWidget().window()
+    screen = owner.screen() if owner is not None else QApplication.primaryScreen()
+    bounds = screen.availableGeometry()
+    if owner is not None:
+        rect = QRect(owner.mapToGlobal(QPoint()), owner.size())
+        intersection = bounds.intersected(rect)
+        if not intersection.isEmpty():
+            bounds = intersection
+    return bounds
 
 
 _BTN = """
@@ -46,9 +60,13 @@ class _Dlg(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setModal(True)
-        self.setFixedWidth(width)
+        self.setFixedWidth(max(1, min(width, _dialog_bounds(parent).width()-24)))
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        # Main's background stylesheet is inherited by child dialogs. Keep
+        # the native window transparent; only the rounded box/blur card paints
+        # a surface, including at its corners during fade and resize.
+        self.setStyleSheet("QDialog { background:transparent; border:none; }")
         self._default_btn = None   # tombol "OK/Yes" yang di-trigger saat Enter ditekan
 
         outer = QVBoxLayout(self)
@@ -116,8 +134,25 @@ class _Dlg(QDialog):
             return
         super().keyPressEvent(event)
 
+    def adjustSize(self):
+        # Rich-text word wrapping must use the final Qt font/style before the
+        # dialog chooses its height. Deferred polish can otherwise clip the
+        # second paragraph (especially after loading application fonts).
+        self.ensurePolished()
+        for child in self._box.findChildren(QWidget):
+            child.ensurePolished()
+        self._box.ensurePolished()
+        self._box.layout().invalidate()
+        self.layout().invalidate()
+        super().adjustSize()
+        height = self.layout().totalHeightForWidth(self.width())
+        if height >= 0:
+            self.resize(self.width(), max(self.minimumHeight(), height))
+
     def showEvent(self, e):
         super().showEvent(e)
+        self.adjustSize()
+        self._center_on_owner()
         self._sync_blur_surface()
         ov = getattr(self, "_overlay", None)
         if ov is not None and hasattr(ov, "attach_window_surface"):
@@ -133,7 +168,16 @@ class _Dlg(QDialog):
 
     def resizeEvent(self, e):
         super().resizeEvent(e)
+        if self.isVisible():
+            self._center_on_owner()
         QTimer.singleShot(0, self._sync_blur_surface)
+
+    def _center_on_owner(self):
+        bounds = _dialog_bounds(self.parentWidget())
+        pos = bounds.center() - self.rect().center()
+        pos.setX(max(bounds.left(), min(pos.x(), bounds.right()-self.width()+1)))
+        pos.setY(max(bounds.top(), min(pos.y(), bounds.bottom()-self.height()+1)))
+        self.move(pos)
 
     def _sync_blur_surface(self):
 
@@ -279,10 +323,9 @@ class AppDialog:
 
         from core.ui_lang import t
 
-        screen = parent.screen() if parent is not None else QApplication.primaryScreen()
-        available = screen.availableGeometry() if screen is not None else None
-        width = min(680, available.width() - 48) if available is not None else 680
-        log_height = min(330, max(100, available.height() - 180)) if available is not None else 330
+        available = _dialog_bounds(parent)
+        width = max(1, min(680, available.width() - 48))
+        log_height = min(330, max(80, available.height() - 180))
         d = _Dlg(parent, "Fatal Crash! — Log", "<b>Fatal Crash! — Log</b>", width=width)
         log = QPlainTextEdit(d._box)
         log.setReadOnly(True)

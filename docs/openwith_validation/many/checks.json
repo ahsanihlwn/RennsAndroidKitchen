@@ -1,0 +1,30 @@
+{
+  "options": 70,
+  "max_visible": 5,
+  "dialog_size": [
+    380,
+    539
+  ],
+  "viewport_size": [
+    320,
+    328
+  ],
+  "scroll_maximum": 4420,
+  "transparent_outer_corner": true,
+  "blur_matches_card": true,
+  "window_within_bounds": true,
+  "description": "Repeated known app options in memory; no preferences/file operations; no FPS measurement.",
+  "wheel_painted_unique_options": 10,
+  "wheel_gpu_frames": 21,
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 64,
+    "texture_uploads": 4,
+    "texture_bytes": 780368,
+    "surface_bytes": 3886448,
+    "last_error": null
+  }
+}

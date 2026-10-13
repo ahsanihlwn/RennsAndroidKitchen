@@ -1,16 +1,88 @@
 # SPDX-License-Identifier: MPL-2.0
 from PySide6.QtWidgets import (QWidget, QGraphicsScene,
                                 QGraphicsPixmapItem, QGraphicsBlurEffect)
-from PySide6.QtCore    import (Qt, QThread, Signal, Slot, QObject, QRectF, QPoint,
+from PySide6.QtCore    import (Qt, QThread, Signal, Slot, QObject, QRect, QRectF, QPoint,
                                 QPropertyAnimation, QEasingCurve, Property,
                                 QMetaObject, Q_ARG, QTimer)
-from PySide6.QtGui     import QPainter, QPixmap, QColor, QPainterPath, QPen, QImage
+from PySide6.QtGui     import QPainter, QPixmap, QColor, QPainterPath, QPen, QImage, QRegion
 from contextlib        import contextmanager
 from main_ext.class_ThemeUi import theme as _th
+from core.skia_gpu import render_gpu, skia
+
+
+def _prepare_dialog_shell(win):
+    """Keep a framed card's transparent native shell clear of inherited QSS."""
+    from PySide6.QtWidgets import QDialog
+    layout = win.layout()
+    if (not isinstance(win, QDialog) or not win.testAttribute(Qt.WA_TranslucentBackground)
+            or layout is None or layout.count() != 1 or layout.itemAt(0).widget() is None):
+        return
+    rule = 'QDialog[_rakDialogShell="true"] {background:transparent; border:none;}'
+    sheet = win.styleSheet()
+    if rule not in sheet:
+        base = sheet if "{" in sheet or not sheet.strip() else "* {" + sheet + "}"
+        win.setProperty("_rakDialogShell", True)
+        win.setStyleSheet(base + "\n" + rule)
+
+
+class _DialogSurfaceGeometry(QObject):
+    def __init__(self, surface, host, use_content):
+        super().__init__(surface)
+        self.surface, self.host, self.use_content = surface, host, use_content
+        host.installEventFilter(self)
+        self.sync()
+
+    def sync(self):
+        rect = self.host.rect()
+        layout = self.host.layout()
+        if self.use_content and layout is not None and layout.count() == 1:
+            layout.activate()
+            card = layout.itemAt(0).widget()
+            if card is not None:
+                rect = card.geometry()
+        if self.surface.geometry() != rect:
+            self.surface.setGeometry(rect)
+
+    def eventFilter(self, obj, event):
+        from PySide6.QtCore import QEvent
+        if event.type() in (QEvent.Resize, QEvent.LayoutRequest, QEvent.Show):
+            self.sync()
+        return False
 
 
 def _flat_color() -> QColor:
     return QColor(_th.BG_MODAL)
+
+
+def _gpu_card_frame(widget, backdrop, origin):
+    ratio = widget.devicePixelRatioF()
+    color = _flat_color() if widget._flat else widget._tint
+    key = (widget.width(), widget.height(), ratio, widget._corner,
+           widget._flat, color.rgba(), widget._border.rgba(),
+           backdrop.cacheKey(), origin.x(), origin.y())
+    cached = getattr(widget, "_skia_card_frame", None)
+    if cached is not None and cached[0] == key:
+        return cached[1]
+
+    def draw(canvas, bridge):
+        rect = skia.Rect.MakeWH(widget.width(), widget.height())
+        rounded = skia.RRect.MakeRectXY(rect, widget._corner, widget._corner)
+        canvas.save()
+        canvas.clipRRect(rounded, True)
+        if not widget._flat and not backdrop.isNull():
+            bridge.draw_image(canvas, backdrop, QRectF(origin.toPointF(), backdrop.deviceIndependentSize()))
+        canvas.drawColor(bridge.color(color))
+        canvas.restore()
+        inset = skia.Rect.MakeXYWH(.5, .5, widget.width() - 1, widget.height() - 1)
+        paint = skia.Paint(Color4f=bridge.color(widget._border), AntiAlias=True,
+                           Style=skia.Paint.kStroke_Style, StrokeWidth=1)
+        canvas.drawRRect(skia.RRect.MakeRectXY(inset, widget._corner, widget._corner), paint)
+
+    image = render_gpu(widget.size(), ratio, draw)
+    if image is not None:
+        image = image.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+        widget._skia_card_frame = (key, image)
+    return image
 
 
 # Simpan referensi thread blur agar tidak di-destroy GC saat masih berjalan
@@ -28,27 +100,30 @@ def _safely_register_blur_thread(thread: QThread, worker=None):
 # Crossfade overlay (snapshot → fade out → reveal)
 class CrossfadeOverlay(QWidget):
 
-    def __init__(self, parent: QWidget):
+    def __init__(self, parent: QWidget, exclude_widgets=()):
         super().__init__(parent)
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.setAttribute(Qt.WA_NoSystemBackground)
         self.setGeometry(parent.rect())
-
-
-        screen = parent.screen() if hasattr(parent, "screen") else None
-        if screen is None:
-            from PySide6.QtGui import QGuiApplication
-            screen = QGuiApplication.primaryScreen()
-
-        global_tl = parent.mapToGlobal(parent.rect().topLeft())
-        self._pix = screen.grabWindow(
-            0, global_tl.x(), global_tl.y(),
-            parent.width(), parent.height()
-        )
+        self._exclude_widgets = tuple(exclude_widgets)
+        self.refresh_exclusions()
+        # Capture the current Qt backing content, not the monitor's previous
+        # frame (which can still contain the dropdown that just closed).
+        self._pix = parent.grab()
 
         self._opacity = 1.0
         self.raise_()
         self.show()
+
+    def refresh_exclusions(self):
+        if not self._exclude_widgets:
+            return
+        parent = self.parentWidget()
+        region = QRegion(self.rect())
+        for widget in self._exclude_widgets:
+            if widget.isVisibleTo(parent):
+                region -= QRegion(QRect(widget.mapTo(parent, QPoint()), widget.size()))
+        self.setMask(region)
 
     def _get_opacity(self) -> float:
         return self._opacity
@@ -129,6 +204,7 @@ class BlurOverlay(QWidget):
             self.setAttribute(Qt.WA_TranslucentBackground)
         else:
             super().__init__(parent)
+            parent.installEventFilter(self)
         self._pix    = QPixmap()
         self._texture = None
         self._texture_color = None
@@ -307,6 +383,13 @@ class BlurOverlay(QWidget):
                 and event.size() != self._fade_underlay_size):
             self._release_fade_underlay()
 
+    def eventFilter(self, watched, event):
+        from PySide6.QtCore import QEvent
+        if watched is self.parentWidget() and event.type() == QEvent.Resize:
+            self.setGeometry(watched.rect())
+            self.update()
+        return False
+
     def paintEvent(self, _ev):
         if not self._ready:
             return
@@ -330,6 +413,9 @@ class BlurOverlay(QWidget):
 
     def attach_window_surface(self, win: QWidget, *, corner: float = 14.0,
                               host: QWidget = None, freeze_immediately: bool = False):
+
+        if win is not None:
+            _prepare_dialog_shell(win)
 
         # Explicit backdrop="blur" is already scoped by the caller (login or
         # compare-card). Do not stack a second dialog surface over it.
@@ -397,7 +483,11 @@ class BlurOverlay(QWidget):
                 corner=corner,
             )
             surface.setAttribute(Qt.WA_TransparentForMouseEvents)
-            surface.setGeometry(surface_host.rect())
+            if host is None:
+                surface._geometry_filter = _DialogSurfaceGeometry(surface, surface_host, True)
+            else:
+                # A morph host owns its moving/settled clipping geometry.
+                surface.setGeometry(surface_host.rect())
             surface.lower()
             surface.show()
             self._surface_card = surface
@@ -567,6 +657,14 @@ class BlurCard(QWidget):
             self.freeze(root_widget, global_pos)
 
     def paintEvent(self, _ev):
+        origin = (self.mapFromGlobal(self._backdrop_origin)
+                  if self._backdrop_origin is not None else QPoint())
+        image = _gpu_card_frame(self, self._blur_pix, origin)
+        if image is not None:
+            painter = QPainter(self)
+            painter.drawImage(QPoint(), image)
+            painter.end()
+            return
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
@@ -760,6 +858,12 @@ class LiveBlurCard(QWidget):
     # paint
 
     def paintEvent(self, _ev):
+        image = _gpu_card_frame(self, self._crop, QPoint())
+        if image is not None:
+            painter = QPainter(self)
+            painter.drawImage(QPoint(), image)
+            painter.end()
+            return
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
 
@@ -817,6 +921,8 @@ def blur_context(parent: QWidget, radius: float = 28.0, darken: float = 0.45):
 # Helper: install fade in/out animation pada window/dialog
 def install_window_fade(win, fade_in_delay: int = 120,
                         fade_in_ms: int = 140, fade_out_ms: int = 120):
+
+    _prepare_dialog_shell(win)
 
     if getattr(win, "_window_fade_installed", False):
         return

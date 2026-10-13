@@ -1,0 +1,72 @@
+{
+  "rows": 128,
+  "build_ms": 973.8195999816526,
+  "description": "Actual AppUI with synthetic projects; no service/network/project writes. Intervals measure GUI dispatch, not display FPS.",
+  "cases": {
+    "build": {
+      "action_ms": 27.505100006237626,
+      "cpu_ms": 5515.625,
+      "ticks": 133,
+      "median_ms": 38.26689999550581,
+      "p95_ms": 51.59389998880215,
+      "max_ms": 215.13830000185408,
+      "elapsed_ms": 5509.067600010894,
+      "preparation_readbacks": 0,
+      "post_preparation_readbacks": 0,
+      "readback_gpu_frames": 0,
+      "paints": {
+        "StartupVisual": 199
+      }
+    },
+    "reveal": {
+      "action_ms": 116.78489999030717,
+      "cpu_ms": 1140.625,
+      "ticks": 80,
+      "median_ms": 16.107400006148964,
+      "p95_ms": 27.090100018540397,
+      "max_ms": 121.83630000799894,
+      "elapsed_ms": 1638.9676999824587,
+      "preparation_readbacks": 0,
+      "post_preparation_readbacks": 36,
+      "readback_gpu_frames": 36,
+      "paints": {
+        "StartupVisual": 15,
+        "QLabel": 112,
+        "QLineEdit": 3,
+        "QToolButton": 4,
+        "_ResponsiveDriveUsageLabel": 4,
+        "QProgressBar": 4,
+        "_ElidedProjectLabel": 44,
+        "_ScrollingPathLabel": 22,
+        "PressAnimatedButton": 44,
+        "QPushButton": 6,
+        "AppUI": 2,
+        "QStackedWidget": 2,
+        "QWidget": 28,
+        "_ProjectDriveCard": 6,
+        "SmoothListWidget": 2,
+        "_ProjectCardWidget": 14,
+        "StartupTransition": 62
+      },
+      "preparation_ms": 646.1290000006557,
+      "animation": {
+        "p95_ms": 16.898800007766113,
+        "max_ms": 17.739700007950887,
+        "ticks": 62,
+        "readbacks": 0
+      }
+    }
+  },
+  "reveal_finished": true,
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 38,
+    "texture_uploads": 18,
+    "texture_bytes": 76416,
+    "surface_bytes": 5794216,
+    "last_error": null
+  }
+}

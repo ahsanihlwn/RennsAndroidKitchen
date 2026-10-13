@@ -1,0 +1,80 @@
+{
+  "description": "Real event-loop reveal: 1080x700, cached Qt rows plus pending file icon work; no forced grabs during animation",
+  "rows": 12000,
+  "freeze_content": true,
+  "window_opacity": false,
+  "actual_main": true,
+  "pause_icons": true,
+  "runs": [
+    {
+      "run": 0,
+      "prepare_ms": 199.2636000213679,
+      "show_ms": 70.40470000356436,
+      "elapsed_ms": 880.2579999901354,
+      "cpu_ms": 500.0,
+      "presentation_wait_ms": 0.8988000045064837,
+      "ticks": 6,
+      "spacing_median_ms": 168.3513499883702,
+      "spacing_p95_ms": 264.44830000400543,
+      "spacing_max_ms": 264.44830000400543,
+      "tree_paints": 0,
+      "reveal_paints": 6,
+      "direct_gpu_frames": 0,
+      "direct_gpu_error": null,
+      "readback_gpu_frames": 6,
+      "icons_remaining": 12000
+    },
+    {
+      "run": 1,
+      "prepare_ms": 48.72010002145544,
+      "show_ms": 0.005999987479299307,
+      "elapsed_ms": 786.1803999985568,
+      "cpu_ms": 140.625,
+      "presentation_wait_ms": 0.8821999945212156,
+      "ticks": 10,
+      "spacing_median_ms": 16.37745001062285,
+      "spacing_p95_ms": 264.79980000294745,
+      "spacing_max_ms": 264.79980000294745,
+      "tree_paints": 0,
+      "reveal_paints": 4,
+      "direct_gpu_frames": 0,
+      "direct_gpu_error": null,
+      "readback_gpu_frames": 3,
+      "icons_remaining": 12000
+    },
+    {
+      "run": 2,
+      "prepare_ms": 49.465499992948025,
+      "show_ms": 0.006599992047995329,
+      "elapsed_ms": 807.204599987017,
+      "cpu_ms": 62.5,
+      "presentation_wait_ms": 0.8934999932534993,
+      "ticks": 10,
+      "spacing_median_ms": 16.251099994406104,
+      "spacing_p95_ms": 267.236400017282,
+      "spacing_max_ms": 267.236400017282,
+      "tree_paints": 0,
+      "reveal_paints": 4,
+      "direct_gpu_frames": 0,
+      "direct_gpu_error": null,
+      "readback_gpu_frames": 3,
+      "icons_remaining": 12000
+    }
+  ],
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 44,
+    "texture_uploads": 19,
+    "texture_bytes": 9122176,
+    "surface_bytes": 13728880,
+    "last_error": null
+  },
+  "native_window_exposed": true,
+  "webengine_after_entry": {
+    "value": "# Native Monaco after Skia entry\nprint('Qt WebEngine is still alive')\n",
+    "lines": 3
+  }
+}

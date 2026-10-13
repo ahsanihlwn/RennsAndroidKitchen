@@ -1,0 +1,86 @@
+{
+  "rows": 8,
+  "build_ms": 358.5474999854341,
+  "description": "Actual AppUI with synthetic projects; no service/network/project writes. Intervals measure GUI dispatch, not display FPS.",
+  "cases": {
+    "build": {
+      "action_ms": 29.171999980462715,
+      "cpu_ms": 1062.5,
+      "ticks": 37,
+      "median_ms": 25.45839999220334,
+      "p95_ms": 60.53660000907257,
+      "max_ms": 76.85680000577122,
+      "elapsed_ms": 1082.3983999725897,
+      "preparation_readbacks": 0,
+      "post_preparation_readbacks": 0,
+      "readback_gpu_frames": 0,
+      "paints": {
+        "_StartupSplash": 41
+      }
+    },
+    "reveal": {
+      "action_ms": 13.64709998597391,
+      "cpu_ms": 921.875,
+      "ticks": 72,
+      "median_ms": 15.964599995641038,
+      "p95_ms": 26.065499987453222,
+      "max_ms": 101.70060000382364,
+      "elapsed_ms": 1362.1339999954216,
+      "preparation_readbacks": 0,
+      "post_preparation_readbacks": 38,
+      "readback_gpu_frames": 38,
+      "paints": {
+        "_StartupSplash": 10,
+        "QLabel": 114,
+        "_ResponsiveDriveUsageLabel": 6,
+        "QProgressBar": 6,
+        "QLineEdit": 3,
+        "QToolButton": 4,
+        "_ElidedProjectLabel": 44,
+        "_ScrollingPathLabel": 22,
+        "PressAnimatedButton": 44,
+        "QPushButton": 6,
+        "AppUI": 2,
+        "QStackedWidget": 2,
+        "QWidget": 28,
+        "_ProjectDriveCard": 6,
+        "SmoothListWidget": 2,
+        "_ProjectCardWidget": 14,
+        "StartupTransition": 62
+      },
+      "preparation_ms": 369.97439997503534,
+      "animation": {
+        "p95_ms": 16.843399993376806,
+        "max_ms": 17.491200007498264,
+        "ticks": 62,
+        "readbacks": 0
+      }
+    }
+  },
+  "reveal_finished": true,
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 40,
+    "texture_uploads": 18,
+    "texture_bytes": 76416,
+    "surface_bytes": 5794216,
+    "last_error": null
+  },
+  "slow_build_steps": [
+    {
+      "line": 1230,
+      "ms": 28.88659999007359
+    },
+    {
+      "line": 1304,
+      "ms": 65.50749999587424
+    },
+    {
+      "line": 1932,
+      "ms": 35.8669999986887
+    }
+  ]
+}

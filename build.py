@@ -26,6 +26,8 @@ INCLUDE_MODULES = [
     "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineCore", "PySide6.QtWebChannel",
     "PySide6.QtNetwork", "PySide6.QtWebSockets", "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets", "PySide6.QtSvg", "PySide6.QtSvgWidgets",
+    "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets", "PySide6.QtQuick",
+    "skia",
 ]
 THIRD_PARTY_PACKAGES = [
     "requests", "urllib3", "charset_normalizer", "idna", "certifi", "websockets",

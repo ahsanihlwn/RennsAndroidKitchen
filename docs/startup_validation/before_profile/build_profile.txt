@@ -1,0 +1,53 @@
+         1973960 function calls (1971146 primitive calls) in 8.969 seconds
+
+   Ordered by: cumulative time
+   List reduced from 769 to 45 due to restriction <45>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.000    0.000    8.413    8.413 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\tools\benchmark_startup_reveal.py:103(build)
+        1    0.001    0.001    8.401    8.401 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:4343(_render_projects)
+      128    0.008    0.000    6.160    0.048 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:4303(_add_project_row)
+      128    1.739    0.014    3.682    0.029 {method 'setItemWidget' of 'PySide6.QtWidgets.QListWidget' objects}
+      128    0.213    0.002    2.367    0.018 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:2399(build_project_item_widget)
+       42    0.001    0.000    1.793    0.043 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:962(_refresh_startup_frame)
+       42    0.208    0.005    1.791    0.043 {built-in method processEvents}
+    54284    0.265    0.000    1.304    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:240(eventFilter)
+      749    0.009    0.000    1.253    0.002 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:207(_prepare)
+      386    0.461    0.001    0.927    0.002 {method 'addLayout' of 'PySide6.QtWidgets.QBoxLayout' objects}
+    51736    0.583    0.000    0.887    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:42(eventFilter)
+   357724    0.444    0.000    0.870    0.000 {method 'type' of 'PySide6.QtCore.QEvent' objects}
+       43    0.004    0.000    0.854    0.020 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:199(_flush)
+      966    0.485    0.001    0.768    0.001 {method 'setStyleSheet' of 'PySide6.QtWidgets.QWidget' objects}
+      767    0.026    0.000    0.589    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:296(button_surface)
+31362/31358    0.582    0.000    0.584    0.000 {built-in method builtins.hasattr}
+      748    0.010    0.000    0.583    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:45(_layers)
+        1    0.091    0.091    0.555    0.555 {method 'exec' of 'PySide6.QtCore.QEventLoop' objects}
+54284/53739    0.160    0.000    0.550    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_ButtonPressAnimation.py:281(eventFilter)
+      778    0.100    0.000    0.518    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:182(_declarations)
+       20    0.001    0.000    0.517    0.026 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:2260(_warm_settings_page)
+        2    0.001    0.001    0.458    0.229 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:4223(_filter_projects)
+    39820    0.447    0.000    0.447    0.000 {built-in method builtins.getattr}
+        1    0.172    0.172    0.438    0.438 {method 'doItemsLayout' of 'PySide6.QtWidgets.QListView' objects}
+   362322    0.250    0.000    0.437    0.000 C:\Users\ahsanihlwn\AppData\Local\Programs\Python\Python314\Lib\enum.py:676(__call__)
+     1312    0.008    0.000    0.414    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\theme_binding.py:18(_bind)
+        1    0.000    0.000    0.357    0.357 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:3401(_prepare_create_popup)
+        1    0.000    0.000    0.353    0.353 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_CreateProjectDialog.py:701(prepare_popup)
+9032/8008    0.082    0.000    0.350    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_ButtonPressAnimation.py:95(event)
+    12562    0.066    0.000    0.327    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:182(_eligible)
+    28894    0.207    0.000    0.306    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:652(eventFilter)
+    54273    0.140    0.000    0.300    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\fonts.py:87(eventFilter)
+        2    0.043    0.021    0.277    0.139 {method 'grab' of 'PySide6.QtWidgets.QWidget' objects}
+    54284    0.137    0.000    0.266    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\tools\benchmark_startup_reveal.py:60(eventFilter)
+9032/8008    0.179    0.000    0.260    0.000 {function PressAnimatedButton.event at 0x00000131A3E56560}
+     1186    0.139    0.000    0.253    0.000 {method 'addWidget' of 'PySide6.QtWidgets.QBoxLayout' objects}
+   362322    0.186    0.000    0.186    0.000 C:\Users\ahsanihlwn\AppData\Local\Programs\Python\Python314\Lib\enum.py:1145(__new__)
+      259    0.000    0.000    0.184    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\theme_binding.py:35(bind_pixmap)
+      258    0.085    0.000    0.182    0.001 {method 'ensurePolished' of 'PySide6.QtWidgets.QWidget' objects}
+       23    0.000    0.000    0.170    0.007 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_gpu.py:266(render_gpu)
+       23    0.002    0.000    0.170    0.007 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_gpu.py:165(render)
+      795    0.001    0.000    0.163    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\theme_binding.py:26(bind_style)
+        1    0.000    0.000    0.157    0.157 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_CreateProjectDialog.py:70(__init__)
+       11    0.001    0.000    0.157    0.014 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:418(render_button)
+        1    0.006    0.006    0.148    0.148 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_CreateProjectDialog.py:111(_build_ui)
+
+

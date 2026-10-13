@@ -8,8 +8,10 @@ from core.header_magic import is_super_or_sparse as detect_super_sparse
 from core.fs_verify import FSVerifier
 import sys
 import weakref
+from shiboken6 import isValid
 from PySide6.QtWidgets import (
     QTreeWidget,
+    QApplication,
     QTreeWidgetItem,
     QHeaderView,
     QMenu,
@@ -27,7 +29,7 @@ from core.symlink import (
     _symlink_cache,
 )
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import (
     QIcon,
     QPainter,
@@ -36,6 +38,7 @@ from PySide6.QtGui import (
     QPixmap,
     QTransform,
     QPen,
+    QDrag,
 )
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout,
@@ -699,6 +702,14 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
         self.setFrameShape(QTreeWidget.NoFrame)
         self.setFrameShadow(QTreeWidget.Plain)
         self.viewport().setAutoFillBackground(False)
+        self.viewport().setAttribute(Qt.WA_OpaquePaintEvent)
+        self.setVerticalScrollMode(QTreeWidget.ScrollPerPixel)
+        self._wheel_target = 0
+        self._wheel_animation = QPropertyAnimation(self.verticalScrollBar(), b"value", self)
+        self._wheel_animation.setDuration(120)
+        self._wheel_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.verticalScrollBar().sliderPressed.connect(self._stop_wheel_scroll)
+        self.verticalScrollBar().rangeChanged.connect(self._stop_wheel_scroll)
 
 
         self.watcher = QFileSystemWatcher(self)
@@ -935,6 +946,8 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
         self.setDefaultDropAction(Qt.MoveAction)
         self.drag_hover_item = None   # legacy, tetap ada
         self.drag_hover_items = set()  # set item yg di-highlight
+        self._drag_hover_position = None
+        self._drag_hover_mounted = False
         self._hovered_item = None      # hover manual biar bisa rounded
         self._multi_anchor_parent = None  # parent constraint for multi-select
         self._multi_selecting     = False  # True while Ctrl/Shift held
@@ -961,6 +974,10 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
             "DAT", "DAT.BR", "PAYLOAD",
         }
         self._badge_delegate = _badge_delegate
+        self._cell_warm_timer = QTimer(self)
+        self._cell_warm_timer.setSingleShot(True)
+        self._cell_warm_timer.setInterval(120)
+        self._cell_warm_timer.timeout.connect(lambda: setattr(self._badge_delegate, "_cache_new_cells", True))
         self.setItemDelegateForColumn(0, _badge_delegate)
         self.setItemDelegateForColumn(1, _badge_delegate)
         self._load_icons()
@@ -1710,11 +1727,47 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
         self._sbh_visible = False
 
     def scrollContentsBy(self, dx, dy):
+        if (hasattr(self, "_badge_delegate") and abs(dy) > max(1, self.viewport().height() // 4)):
+            # Large jumps mostly expose unseen cells. Avoid allocating/rasterizing
+            # cache tiles that would be evicted immediately; keep existing hits.
+            self._badge_delegate._cache_new_cells = False
+            self._cell_warm_timer.start()
         super().scrollContentsBy(dx, dy)
         if dy != 0:
             self._show_scrollbar()
         if dx != 0:
             self._show_scrollbar_h()
+
+    def _stop_wheel_scroll(self, *_args):
+        self._wheel_animation.stop()
+        self._wheel_target = self.verticalScrollBar().value()
+
+    def wheelEvent(self, event):
+        # Trackpads already provide continuous pixel motion. Native horizontal,
+        # modified and animation-disabled wheel handling retains Qt semantics.
+        if (not event.pixelDelta().isNull() or event.angleDelta().x()
+                or event.modifiers() != Qt.NoModifier or not _th.animations_enabled):
+            self._stop_wheel_scroll()
+            return super().wheelEvent(event)
+        delta = event.angleDelta().y()
+        if not delta:
+            return super().wheelEvent(event)
+        bar = self.verticalScrollBar()
+        if self._wheel_animation.state() != QPropertyAnimation.Running:
+            self._wheel_target = bar.value()
+        rows = QApplication.wheelScrollLines()
+        if rows <= 0:
+            return super().wheelEvent(event)
+        target = round(self._wheel_target - delta / 120 * rows * max(1, bar.singleStep()))
+        self._wheel_target = max(bar.minimum(), min(bar.maximum(), target))
+        self._wheel_animation.stop()
+        self._wheel_animation.setStartValue(bar.value())
+        self._wheel_animation.setEndValue(self._wheel_target)
+        if self._wheel_target != bar.value():
+            self._wheel_animation.start()
+        else:
+            return super().wheelEvent(event)
+        event.accept()
 
     def populate_root(self):
         if not self.base:
@@ -3137,17 +3190,32 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
     def mouseMoveEvent(self, event):
         item = self.itemAt(event.pos())
         if item is not self._hovered_item:
+            old = self._hovered_item
             self._hovered_item = item
-            self.viewport().update()
+            self._update_hover_rows(old, item)
         super().mouseMoveEvent(event)
 
     def leaveEvent(self, event):
         if self._hovered_item is not None:
+            old = self._hovered_item
             self._hovered_item = None
-            self.viewport().update()
+            self._update_hover_rows(old, None)
         super().leaveEvent(event)
 
+    def _update_hover_rows(self, old, current):
+        viewport = self.viewport()
+        for item in (old, current):
+            if item is not None:
+                rect = self.visualItemRect(item)
+                if rect.isValid():
+                    # The highlight spans the row, including all columns and
+                    # indentation. Repaint both old/new rows to erase it fully.
+                    rect.setLeft(0)
+                    rect.setRight(viewport.width() - 1)
+                    viewport.update(rect.intersected(viewport.rect()))
+
     def mousePressEvent(self, event):
+        self._stop_wheel_scroll()
         # Klik di luar dummy saat creating → cancel
         if self._creating_item and not self._renaming:
             cur = self.itemAt(event.pos())
@@ -3210,6 +3278,7 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
         self._search_ui.show_search()
 
     def keyPressEvent(self, event):
+        self._stop_wheel_scroll()
         # ESC saat creating dummy → cancel langsung
         if event.key() == Qt.Key_Escape and self._creating_item:
             self._cancel_dummy()
@@ -3611,6 +3680,7 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
 
     def stop_background_work(self):
 
+        self._stop_wheel_scroll()
         self._background_stopped = True
         if hasattr(self, "_reset_icon_work"):
             self._reset_icon_work()
@@ -3965,21 +4035,19 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
 
         super().dragEnterEvent(event)
 
-    def dragMoveEvent(self, event):
-        pos = event.position().toPoint()
+    def _update_drag_hover(self, pos, mounted=False):
         item = self.itemAt(pos)
         if item is None:
             item = (self.invisibleRootItem() if self.display_mode == "single_dir"
                     else self.topLevelItem(0))
 
 
-        if event.mimeData().hasFormat("application/x-rdt-mount"):
+        accepted = item is not None
+        if mounted:
             full = (item.data(0, Qt.UserRole) or "") if item is not None else ""
-            if item is not None and not self.is_mount_node(item) \
-                    and os.path.isdir(full):
-                event.acceptProposedAction()
-            else:
-                event.ignore()
+            accepted = item is not None and not self.is_mount_node(item) and os.path.isdir(full)
+            if not accepted:
+                item = None
 
         self.drag_hover_item = item
 
@@ -4023,9 +4091,19 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
                     new_set.add(item)
 
         self.drag_hover_items = new_set
-        self.update()
-        event.accept()
+        # The opaque viewport owns its backing store; updating only the outer
+        # QTreeWidget no longer repaints these destination hints.
+        self.viewport().update()
+        return accepted
 
+    def dragMoveEvent(self, event):
+        pos = event.position().toPoint()
+        self._drag_hover_position = pos
+        self._drag_hover_mounted = event.mimeData().hasFormat("application/x-rdt-mount")
+        if self._update_drag_hover(pos, self._drag_hover_mounted):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
 
         y = pos.y()
         h = self.viewport().height()
@@ -4078,6 +4156,8 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
 
         bar = self.verticalScrollBar()
         bar.setValue(bar.value() + step)
+        if self._drag_hover_position is not None:
+            self._update_drag_hover(self._drag_hover_position, self._drag_hover_mounted)
         # Kalau udah mentok atas/bawah, stop biar ga sia-sia
         if (speed < 0 and bar.value() <= bar.minimum()) or \
            (speed > 0 and bar.value() >= bar.maximum()):
@@ -4358,14 +4438,7 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
 
     def dropEvent(self, event):
         # Reset highlight saat drop terjadi
-        self.drag_hover_item = None
-        self.drag_hover_items = set()
-        # stop auto-scroll timer
-        self._drag_scroll_speed = 0.0
-        self._drag_scroll_accum = 0.0
-        if self._drag_scroll_timer.isActive():
-            self._drag_scroll_timer.stop()
-        self.viewport().update()
+        self._clear_drag_hover()
 
         data = event.mimeData()
         main = self.window()
@@ -7136,6 +7209,12 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
                     pass
 
     def paintEvent(self, event):
+        # An opaque viewport can scroll its backing pixels without repainting
+        # the parent/editor. Explicitly clear damaged/empty areas so removed
+        # rows and partial scrolls cannot leave old glyphs behind.
+        background = QPainter(self.viewport())
+        background.fillRect(event.rect(), self.palette().color(self.backgroundRole()))
+        background.end()
         super().paintEvent(event)
         self._acknowledge_paint_barrier()
 
@@ -7248,7 +7327,25 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
         else:
             main.drag_src_parent = self.base
 
-        super().startDrag(supportedActions)
+        drag = QDrag(self)
+        drag.setMimeData(self.mimeData(selected))
+        preview = self._mount_drag_pixmap(selected)
+        if preview is not None:
+            from PySide6.QtCore import QPoint
+            drag.setPixmap(preview)
+            drag.setHotSpot(QPoint(min(12, preview.width()-1), min(10, preview.height()-1)))
+        # Qt draws just the selected icons/names beside the action cursor.
+        # The tree row, columns, highlights and viewport are never captured.
+        try:
+            drag.exec(supportedActions, self.defaultDropAction())
+        finally:
+            if isValid(self):
+                self.dragged_item = None
+                self._clear_drag_hover()
+            if isValid(main):
+                for name in ("drag_src_paths", "drag_src_phys_paths", "drag_src_path",
+                             "drag_src_phys_path", "drag_src_parent"):
+                    setattr(main, name, None)
 
 
     def rebuild_path(self, path):
@@ -7276,8 +7373,13 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
         self.refresh_folder(node)
 
     def dragLeaveEvent(self, event):
+        self._clear_drag_hover()
+        event.accept()
+
+    def _clear_drag_hover(self):
         self.drag_hover_item = None   # legacy, tetap ada
         self.drag_hover_items = set()  # set item yg di-highlight
+        self._drag_hover_position = None
         self._hovered_item = None      # hover manual biar bisa rounded
         self.setMouseTracking(True)
         self.viewport().setMouseTracking(True)
@@ -7286,8 +7388,7 @@ class FileTree(QTreeWidget, FileTreeContextMixin, MountDiskMixin, FileTreeClipbo
         self._drag_scroll_accum = 0.0
         if self._drag_scroll_timer.isActive():
             self._drag_scroll_timer.stop()
-        self.update()
-        event.accept()
+        self.viewport().update()
 
     def apply_subtree(self, abs_path):
         if not abs_path.startswith(self.base):

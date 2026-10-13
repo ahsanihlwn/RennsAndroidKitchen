@@ -1,0 +1,42 @@
+{
+  "description": "Real event-loop reveal: 1080x700, cached Qt rows plus pending file icon work; no forced grabs during animation",
+  "rows": 12000,
+  "freeze_content": true,
+  "pause_icons": true,
+  "runs": [
+    {
+      "run": 0,
+      "prepare_ms": 345.05689999787137,
+      "show_ms": 54.900099989026785,
+      "elapsed_ms": 625.9185999806505,
+      "cpu_ms": 640.625,
+      "presentation_wait_ms": 1.0716999822761863,
+      "ticks": 30,
+      "spacing_median_ms": 20.467499998630956,
+      "spacing_p95_ms": 23.768899991409853,
+      "spacing_max_ms": 57.152299996232614,
+      "tree_paints": 0,
+      "reveal_paints": 26,
+      "direct_gpu_frames": 0,
+      "direct_gpu_error": null,
+      "readback_gpu_frames": 25,
+      "icons_remaining": 12000
+    }
+  ],
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 35,
+    "texture_uploads": 9,
+    "texture_bytes": 3298560,
+    "surface_bytes": 9106320,
+    "last_error": null
+  },
+  "native_window_exposed": true,
+  "webengine_after_entry": {
+    "value": "# Native Monaco after Skia entry\nprint('Qt WebEngine is still alive')\n",
+    "lines": 3
+  }
+}

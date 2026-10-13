@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: MPL-2.0
-from math import cos, exp, sin, sqrt
+from math import ceil, cos, exp, floor, sin, sqrt
 
 from PySide6.QtCore import (
     Qt, QPoint, QRect, QRectF, Signal, QParallelAnimationGroup, QVariantAnimation,
     QEasingCurve,
 )
-from PySide6.QtGui import QPainter, QPainterPath
+from PySide6.QtGui import QImage, QPainter, QPainterPath
 from PySide6.QtWidgets import (
     QWidget, QPushButton, QGraphicsOpacityEffect, QStyleOption,
     QStyleOptionButton, QStyle,
 )
+from core.skia_gpu import render_gpu, skia
+from core.skia_button import button_surface
 
 
 def _spring_progress(progress):
@@ -54,7 +56,8 @@ class ButtonCardMorph(QWidget):
     _DURATION = 440
 
     def __init__(self, host, card, button, button_rect, opening=True, source_effect=None,
-                 launch_scale=1.0):
+                 launch_scale=1.0, defer_source_handoff=False, caption_draw=None,
+                 caption_start=None, destination_frame=None):
         super().__init__(host)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, opening)
@@ -65,6 +68,11 @@ class ButtonCardMorph(QWidget):
         self._card = card
         self._opening = opening
         self._source_effect = source_effect
+        self._defer_source_handoff = defer_source_handoff
+        self._caption_draw = caption_draw
+        self._caption_start = caption_start
+        self._destination_frame = destination_frame
+        self._destination_opacity = 0.0
         self._stopped = False
         self._card_rect = QRectF(card.geometry())
         self._button_rect = QRectF(button_rect)
@@ -82,6 +90,9 @@ class ButtonCardMorph(QWidget):
         self._blur_surface = None
         self._blur_pixmap = None
         self._blur_origin = None
+        self._caption_image = None
+        self._caption_transform = None
+        self._skia_gpu_active = False
 
         self._button_surface = self._button_view(button, caption=False)
         self._caption = self._button_view(button, caption=True)
@@ -112,6 +123,7 @@ class ButtonCardMorph(QWidget):
 
     def _button_view(self, button, caption):
         view = _StyleButton(self)
+        view.setProperty("skipButtonGpuRendering", True)
         view.setObjectName("popupMorphCaption" if caption else "popupMorphButton")
         view.setAttribute(Qt.WA_TransparentForMouseEvents)
         view.setFocusPolicy(Qt.NoFocus)
@@ -150,7 +162,12 @@ class ButtonCardMorph(QWidget):
         return end
 
     def _advance(self, progress):
+        self._destination_opacity = (
+            max(0.0, min(1.0, (progress - 0.68) / 0.17))
+            if not self._opening and self._destination_frame is not None else 0.0
+        )
         motion = _spring_progress(progress if self._opening else min(1.0, progress / 0.68))
+        self._caption_motion = motion
         start, end = (self._launch_rect, self._card_rect) if self._opening else (self._card_rect, self._button_rect)
         self._surface_rect = QRectF(
             start.x() + (end.x() - start.x()) * motion,
@@ -181,7 +198,9 @@ class ButtonCardMorph(QWidget):
             self._surface_opacity = self._opacity(eased, 0.0, 0.0, ((0.25, 1.0), (0.30, 1.0), (0.65, 0.0)))
             self._caption_opacity = self._opacity(progress, 0.0, 1.0, ((0.12, 0.0), (0.55, 1.0)))
             self._form_opacity = self._opacity(eased, 1.0, 0.0, ((0.25, 0.0),))
-            if self._source_effect is not None:
+            if self._defer_source_handoff:
+                self._caption_opacity = 1.0
+            if self._source_effect is not None and not self._defer_source_handoff:
                 # Reveal the real button after the spring settles, then fade
                 # the popup away while its final-size drawing still matches.
                 self._source_effect.setOpacity(self._opacity(
@@ -193,43 +212,176 @@ class ButtonCardMorph(QWidget):
         self.update()
 
     def paintEvent(self, event):
+        image = render_gpu(self.size(), self.devicePixelRatioF(), self._paint_gpu)
+        self._skia_gpu_active = image is not None
         painter = QPainter(self)
         # Erase the previous spring outline on the translucent popup canvas.
         painter.setCompositionMode(QPainter.CompositionMode_Source)
         painter.fillRect(self.rect(), Qt.transparent)
         painter.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        if image is not None:
+            painter.drawImage(QPoint(), image)
+            return
+        self._paint_qt(painter)
+
+    def _paint_qt(self, painter):
+        blend = self._destination_opacity
+        weight = 1.0 - blend
+        if blend == 1.0:
+            painter.drawPixmap(self._button_rect.topLeft(), self._destination_frame)
+            return
         painter.setRenderHints(
             QPainter.Antialiasing | QPainter.TextAntialiasing | QPainter.SmoothPixmapTransform
         )
         path = QPainterPath()
         path.addRoundedRect(self._surface_rect, self._radius, self._radius)
+        painter.save()
         painter.setClipPath(path)
         if self._blur_pixmap is not None:
             painter.drawPixmap(self._blur_origin, self._blur_pixmap)
 
-        self._button_surface.draw(painter, self._surface_rect, self._button_opacity)
+        self._button_surface.draw(painter, self._surface_rect, self._button_opacity * weight)
         if self._surface_opacity > 0.0:
             option = QStyleOption()
             option.initFrom(self._card_surface)
             option.rect = QRect(0, 0, max(1, round(self._surface_rect.width())), max(1, round(self._surface_rect.height())))
             painter.save()
-            painter.setOpacity(self._surface_opacity)
+            painter.setOpacity(self._surface_opacity * weight)
             painter.translate(self._surface_rect.topLeft())
             painter.scale(self._surface_rect.width() / option.rect.width(), self._surface_rect.height() / option.rect.height())
             self._card_surface.style().drawPrimitive(QStyle.PE_Widget, option, painter, self._card_surface)
             painter.restore()
         if self._form_opacity > 0.0:
             painter.save()
-            painter.setOpacity(self._form_opacity)
+            painter.setOpacity(self._form_opacity * weight)
             painter.drawPixmap(self._card_rect.topLeft(), self._form_pixmap)
             painter.restore()
         if self._caption_opacity > 0.0:
+            image, rect = self._qt_caption()
             painter.save()
-            painter.translate(self._surface_rect.center())
-            painter.scale(self._caption_scale, self._caption_scale)
-            painter.translate(-self._caption_rect.center())
-            self._caption.draw(painter, self._caption_rect, self._caption_opacity)
+            painter.setOpacity(self._caption_opacity * weight)
+            painter.drawImage(rect, image)
             painter.restore()
+        painter.restore()
+        if blend > 0.0:
+            painter.save()
+            painter.setOpacity(blend)
+            painter.drawPixmap(self._button_rect.topLeft(), self._destination_frame)
+            painter.restore()
+
+    def _qt_surface(self, size, draw):
+        # Qt owns stylesheet resolution, glyphs and icons. Only compositing,
+        # clipping and the animation transforms are performed by Skia.
+        dpr = self.devicePixelRatioF()
+        image = QImage(max(1, ceil(size.width() * dpr)),
+                       max(1, ceil(size.height() * dpr)),
+                       QImage.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(dpr)
+        image.fill(Qt.transparent)
+        painter = QPainter(image)
+        painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing |
+                               QPainter.SmoothPixmapTransform)
+        draw(painter)
+        painter.end()
+        return image
+
+    def _paint_gpu(self, canvas, bridge):
+        blend = self._destination_opacity
+        weight = 1.0 - blend
+        if blend == 1.0:
+            bridge.draw_image(canvas, self._destination_frame, self._button_rect)
+            return
+        rect = self._surface_rect
+        clip = skia.RRect.MakeRectXY(
+            skia.Rect.MakeXYWH(rect.x(), rect.y(), rect.width(), rect.height()),
+            self._radius, self._radius,
+        )
+        if self._blur_pixmap is not None:
+            canvas.save()
+            canvas.clipRRect(clip, True)
+            bridge.draw_image(canvas, self._blur_pixmap, QRectF(
+                self._blur_origin.toPointF(), self._blur_pixmap.deviceIndependentSize(),
+            ))
+            canvas.restore()
+
+        local = QRectF(0, 0, rect.width(), rect.height())
+        if self._button_opacity > 0.0:
+            option = QStyleOptionButton()
+            self._button_surface.initStyleOption(option)
+            option.state &= ~(QStyle.State_MouseOver | QStyle.State_HasFocus | QStyle.State_Sunken)
+            surface = button_surface(self._button_surface, option)
+            if surface is not None:
+                surface.draw(canvas, bridge, rect, self._button_opacity * weight, self._radius)
+            else:
+                canvas.save()
+                canvas.clipRRect(clip, True)
+                image = self._qt_surface(local.size(), lambda painter:
+                    self._button_surface.draw(painter, local, 1.0))
+                bridge.draw_image(canvas, image, rect, self._button_opacity * weight)
+                canvas.restore()
+        if self._surface_opacity > 0.0:
+            def draw_card(painter):
+                option = QStyleOption()
+                option.initFrom(self._card_surface)
+                option.rect = QRect(0, 0, max(1, round(rect.width())),
+                                    max(1, round(rect.height())))
+                painter.scale(rect.width() / option.rect.width(),
+                              rect.height() / option.rect.height())
+                self._card_surface.style().drawPrimitive(
+                    QStyle.PE_Widget, option, painter, self._card_surface,
+                )
+            surface = button_surface(self._card_surface)
+            if surface is not None:
+                surface.draw(canvas, bridge, rect, self._surface_opacity * weight, self._radius)
+            else:
+                canvas.save()
+                canvas.clipRRect(clip, True)
+                image = self._qt_surface(local.size(), draw_card)
+                bridge.draw_image(canvas, image, rect, self._surface_opacity * weight)
+                canvas.restore()
+        if self._form_opacity > 0.0:
+            canvas.save()
+            canvas.clipRRect(clip, True)
+            bridge.draw_image(canvas, self._form_pixmap, self._card_rect,
+                              self._form_opacity * weight)
+            canvas.restore()
+        if self._caption_opacity > 0.0:
+            canvas.save()
+            canvas.clipRRect(clip, True)
+            image, caption_rect = self._qt_caption()
+            bridge.draw_image(canvas, image, caption_rect, self._caption_opacity * weight)
+            canvas.restore()
+        if blend > 0.0:
+            bridge.draw_image(canvas, self._destination_frame, self._button_rect, blend)
+
+    def _qt_caption(self):
+        # Rasterize the small caption at its actual transform in Qt. Enlarging
+        # a native-size glyph bitmap would change its weight and sharpness.
+        dpr = self.devicePixelRatioF()
+        scale = self._caption_scale
+        center = self._surface_rect.center()
+        if self._caption_start is not None and not self._opening:
+            motion = self._caption_motion
+            center = self._caption_start + (self._button_rect.center()-self._caption_start)*motion
+        size = self._caption_rect.size() * scale
+        left, top = center.x() - size.width() / 2, center.y() - size.height() / 2
+        x, y = floor(left * dpr) / dpr, floor(top * dpr) / dpr
+        width = ceil((left + size.width() - x) * dpr) / dpr
+        height = ceil((top + size.height() - y) * dpr) / dpr
+        caption_rect = QRectF(x, y, width, height)
+        transform = (dpr, scale, left - x, top - y, width, height)
+        if self._caption_image is None or self._caption_transform != transform:
+            def draw_caption(painter):
+                painter.translate(center.x() - x, center.y() - y)
+                painter.scale(scale, scale)
+                painter.translate(-self._caption_rect.center())
+                if self._caption_draw is not None:
+                    self._caption_draw(painter)
+                else:
+                    self._caption.draw(painter, self._caption_rect, 1.0)
+            self._caption_image = self._qt_surface(caption_rect.size(), draw_caption)
+            self._caption_transform = transform
+        return self._caption_image, caption_rect
 
     @staticmethod
     def settle_card(host, card):

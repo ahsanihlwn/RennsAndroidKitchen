@@ -126,11 +126,12 @@ from PySide6.QtWidgets import (
     QGraphicsEffect, QGraphicsOpacityEffect, QStyledItemDelegate, QAbstractButton,
 )
 from PySide6.QtGui import QTransform, QIcon, QPixmap, QPainter, QColor, QCursor
+from shiboken6 import isValid
 from core.theme_binding import bind_style, bind_icon, bind_pixmap, refresh_theme, with_alpha
 from core.language_binding import bind_text, bind_language, refresh_language
 from PySide6.QtCore import (
     Qt, QSize, QRect, QRectF, QPoint, QTimer, QPropertyAnimation, QEasingCurve,
-    QThread, Signal, Property, QSequentialAnimationGroup, QPauseAnimation, QVariantAnimation,
+    QThread, Signal, Slot, Property, QSequentialAnimationGroup, QPauseAnimation, QVariantAnimation,
 )
 from core.flag import (
     APP_NAME, APP_VERSION, NEOCAT_LABEL, edition_label, window_title,
@@ -141,6 +142,11 @@ from app_ext.class_SmoothListWidget import SmoothListWidget
 from app_ext.class_SmoothScrollArea import SmoothScrollArea
 from app_ext.class_LoadingWindow import LoadingWindow
 from app_ext.class_StartupVisual import StartupVisual, StartupContentReveal
+from app_ext.class_StartupTransition import StartupTransition, DriveUsageTiming
+from app_ext.class_ChoiceDropdown import ChoiceDropdown, show_choice_popup
+from app_ext.class_RomModeButton import bind_rom_mode_button
+from app_ext.class_AppPageTransition import AppPageTransition
+from app_ext.class_WindowContentReveal import WindowContentReveal
 from app_ext.class_FooterActionTransition import FooterActionTransition
 from app_ext.class_ButtonPressAnimation import (
     PressScaleEffect, PressAnimatedButton, install_button_press_animations,
@@ -344,21 +350,23 @@ class _ScrollingPathLabel(QLabel):
         self._offset = 0
         self._direction = 1
         self._pause_ticks = 16
-        self._scroll_timer = QTimer(self)
-        self._scroll_timer.setInterval(50)
-        self._scroll_timer.timeout.connect(self._advance_scroll)
+        self._width_cache = None
+        from core.visible_label_clock import VisibleLabelClock
+        self._label_clock = VisibleLabelClock.instance()
 
     def _refresh_theme(self):
         self._text_color = QColor(self._color_factory())
 
     def _max_offset(self) -> int:
-        return max(0, self.fontMetrics().horizontalAdvance(self.text()) - self.width() + 2)
+        key = (self.text(), self.font().key())
+        if self._width_cache is None or self._width_cache[0] != key:
+            self._width_cache = (key, self.fontMetrics().horizontalAdvance(self.text()))
+        return max(0, self._width_cache[1] - self.width() + 2)
 
     def _update_scroll_state(self):
         if self.isVisible() and self._max_offset() > 0:
-            self._scroll_timer.start()
+            self._label_clock.track(self)
         else:
-            self._scroll_timer.stop()
             self._offset = 0
             self._direction = 1
             self._pause_ticks = 16
@@ -392,7 +400,6 @@ class _ScrollingPathLabel(QLabel):
         self._update_scroll_state()
 
     def hideEvent(self, event):
-        self._scroll_timer.stop()
         super().hideEvent(event)
 
     def paintEvent(self, event):
@@ -476,7 +483,9 @@ class _ResponsiveDriveUsageLabel(QLabel):
 
 
 class _ProjectDrivePressEffect(PressScaleEffect):
-    pass
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.setEnabled(False)
 
 
 class _ProjectDriveCard(QWidget):
@@ -484,8 +493,8 @@ class _ProjectDriveCard(QWidget):
 
     clicked = Signal(str)
 
-    def __init__(self, drive):
-        super().__init__()
+    def __init__(self, drive, parent=None):
+        super().__init__(parent)
         self.drive = drive
         self._pressed = False
         self._press_started = 0.0
@@ -497,6 +506,9 @@ class _ProjectDriveCard(QWidget):
         self.setGraphicsEffect(self._press_effect)
         self._press_animation = QPropertyAnimation(self._press_effect, b"scale", self)
         self._press_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self._press_animation.finished.connect(
+            lambda: self._press_effect.setEnabled(self._press_effect.scale != 1.0)
+        )
         self._release_timer = QTimer(self)
         self._release_timer.setSingleShot(True)
         self._release_timer.timeout.connect(lambda: self._animate_press(1.0))
@@ -506,7 +518,9 @@ class _ProjectDriveCard(QWidget):
         self._press_animation.stop()
         if not _th.animations_enabled:
             self._press_effect.scale = 1.0
+            self._press_effect.setEnabled(False)
             return
+        self._press_effect.setEnabled(True)
         self._press_animation.setStartValue(self._press_effect.scale)
         self._press_animation.setEndValue(target)
         self._press_animation.setDuration(110 if target < 1.0 else 170)
@@ -576,8 +590,8 @@ class _ProjectDriveCard(QWidget):
 class _ProjectCardWidget(QWidget):
 
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, parent=None):
+        super().__init__(parent)
         self._open_button = None
         self._card_hovered = False
         self._card_pressed = False
@@ -684,116 +698,7 @@ class _ProjectCardDelegate(QStyledItemDelegate):
         super().paint(painter, option, index)
 
 
-class _ProjectHoverEffect(QGraphicsEffect):
-
-
-    def __init__(self, project_list, background=None):
-        super().__init__(project_list.viewport())
-        self.project_list = project_list
-        self.background = (QColor(background) if background is not None
-                           else project_list.palette().color(project_list.backgroundRole()))
-        self.item = None
-        self.pressed_item = None
-        self._states = {}
-        self._timer = QTimer(self)
-        self._timer.setInterval(16)
-        self._timer.timeout.connect(self._advance)
-
-    def _retarget(self, item, target, duration_ms):
-        key = id(item)
-        current = self._states.get(key, {}).get("scale", 1.0)
-        self._states[key] = {
-            "item": item,
-            "start": current,
-            "scale": current,
-            "target": target,
-            "started": time.monotonic(),
-            "duration": duration_ms / 1000.0,
-        }
-
-    def set_hovered_item(self, item):
-        if item is self.item:
-            return
-        self._advance()
-        if self.item is not None and self.item is not self.pressed_item:
-            self._retarget(self.item, 1.0, 150)
-        self.item = item
-        if item is not None and item is not self.pressed_item:
-            self._retarget(item, 0.995, 170)
-        if self._states:
-            self._timer.start()
-        self.update()
-
-    def set_pressed_item(self, item, pressed):
-        if pressed and item is self.pressed_item:
-            return
-        if not pressed and item is not self.pressed_item:
-            return
-        self._advance()
-        self.pressed_item = item if pressed else None
-        target = 0.97 if pressed else (0.995 if self.item is item else 1.0)
-        self._retarget(item, target, 110 if pressed else 170)
-        self._timer.start()
-        self.update()
-
-    def _advance(self):
-        now = time.monotonic()
-        animating = False
-        for key, state in tuple(self._states.items()):
-            progress = min(1.0, (now - state["started"]) / state["duration"])
-            eased = 1.0 - (1.0 - progress) ** 3
-            state["scale"] = state["start"] + (state["target"] - state["start"]) * eased
-            if progress < 1.0:
-                animating = True
-            elif state["target"] == 1.0:
-                del self._states[key]
-        if not animating:
-            self._timer.stop()
-        self.update()
-
-    def reset(self):
-        self._timer.stop()
-        self.item = None
-        self.pressed_item = None
-        self._states.clear()
-        self.update()
-
-    def draw(self, painter):
-        cards = [(state["item"], state["scale"]) for state in self._states.values()
-                 if state["scale"] < 0.9999]
-        if not cards:
-            self.drawSource(painter)
-            return
-
-        offset = QPoint()
-        source = self.sourcePixmap(Qt.LogicalCoordinates, offset, QGraphicsEffect.NoPad)
-        if source.isNull():
-            return
-        painter.drawPixmap(offset, source)
-        ratio = source.devicePixelRatioF()
-        source_size = QSize(round(source.width() / ratio), round(source.height() / ratio))
-        source_bounds = QRect(offset, source_size)
-        for item, scale in cards:
-            card_rect = self.project_list.visualItemRect(item).adjusted(0, 0, 0, -8)
-            card_rect = card_rect.intersected(source_bounds)
-            if card_rect.isEmpty():
-                continue
-            source_rect = card_rect.translated(-offset)
-            card_image = source.copy(QRect(
-                round(source_rect.x() * ratio), round(source_rect.y() * ratio),
-                round(source_rect.width() * ratio), round(source_rect.height() * ratio),
-            ))
-            card_image.setDevicePixelRatio(ratio)
-            painter.save()
-            painter.fillRect(card_rect, self.background)
-            painter.setRenderHint(QPainter.SmoothPixmapTransform)
-            center = card_rect.center()
-            painter.translate(center)
-            painter.scale(scale, scale)
-            painter.translate(-center)
-            painter.drawPixmap(card_rect.topLeft(), card_image)
-            painter.restore()
-
+from app_ext.class_ProjectHoverCanvas import ProjectHoverCanvas as _ProjectHoverEffect
 
 class _ProjectDeleteIndicator(QWidget):
 
@@ -886,6 +791,7 @@ class AppUI(AppFeatures, QWidget):
     official_authorization_finished = Signal(bool)
     startup_cache_ready = Signal(object)
     startup_built = Signal()
+    startup_animation_started = Signal()
     startup_revealed = Signal()
     wsl_disk_usage_ready = Signal(object)
     windows_disk_usage_ready = Signal(object)
@@ -895,6 +801,8 @@ class AppUI(AppFeatures, QWidget):
         from core.error_reporting import install_error_reporter
         install_error_reporter()
         install_button_press_animations(QApplication.instance())
+        from core.skia_widgets import install_widget_gpu_rendering
+        install_widget_gpu_rendering(QApplication.instance())
         self._all_projects = []
         self._size_scanner = None
         self._size_scanners = set()
@@ -920,7 +828,21 @@ class AppUI(AppFeatures, QWidget):
         self._startup_fade = None
         self._startup_reveal_started = False
         self._startup_content_reveal = None
+        self._startup_transition = None
         self._startup_revealed_emitted = False
+        self._startup_ui_built = False
+        self._startup_builder = None
+        self._startup_build_timer = QTimer(self)
+        self._startup_build_timer.setSingleShot(True)
+        self._startup_build_timer.timeout.connect(self._advance_startup_build)
+        self._startup_rows = None
+        self._startup_rows_timer = QTimer(self)
+        self._startup_rows_timer.setSingleShot(True)
+        self._startup_rows_timer.timeout.connect(self._build_startup_project_rows)
+        self._startup_paint_widgets = None
+        self._startup_prepare_timer = QTimer(self)
+        self._startup_prepare_timer.setSingleShot(True)
+        self._startup_prepare_timer.timeout.connect(self._prepare_startup_paints)
         self._page_content_reveal = None
         self._footer_action_transition = None
         self._project_drive_usage_animation = None
@@ -928,6 +850,7 @@ class AppUI(AppFeatures, QWidget):
         self._project_layout_animation_ready = False
         self._disk_cards_transition = None
         self._windows_disk_scan_running = False
+        self._windows_disk_usage = None
         self._pending_windows_disk_usage = None
         self._unavailable_project_drives = set()
         self._normal_drive_colors = {}
@@ -944,6 +867,7 @@ class AppUI(AppFeatures, QWidget):
         self.wsl_disk_usage_ready.connect(self._on_wsl_disk_usage_ready)
         if not offscreen_mode:
             self._refresh_wsl_disks()
+            self._refresh_windows_disks()
             self._disk_poll_timer.start()
         if startup_splash and not offscreen_mode:
             self.startup_cache_ready.connect(self._on_startup_cache_ready)
@@ -990,55 +914,141 @@ class AppUI(AppFeatures, QWidget):
     def _finish_startup_build(self):
         if not self.isVisible():
             return
+        if self._startup_builder is not None:
+            return
+        self._startup_builder = self._build_ui_steps()
+        self._advance_startup_build()
+
+    @Slot()
+    def _advance_startup_build(self):
+        if self._startup_builder is None:
+            return
+        if not self.isVisible():
+            self._startup_build_timer.start(100)
+            return
+        started = time.perf_counter()
         try:
-            self._build_ui()
+            while time.perf_counter() - started < .006:
+                next(self._startup_builder)
+        except StopIteration:
+            self._startup_builder = None
+            self._startup_splash.raise_()
+            self._startup_ui_built = True
+            self._emit_startup_built_if_ready()
+            return
         except Exception:
+            self._startup_builder = None
             if self._startup_splash is not None:
                 self._startup_splash.hide()
             _global_excepthook(*sys.exc_info())
             QApplication.quit()
             return
         self._startup_splash.raise_()
-        self.startup_built.emit()
+        self._startup_build_timer.start(1)
+
+    def _emit_startup_built_if_ready(self):
+        if self._startup_ui_built and self._startup_rows is None:
+            self._startup_ui_built = False
+            self.startup_built.emit()
+
+    @Slot()
+    def _build_startup_project_rows(self):
+        if self._startup_rows is None:
+            return
+        if not self.isVisible():
+            self._startup_rows_timer.start(100)
+            return
+        started = time.perf_counter()
+        try:
+            while self._startup_rows:
+                order, project = self._startup_rows.popleft()
+                self._add_project_row(project, order)
+                if time.perf_counter() - started >= .006:
+                    self._startup_rows_timer.start(1)
+                    return
+            self._startup_rows = None
+            self._filter_projects(self.search_input.text())
+            self._update_trash_hint()
+            self._emit_startup_built_if_ready()
+        except Exception:
+            self._startup_rows = None
+            _global_excepthook(*sys.exc_info())
+            QApplication.quit()
 
     def reveal_startup(self):
 
         splash = self._startup_splash
-        if splash is None or self._startup_reveal_started:
+        if (splash is None or self._startup_reveal_started or self._startup_rows is not None
+                or self._startup_builder is not None):
             return
         self._startup_reveal_started = True
         splash.raise_()
-        # Flush the finished content behind the opaque splash before fading it.
+        # Finish pending layout work before capturing; the animation clock
+        # starts only after the native Qt pixels and Skia assets are ready.
         QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+        for name in ("_settings_warm_timer", "_create_popup_warm_timer"):
+            timer = getattr(self, name, None)
+            if timer is not None:
+                timer.stop()
+        from collections import deque
+        widgets = []
+        for widget in self.findChildren(QWidget):
+            if (widget.isVisible() and isinstance(widget, (QLabel, QAbstractButton, QLineEdit, QProgressBar))
+                    and self.rect().intersects(QRect(widget.mapTo(self, QPoint()), widget.size()))):
+                widgets.append(widget)
+        self._startup_paint_widgets = deque(widgets)
+        self._startup_prepare_timer.start(1)
 
+    @Slot()
+    def _prepare_startup_paints(self):
+        if self._startup_paint_widgets is None or getattr(self, "_closing", False):
+            return
+        if not self.isVisible():
+            self._startup_prepare_timer.start(100)
+            return
+        started = time.perf_counter()
+        while self._startup_paint_widgets:
+            widget = self._startup_paint_widgets.popleft()
+            if isValid(widget):
+                # Warm the real leaf's native Qt glyphs and cached Skia surface
+                # in separate GUI turns, before the full-page capture/fade.
+                widget.grab()
+            if time.perf_counter() - started >= .006:
+                self._startup_prepare_timer.start(1)
+                return
+        self._startup_paint_widgets = None
+        self._start_prepared_startup_scene()
 
+    def _start_prepared_startup_scene(self):
+        splash = self._startup_splash
+        if splash is None or getattr(self, "_closing", False):
+            return
+        page = None
+        project_list = None
+        excluded = ()
+        entries = ()
         if getattr(self, "_login_overlay", None) is None:
-            page = self.stack.currentWidget()
-            if page in (self.page_projects, self.page_create):
-                project_list = self.list_widget if page is self.page_projects else None
-                intro = StartupContentReveal(
-                    page, project_list, excluded_widgets=(self._page_footers[page],)
-                )
-                self._startup_content_reveal = intro
-                intro.finished.connect(self._on_startup_content_reveal_finished)
-                intro.start()
-                if project_list is not None:
-                    self._start_project_drive_usage_reveal(
-                        delay_ms=round(intro._FIRST_DELAY * 1000), force=True,
-                    )
-                splash.raise_()
+            current = self.stack.currentWidget()
+            if current in (self.page_projects, self.page_create):
+                page = current
+                excluded = (self._page_footers[page],)
+                if page is self.page_projects:
+                    project_list = self.list_widget
+                    entries = self._project_drive_cards.values()
+        scene = StartupTransition(self, splash, page, project_list, excluded, entries)
+        self._startup_transition = self._startup_content_reveal = scene
+        scene.finished.connect(self._on_startup_scene_finished)
+        scene.start()
+        self.startup_animation_started.emit()
 
-        splash.opacity_effect = QGraphicsOpacityEffect(splash)
-        splash.opacity_effect.setOpacity(1.0)
-        splash.setGraphicsEffect(splash.opacity_effect)
-        fade = QPropertyAnimation(splash.opacity_effect, b"opacity", splash)
-        fade.setDuration(260)
-        fade.setStartValue(1.0)
-        fade.setEndValue(0.0)
-        fade.setEasingCurve(QEasingCurve.OutCubic)
-        fade.finished.connect(self._complete_startup_reveal)
-        self._startup_fade = fade
-        fade.start()
+    def _on_startup_scene_finished(self):
+        self._startup_transition = self._startup_content_reveal = None
+        self._complete_startup_reveal()
+        # Resume optional hidden-page preparation after the visible animation.
+        if not getattr(self, "_closing", False) and self.isVisible():
+            self._settings_warm_timer.start(100)
+            if self._create_project_dialog is None:
+                self._create_popup_warm_timer.start(150)
 
     def _complete_startup_reveal(self):
         splash = self._startup_splash
@@ -1057,7 +1067,7 @@ class AppUI(AppFeatures, QWidget):
 
     def _emit_startup_revealed_if_ready(self):
         if (self._startup_splash is None and self._startup_content_reveal is None
-                and not self._startup_revealed_emitted):
+                and not self._startup_revealed_emitted and not getattr(self, "_closing", False)):
             self._startup_revealed_emitted = True
             self.startup_revealed.emit()
 
@@ -1067,7 +1077,8 @@ class AppUI(AppFeatures, QWidget):
         if splash is not None and splash.isVisible():
             splash.raise_()
             splash._update_glint()
-            QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
+            if self._startup_builder is None:
+                QApplication.processEvents(QEventLoop.ExcludeUserInputEvents)
 
     def _clear_page_content_reveal(self):
         filtering_projects = any((self._project_cards_transition,
@@ -1090,65 +1101,71 @@ class AppUI(AppFeatures, QWidget):
             self._filter_projects(self.search_input.text())
 
 
-    def _on_page_changed(self, index):
+    def _stop_profile_card_transition(self):
+        # Settings scrolling and account refresh can end the profile model
+        # before the page bands. Release its owning canvas first.
+        scene = getattr(self, "_page_content_reveal", None)
+        profile = getattr(self, "_profile_card_transition", None)
+        if isinstance(scene, AppPageTransition) and scene._profile is profile and profile is not None:
+            scene.stop()
+        if profile is not None and not isValid(profile):
+            self._profile_card_transition = None
+        else:
+            super()._stop_profile_card_transition()
 
+    def _on_page_changed(self, index):
         previous_page = self._last_page
         page = self.stack.widget(index)
         self._last_page = page
-        self._refresh_theme_page(page)
         self._clear_page_content_reveal()
+        self._refresh_theme_page(page)
         if page is self.page_projects and not self._offscreen_mode:
             self._refresh_wsl_disks()
         from main_ext.class_ThemeUi import theme
-
         if (index < 0 or not self.isVisible() or not theme.animations_enabled
                 or self._startup_splash is not None
                 or self._startup_content_reveal is not None
                 or getattr(self, "_login_overlay", None) is not None):
             return
 
+        self._project_hover_effect.reset()
         excluded = [self._page_footers[page]]
         excluded.extend(self._prepare_account_page_transition(previous_page, page))
-        project_list = self.list_widget if page is self.page_projects else None
-        reveal = StartupContentReveal(
-            page, project_list, excluded_widgets=excluded,
-            bottom_up=page is self.page_settings,
-        )
-        # Keep navigation responsive even when another page is still revealing.
-        reveal.setAttribute(Qt.WA_TransparentForMouseEvents)
-        self._page_content_reveal = reveal
-
-        def _on_finished():
-            if self._page_content_reveal is reveal:
-                self._page_content_reveal = None
-
-        reveal.finished.connect(_on_finished)
-        reveal.start()
-
+        profile = getattr(self, "_profile_card_transition", None)
+        footer = None
         if previous_page in self._page_footer_buttons:
-            transition = FooterActionTransition(
+            footer = FooterActionTransition(
                 self.stack, self._page_footer_buttons[previous_page],
                 self._page_footer_buttons[page],
             )
-            self._footer_action_transition = transition
-
-            def _on_footer_finished():
-                if self._footer_action_transition is transition:
+            self._footer_action_transition = footer
+            def finish_footer():
+                if self._footer_action_transition is footer:
                     self._footer_action_transition = None
+            footer.finished.connect(finish_footer)
 
-            transition.finished.connect(_on_footer_finished)
-            transition.start()
-
-        self._start_account_page_transition()
-
-        # QProgressBar can repaint synchronously. Cover the destination footer
-        # and hide its real profile before resetting the disk counters to zero.
-        if project_list is not None:
-            self._start_project_drive_usage_reveal(
-                delay_ms=round(reveal._FIRST_DELAY * 1000),
-            )
+        transition = AppPageTransition(
+            page, self.list_widget if page is self.page_projects else None,
+            footer=footer, profile=profile, excluded_widgets=excluded,
+            bottom_up=page is self.page_settings,
+        )
+        self._page_content_reveal = transition
+        def finish():
+            if self._page_content_reveal is transition:
+                self._page_content_reveal = None
+        transition.finished.connect(finish)
+        transition.start()
 
     def closeEvent(self, event):
+        self._closing = True
+        self._startup_build_timer.stop()
+        self._startup_builder = None
+        self._startup_prepare_timer.stop()
+        self._startup_paint_widgets = None
+        self._startup_rows_timer.stop()
+        self._startup_rows = None
+        if self._startup_transition is not None:
+            self._startup_transition.stop()
         self._wsl_disk_closed = True
         self._trash_timer.stop()
         # File operations finish before their QThread objects are destroyed.
@@ -1189,8 +1206,19 @@ class AppUI(AppFeatures, QWidget):
         super().closeEvent(event)
 
     def _build_ui(self):
+        # Rebuilds and offscreen fixtures remain synchronous. Startup advances
+        # the same steps with a small GUI budget behind the opaque splash.
+        for _ in self._build_ui_steps():
+            pass
+
+    def _build_ui_steps(self):
         self._wsl_disk_ui_ready = False
+        settings_warm_timer = getattr(self, "_settings_warm_timer", None)
+        if settings_warm_timer is not None:
+            settings_warm_timer.stop()
+            settings_warm_timer.deleteLater()
         warm_timer = getattr(self, "_create_popup_warm_timer", None)
+        yield
         if warm_timer is not None:
             warm_timer.stop()
             warm_timer.deleteLater()
@@ -1199,10 +1227,11 @@ class AppUI(AppFeatures, QWidget):
 
         # Load saved theme BEFORE building UI so all colors are correct
         from main_ext.class_ThemeUi import theme as _th
+        yield
         _th.load()
         # Keep the inherited font rules constant. Palette rules live on each
         # page, so recoloring Settings does not repolish every project row.
-        self.setStyleSheet("QWidget { font-family: 'Poppins', 'Inter', 'Segoe UI', sans-serif; font-size: 13px; }")
+        self.setStyleSheet("QWidget { font-family: 'Poppins'; font-size: 13px; }")
 
 
         if not getattr(self, "_offscreen_mode", False):
@@ -1213,6 +1242,7 @@ class AppUI(AppFeatures, QWidget):
                 _ul.on_change(self._on_lang_changed)
                 self._lang_listener_registered = True
         self._init_update_features()
+        yield
 
         bind_language(self, "setWindowTitle", window_title)
         self.setWindowIcon(QIcon(icon("ic_launcher")))
@@ -1221,57 +1251,57 @@ class AppUI(AppFeatures, QWidget):
 
         # STACKED (TAB 1 & TAB 2)
         self.stack = QStackedWidget()
+        yield
         self._page_footers = {}
         main_layout.addWidget(self.stack)
 
         # TAB 1 : PROJECT LIST
-        self.page_projects = QWidget()
+        self.page_projects = QWidget(self.stack)
         bind_style(self.page_projects, lambda: _th.app_stylesheet())
+        self.stack.addWidget(self.page_projects)
+        yield
         self.page_projects_layout = QVBoxLayout(self.page_projects)
 
 
-        header_proj = QWidget()
+        header_proj = QWidget(self.page_projects)
         header_proj_layout = QHBoxLayout(header_proj)
         header_proj_layout.setContentsMargins(12, 8, 12, 8)
+        yield
         header_proj_layout.setSpacing(8)
         self._project_header = header_proj
         self._project_header_layout = header_proj_layout
 
         header_proj_title = bind_text(QLabel(), lambda: t("hdr_my_projects"))
+        yield
         header_proj_title.setStyleSheet("font-size: 22px; font-weight: 600;")
         header_proj_title.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         header_proj_layout.addWidget(header_proj_title)
         self._project_header_title = header_proj_title
+        yield
 
-        self._project_drive_container = QWidget()
+        self._project_drive_container = QWidget(header_proj)
         self._project_drive_container.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Minimum)
         drives_layout = QBoxLayout(QBoxLayout.LeftToRight, self._project_drive_container)
         drives_layout.setSpacing(8)
+        yield
         drives_layout.setContentsMargins(6, 0, 0, 0)
         self._project_drives_layout = drives_layout
         self._project_drives_in_sidebar = None
         self._project_layout_animation_ready = False
+        yield
         self._project_drive_card_width = 128
         self._project_drive_card_height = 44
         # Reserve the same header height whether disks are here or in the sidebar.
         header_proj.setFixedHeight(self._project_drive_card_height + 16)
         self._project_drive_cards = {}
+        yield
         self._add_project_trash_card()
 
-        import string
-        for d in string.ascii_uppercase:
-            drive_path = f"{d}:\\"
-            try:
-                if os.path.exists(drive_path):
-                    usage = shutil.disk_usage(drive_path)
-                    if usage.total > 0:
-                        self._add_project_drive_card(f"{d}:", usage.total, usage.used)
-            except OSError:
-                continue
-        self._unavailable_project_drives = {
-            f"{letter}:".casefold() for letter in string.ascii_uppercase
-            if f"{letter}:" not in self._project_drive_cards
-        }
+        # Disk enumeration/usage runs in the existing worker. A slow or
+        # disconnected volume must not stop the splash's GUI clock.
+        for usage in self._windows_disk_usage or ():
+            self._add_project_drive_card(usage["key"], usage["total"], usage["used"])
+        yield
         for usage in self._wsl_disk_usage:
             self._add_project_drive_card(usage["key"], usage["total"], usage["used"],
                                          distro=usage["distro"], usage_percent=usage["percent"])
@@ -1279,11 +1309,13 @@ class AppUI(AppFeatures, QWidget):
         header_proj_layout.addWidget(self._project_drive_container)
         header_proj_layout.addStretch()
 
-        self.search_input = QLineEdit()
+        self.search_input = QLineEdit(header_proj)
+        yield
         bind_language(self.search_input, "setPlaceholderText", lambda: t("placeholder_search"))
         self.search_input.setFixedHeight(34)
         self.search_input.setMinimumWidth(115)
         self.search_input.setMaximumWidth(174)
+        yield
         self.search_input.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._search_action = self.search_input.addAction(
             QIcon(icon_pixmap("project_search")), QLineEdit.LeadingPosition
@@ -1304,26 +1336,32 @@ class AppUI(AppFeatures, QWidget):
                 background: {_th.BG_INPUT};
             }}
         """)
+        yield
         self.search_input.setFocusPolicy(Qt.ClickFocus)
         self.search_input.textChanged.connect(self._filter_projects)
         header_proj_layout.addWidget(self.search_input, 0, Qt.AlignVCenter)
 
         self.page_projects_layout.addWidget(header_proj)
+        yield
 
 
         # List
-        self.list_widget = SmoothListWidget()
+        self.list_widget = SmoothListWidget(self.page_projects)
         self.list_widget.setItemDelegate(_ProjectCardDelegate(self.list_widget))
         self._project_hover_effect = _ProjectHoverEffect(self.list_widget, _th.BG)
-        self.list_widget.viewport().setGraphicsEffect(self._project_hover_effect)
+        self.list_widget.scrollingChanged.connect(self._project_hover_effect.set_scrolling)
+        yield
+        self.list_widget.set_viewport_background(_th.BG)
         # An empty-state overlay does not change the header/sidebar geometry.
         self._trash_hint = bind_text(QLabel(self.list_widget.viewport()), self._trash_hint_text)
         self._trash_hint.setWordWrap(True)
         self._trash_hint.setAlignment(Qt.AlignCenter)
+        yield
         self._trash_hint.setContentsMargins(16, 0, 16, 0)
         self._trash_hint.setAttribute(Qt.WA_TransparentForMouseEvents)
         bind_style(self._trash_hint, lambda: f"font-size: 11px; color: {_th.FG3}; background: transparent;")
         self._trash_hint.hide()
+        yield
         self.list_widget.viewport().installEventFilter(self)
         self.list_widget.setFocusPolicy(Qt.NoFocus)
         bind_style(self.list_widget, lambda: f"""
@@ -1407,28 +1445,34 @@ class AppUI(AppFeatures, QWidget):
         """)
 
         self.list_widget.itemClicked.connect(self.open_project)
-        self._projects_body = QWidget()
+        yield
+        self._projects_body = QWidget(self.page_projects)
         self._projects_body_layout = QHBoxLayout(self._projects_body)
         self._projects_body_layout.setContentsMargins(0, 0, 0, 0)
         self._projects_body_layout.setSpacing(0)
+        yield
         self._project_drive_sidebar = SmoothScrollArea()
         self._project_drive_sidebar.setFrameShape(QScrollArea.NoFrame)
         self._project_drive_sidebar.setWidgetResizable(True)
         self._project_drive_sidebar.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        yield
         self._project_drive_sidebar.setFixedWidth(self._project_drive_card_width + 4)
         self._project_drive_sidebar.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         self._project_drive_sidebar.setStyleSheet("QScrollArea { background: transparent; border: none; }")
         self._project_drive_sidebar.viewport().setStyleSheet("background: transparent;")
+        yield
         self._project_drive_sidebar.hide()
         self._projects_body_layout.addWidget(self._project_drive_sidebar)
         self._projects_body_layout.addWidget(self.list_widget, 1)
         self.page_projects_layout.addWidget(self._projects_body, 1)
+        yield
         self.list_widget.setContextMenuPolicy(Qt.NoContextMenu)
         self.list_widget.viewport().setContextMenuPolicy(Qt.NoContextMenu)
 
 
         bar = QHBoxLayout()
         bar.setContentsMargins(16, 8, 16, 12)
+        yield
         bar.setSpacing(12)
 
         # ⬅️ PROFILE MINI (KIRI)
@@ -1437,40 +1481,47 @@ class AppUI(AppFeatures, QWidget):
         bar.addStretch()  # ⬅️ DORONG TOMBOL KE KANAN
 
         self.btn_settings = bind_text(QPushButton(), lambda: t("btn_settings"))
+        yield
         self.btn_settings.setLayoutDirection(Qt.LeftToRight)
         bind_icon(self.btn_settings, lambda: tint_icon("settings_octagon", _th.FG2, 15))
         self.btn_settings.setIconSize(QSize(15, 15))
         self.btn_settings.clicked.connect(
-            lambda: self.stack.setCurrentWidget(self.page_settings)
+            lambda: self._show_page(self.page_settings)
         )
+        yield
 
         self.btn_create = bind_text(QPushButton(), lambda: t("btn_create_project"))
         self.btn_create.setLayoutDirection(Qt.LeftToRight)
         bind_icon(self.btn_create, lambda: tint_icon("plus", _th.FG2, 15))
         self.btn_create.setIconSize(QSize(15, 15))
+        yield
         self.btn_create.clicked.connect(self._show_create_popup)
 
         bar.addWidget(self.btn_settings)
         bar.addWidget(self.btn_create)
 
         footer = QWidget()
+        yield
         footer.setLayout(bar)
         self._page_footers[self.page_projects] = footer
         self.page_projects_layout.addWidget(footer)
 
-        self.stack.addWidget(self.page_projects)
+        yield
         self._refresh_startup_frame()
 
         # TAB 2 : CREATE PROJECT
-        self.page_create = QWidget()
+        self.page_create = QWidget(self.stack)
         bind_style(self.page_create, lambda: _th.app_stylesheet())
+        self.stack.addWidget(self.page_create)
         self.page_create_layout = QVBoxLayout(self.page_create)
+        yield
 
         # header (identik project list)
-        header_create = QWidget()
+        header_create = QWidget(self.page_create)
         header_create_layout = QVBoxLayout(header_create)
         header_create_layout.setContentsMargins(16, 12, 16, 8)
         header_create_title = bind_text(QLabel(), lambda: t("hdr_new_project"))
+        yield
         header_create_title.setStyleSheet("font-size: 22px; font-weight: 600;")
         header_create_layout.addWidget(header_create_title)
         self.page_create_layout.addWidget(header_create)
@@ -1496,19 +1547,32 @@ class AppUI(AppFeatures, QWidget):
                 background: {_th.BG_DISABLED};
             }}
         """
+        yield
         _label_ss = lambda: f"font-size:11px; font-weight:600; color:{_th.FG_MUTED}; background:transparent; border:none;"
 
         # content column (same margins as project list: 16px sides)
         outer_h = QHBoxLayout()
         outer_h.setContentsMargins(0, 0, 0, 0)
+        outer_wrap = QWidget()
+        outer_wrap.setStyleSheet("background: transparent;")
+        outer_wrap.setLayout(outer_h)
+        scroll = SmoothScrollArea(self.page_create)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidget(outer_wrap)
+        self._scroll_create = scroll
+        self.page_create_layout.addWidget(scroll, 1)
+        yield
 
-        center_col = QWidget()
+        center_col = QWidget(outer_wrap)
+        yield
         center_v = QVBoxLayout(center_col)
         center_v.setContentsMargins(16, 8, 16, 16)
         center_v.setSpacing(12)
 
         # card: project info
-        card_info = QWidget()
+        card_info = QWidget(center_col)
+        yield
         card_info.setObjectName("card_info")
         bind_style(card_info, lambda: f"""
             QWidget#card_info {{
@@ -1519,33 +1583,39 @@ class AppUI(AppFeatures, QWidget):
         """)
         card_info_lay = QVBoxLayout(card_info)
         card_info_lay.setContentsMargins(18, 16, 18, 18)
+        yield
         card_info_lay.setSpacing(14)
 
         # project name
         lbl_name = bind_text(QLabel(), lambda: t("lbl_project_name"))
         bind_style(lbl_name, _label_ss)
         self.input_name = QLineEdit()
+        yield
         bind_language(self.input_name, "setPlaceholderText", lambda: t("placeholder_project_name"))
         self.input_name.setFixedHeight(38)
         bind_style(self.input_name, _input_ss)
 
         card_info_lay.addWidget(lbl_name)
+        yield
         card_info_lay.addWidget(self.input_name)
 
         # divider
         div1 = QWidget(); div1.setFixedHeight(1)
         bind_style(div1, lambda: f"background:{_th.border_color(0.07)}; border:none;")
+        yield
         card_info_lay.addWidget(div1)
 
         # porting mode — custom pill selector
         lbl_mode = bind_text(QLabel(), lambda: t("lbl_porting_mode"))
         bind_style(lbl_mode, _label_ss)
         card_info_lay.addWidget(lbl_mode)
+        yield
 
         mode_container = QWidget()
         mode_container.setStyleSheet("background:transparent; border:none;")
         mode_h = QHBoxLayout(mode_container)
         mode_h.setContentsMargins(0, 0, 0, 0)
+        yield
         mode_h.setSpacing(8)
 
         _mode_active = lambda: f"""
@@ -1574,17 +1644,20 @@ class AppUI(AppFeatures, QWidget):
         """
 
         self.radio_1 = QRadioButton()  # keep for logic compat
+        yield
         self.radio_2 = QRadioButton()
         self.radio_1.setChecked(True)
         self.radio_1.hide(); self.radio_2.hide()
+        yield
         self._port_mode = 1  # 1 = single, 2 = dual
 
-        btn_single = bind_text(QPushButton(), lambda: t("btn_single_rom"))
-        btn_dual   = bind_text(QPushButton(), lambda: t("btn_dual_rom"))
+        btn_single = bind_rom_mode_button(QPushButton(), 1, lambda: self._port_mode == 1)
+        btn_dual = bind_rom_mode_button(QPushButton(), 2, lambda: self._port_mode == 2)
         for b in (btn_single, btn_dual):
             b.setCursor(Qt.PointingHandCursor)
             b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             b.setFixedHeight(40)
+        yield
 
         bind_style(btn_single, _mode_active)
         bind_style(btn_dual, _mode_inactive)
@@ -1604,12 +1677,14 @@ class AppUI(AppFeatures, QWidget):
             bind_style(btn_dual, _mode_active)
             self._apply_port_mode()
             self.update_create_state()
+        yield
 
         btn_single.clicked.connect(_pick_single)
         btn_dual.clicked.connect(_pick_dual)
 
         mode_h.addWidget(btn_single)
         mode_h.addWidget(btn_dual)
+        yield
         card_info_lay.addWidget(mode_container)
 
         center_v.addWidget(card_info)
@@ -1617,6 +1692,7 @@ class AppUI(AppFeatures, QWidget):
 
         # card: port names
         self._card_ports = QWidget()
+        yield
         self._card_ports.setObjectName("card_ports")
         bind_style(self._card_ports, lambda: f"""
             QWidget#card_ports {{
@@ -1628,59 +1704,70 @@ class AppUI(AppFeatures, QWidget):
 
         card_ports_lay = QVBoxLayout(self._card_ports)
         card_ports_lay.setContentsMargins(18, 16, 18, 18)
+        yield
         card_ports_lay.setSpacing(14)
 
         # card header
         lbl_ports_header = bind_text(QLabel(), lambda: t("lbl_folder_names"))
         bind_style(lbl_ports_header, _label_ss)
         lbl_ports_hint = bind_text(QLabel(), lambda: t("hint_folder_names"))
+        yield
         bind_style(lbl_ports_hint, lambda: f"font-size:11px; color:{_th.FG_MUTED}; background:transparent; border:none;")
         card_ports_lay.addWidget(lbl_ports_header)
         card_ports_lay.addWidget(lbl_ports_hint)
         card_ports_lay.addSpacing(2)
+        yield
 
         div_header = QWidget(); div_header.setFixedHeight(1)
         bind_style(div_header, lambda: f"background:{_th.border_color(0.07)}; border:none;")
         card_ports_lay.addWidget(div_header)
+        yield
         card_ports_lay.addSpacing(2)
 
         self.port1_label = bind_text(QLabel(), lambda: t("lbl_ft1_folder"))
         bind_style(self.port1_label, _label_ss)
         self.input_port1 = QLineEdit()
+        yield
         bind_language(self.input_port1, "setPlaceholderText", lambda: t("placeholder_ft1"))
         self.input_port1.setFixedHeight(38)
         bind_style(self.input_port1, _input_ss)
 
         card_ports_lay.addWidget(self.port1_label)
+        yield
         card_ports_lay.addWidget(self.input_port1)
 
         div2 = QWidget(); div2.setFixedHeight(1)
         bind_style(div2, lambda: f"background:{_th.border_color(0.07)}; border:none;")
+        yield
 
         self.port2_label = bind_text(QLabel(), lambda: t("lbl_ft2_folder"))
         bind_style(self.port2_label, _label_ss)
         self.input_port2 = QLineEdit()
         bind_language(self.input_port2, "setPlaceholderText", lambda: t("placeholder_ft2"))
+        yield
         self.input_port2.setFixedHeight(38)
         bind_style(self.input_port2, _input_ss)
 
         self._div2_ports = div2
         self._lbl_port2  = self.port2_label
+        yield
         self._inp_port2  = self.input_port2
 
         card_ports_lay.addWidget(div2)
         card_ports_lay.addWidget(self.port2_label)
         card_ports_lay.addWidget(self.input_port2)
+        yield
 
         # hide port2 row by default (single mode)
         div2.hide(); self.port2_label.hide(); self.input_port2.hide()
 
 
         center_v.addWidget(self._card_ports)
+        yield
         center_v.addSpacing(12)
 
         # card: directory
-        card_dir = QWidget()
+        card_dir = QWidget(center_col)
         card_dir.setObjectName("card_dir")
         bind_style(card_dir, lambda: f"""
             QWidget#card_dir {{
@@ -1689,26 +1776,31 @@ class AppUI(AppFeatures, QWidget):
                 border-radius: 12px;
             }}
         """)
+        yield
         card_dir_lay = QVBoxLayout(card_dir)
         card_dir_lay.setContentsMargins(18, 16, 18, 18)
         card_dir_lay.setSpacing(10)
 
         lbl_dir = bind_text(QLabel(), lambda: t("lbl_output_dir"))
+        yield
         bind_style(lbl_dir, _label_ss)
         card_dir_lay.addWidget(lbl_dir)
 
         dir_row = QHBoxLayout()
         dir_row.setSpacing(8)
+        yield
         dir_row.setContentsMargins(0, 0, 0, 0)
 
         self.path_label = QLabel(_resolve_default_location())
         bind_style(self.path_label, lambda: f"color:{_th.FG_MUTED}; font-size:12px; background:transparent; border:none;")
         self.path_label.setWordWrap(False)
+        yield
         self.path_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.btn_path = bind_text(QPushButton(), lambda: t("btn_browse"))
         self.btn_path.setFixedHeight(32)
         self.btn_path.setCursor(Qt.PointingHandCursor)
+        yield
         bind_style(self.btn_path, lambda: f"""
             QPushButton {{
                 background: {_th.border_color(0.05)};
@@ -1725,34 +1817,28 @@ class AppUI(AppFeatures, QWidget):
 
         dir_row.addWidget(self.path_label, 1)
         dir_row.addWidget(self.btn_path)
+        yield
         card_dir_lay.addLayout(dir_row)
 
         center_v.addWidget(card_dir)
         center_v.addStretch()
 
         outer_h.addWidget(center_col)
+        yield
 
-        outer_wrap = QWidget()
-        outer_wrap.setStyleSheet("background: transparent;")
-        outer_wrap.setLayout(outer_h)
-
-        scroll = SmoothScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setWidget(outer_wrap)
-        self._scroll_create = scroll
-        self.page_create_layout.addWidget(scroll, 1)
 
         # connect validation
         self.input_name.textChanged.connect(self.update_create_state)
         self.input_port1.textChanged.connect(self.update_create_state)
         self.input_port2.textChanged.connect(self.update_create_state)
+        yield
         self._apply_port_mode()
 
         # bottom bar
         bar2 = QHBoxLayout()
         bar2.setContentsMargins(16, 8, 16, 12)
         bar2.setSpacing(12)
+        yield
 
         self._add_account_footer(bar2)
 
@@ -1760,6 +1846,7 @@ class AppUI(AppFeatures, QWidget):
 
         self.btn_back_create = bind_text(QPushButton(), lambda: t("btn_back"))
         self.btn_back_create.setLayoutDirection(Qt.LeftToRight)
+        yield
         bind_icon(self.btn_back_create, lambda: tint_icon("arrow_right", _th.FG2, 15))
         self.btn_back_create.setIconSize(QSize(15, 15))
         self.btn_back_create.clicked.connect(
@@ -1767,12 +1854,14 @@ class AppUI(AppFeatures, QWidget):
         )
 
         self.btn_settings_create = bind_text(QPushButton(), lambda: t("btn_settings"))
+        yield
         self.btn_settings_create.setLayoutDirection(Qt.LeftToRight)
         bind_icon(self.btn_settings_create, lambda: tint_icon("settings_octagon", _th.FG2, 15))
         self.btn_settings_create.setIconSize(QSize(15, 15))
         self.btn_settings_create.clicked.connect(
-            lambda: self.stack.setCurrentWidget(self.page_settings)
+            lambda: self._show_page(self.page_settings)
         )
+        yield
 
         self.btn_create2 = bind_text(QPushButton(), lambda: t("btn_confirm_project"))
         self.btn_create2.setLayoutDirection(Qt.LeftToRight)
@@ -1781,33 +1870,39 @@ class AppUI(AppFeatures, QWidget):
             disabled_color=with_alpha(_th.accent_hex, 0.30),
         ))
         self.btn_create2.setIconSize(QSize(15, 15))
+        yield
         self.btn_create2.clicked.connect(self.create_project)
         self.btn_create2.setProperty("role", "primary")
         self.btn_create2.setEnabled(False)
 
         bar2.addWidget(self.btn_back_create)
+        yield
         bar2.addWidget(self.btn_settings_create)
         bar2.addWidget(self.btn_create2)
 
         footer = QWidget()
         footer.setLayout(bar2)
+        yield
         self._page_footers[self.page_create] = footer
         self.page_create_layout.addWidget(footer)
         self.update_create_state()
-        self.stack.addWidget(self.page_create)
+        yield
         self._refresh_startup_frame()
 
 
-        self.page_settings = QWidget()
+        self.page_settings = QWidget(self.stack)
         bind_style(self.page_settings, lambda: _th.app_stylesheet())
+        self.stack.addWidget(self.page_settings)
         self.page_settings_layout = QVBoxLayout(self.page_settings)
+        yield
 
 
-        header_set = QWidget()
+        header_set = QWidget(self.page_settings)
         header_set_layout = QVBoxLayout(header_set)
         header_set_layout.setContentsMargins(16, 12, 16, 8)
 
         header_set_title = bind_text(QLabel(), lambda: t("hdr_settings"))
+        yield
         header_set_title.setStyleSheet("""
             font-size: 22px;
             font-weight: 600;
@@ -1818,14 +1913,24 @@ class AppUI(AppFeatures, QWidget):
 
 
         content = QWidget()
+        scroll = SmoothScrollArea(self.page_settings)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+        self._scroll_settings = scroll
+        self.page_settings_layout.addWidget(scroll)
+        yield
         content_layout = QVBoxLayout(content)
         content_layout.setContentsMargins(16, 8, 16, 16)
         content_layout.setSpacing(12)
 
         self._build_profile_card(content_layout)
+        yield
 
 
-        app_card = QWidget()
+        app_card = QWidget(content)
         bind_style(app_card, lambda: f"""
         QWidget {{
             background-color: {_th.BG2};
@@ -1840,6 +1945,7 @@ class AppUI(AppFeatures, QWidget):
 
         app_outer = QVBoxLayout(app_card)
         app_outer.setContentsMargins(14, 12, 14, 14)
+        yield
         app_outer.setSpacing(8)
 
         # HEADER
@@ -1847,23 +1953,27 @@ class AppUI(AppFeatures, QWidget):
         header_row.setSpacing(8)
 
         icon_info = QLabel()
+        yield
         bind_pixmap(icon_info, lambda: QIcon(icon("info")).pixmap(20, 20))
         icon_info.setAlignment(Qt.AlignVCenter)
 
         app_header = bind_text(QLabel(), lambda: t("hdr_product_info"))
         bind_style(app_header, lambda: f"font-size:14px; font-weight:600; color:{_th.FG}; background:transparent; border:none;")
+        yield
 
         header_row.addWidget(icon_info)
         header_row.addWidget(app_header)
         header_row.addStretch()
 
         app_outer.addLayout(header_row)
+        yield
         app_outer.addSpacing(12)
 
         # FORM
         app_layout = QFormLayout()
         app_layout.setHorizontalSpacing(16)
         app_layout.setVerticalSpacing(8)
+        yield
 
         app_layout.addRow(bind_text(QLabel(), lambda: t("form_name")), QLabel(APP_NAME))
         app_layout.addRow(bind_text(QLabel(), lambda: t("form_version")), QLabel(APP_VERSION))
@@ -1874,12 +1984,13 @@ class AppUI(AppFeatures, QWidget):
         )
 
         app_outer.addLayout(app_layout)
+        yield
 
         content_layout.addWidget(app_card)
         content_layout.addSpacing(8)   # 👈 JARAK ANTAR CARD
 
         def build_card_base():
-            card = QWidget()
+            card = QWidget(content)
             bind_style(card, lambda: f"""
             QWidget {{
                 background-color: {_th.BG2};
@@ -1920,6 +2031,7 @@ class AppUI(AppFeatures, QWidget):
                 row.addWidget(right_widget)
 
             return row
+        yield
 
 
         dep_card, dep_outer = build_card_base()
@@ -1927,6 +2039,7 @@ class AppUI(AppFeatures, QWidget):
         btn_dep = bind_text(QPushButton(), lambda: t("btn_manage"))
         btn_dep.setFixedHeight(28)
         btn_dep.setCursor(Qt.PointingHandCursor)
+        yield
         bind_style(btn_dep, lambda: f"""
             QPushButton {{
                 background: {_th.border_color(0.05)};
@@ -1950,6 +2063,7 @@ class AppUI(AppFeatures, QWidget):
         )
 
         content_layout.addWidget(dep_card)
+        yield
         content_layout.addSpacing(8)
 
 
@@ -1957,6 +2071,7 @@ class AppUI(AppFeatures, QWidget):
 
         loc_outer.addLayout(build_card_header("default_location", lambda: t("hdr_default_location")))
         loc_outer.addSpacing(4)
+        yield
 
 
         loc_path_label = bind_text(QLabel(), lambda: _load_default_location() or t("lbl_docs_system_default"))
@@ -1964,6 +2079,7 @@ class AppUI(AppFeatures, QWidget):
         loc_path_label.setWordWrap(True)
 
         btn_loc = bind_text(QPushButton(), lambda: t("btn_change"))
+        yield
         btn_loc.setFixedHeight(28)
         btn_loc.setCursor(Qt.PointingHandCursor)
         bind_style(btn_loc, lambda: f"""
@@ -1980,6 +2096,7 @@ class AppUI(AppFeatures, QWidget):
         """)
 
         btn_loc_reset = bind_text(QPushButton(), lambda: t("btn_reset"))
+        yield
         btn_loc_reset.setFixedHeight(28)
         btn_loc_reset.setCursor(Qt.PointingHandCursor)
         bind_style(btn_loc_reset, lambda: f"""
@@ -2003,6 +2120,7 @@ class AppUI(AppFeatures, QWidget):
             loc_path_label.setText(chosen)
             # sync ke path_label di create page supaya langsung reflected
             self.path_label.setText(chosen)
+        yield
 
         def _reset_default_location():
             _save_default_location("")
@@ -2013,16 +2131,19 @@ class AppUI(AppFeatures, QWidget):
         btn_loc_reset.clicked.connect(_reset_default_location)
 
         loc_btn_row = QHBoxLayout()
+        yield
         loc_btn_row.setSpacing(6)
         loc_btn_row.addWidget(loc_path_label, 1)
         loc_btn_row.addWidget(btn_loc_reset)
         loc_btn_row.addWidget(btn_loc)
+        yield
 
         loc_outer.addLayout(loc_btn_row)
 
         content_layout.addWidget(loc_card)
         content_layout.addSpacing(8)
         self._refresh_startup_frame()
+        yield
 
 
         from main_ext.class_ThemeUi import theme as _theme
@@ -2031,11 +2152,13 @@ class AppUI(AppFeatures, QWidget):
         theme_outer.addLayout(build_card_header("theme", lambda: t("hdr_appearance")))
 
         theme_row = QHBoxLayout()
+        yield
         theme_row.setSpacing(10)
 
         _active_label = QLabel(_theme.palettes()[_theme.name]["label"])
         self._theme_name_label = _active_label
         bind_style(_active_label, lambda: f"font-size:12px; color:{_th.FG_MUTED}; background:transparent; border:none;")
+        yield
 
         btn_theme = bind_text(QPushButton(), lambda: t("btn_change_theme"))
         btn_theme.setFixedHeight(28)
@@ -2056,6 +2179,7 @@ class AppUI(AppFeatures, QWidget):
             }}
             QPushButton:pressed {{ background: {_th.border_color(0.13)}; }}
         """)
+        yield
 
         def _open_theme_picker():
             from windows.theme_picker import ThemePickerDialog
@@ -2076,16 +2200,19 @@ class AppUI(AppFeatures, QWidget):
 
         theme_row.addWidget(_active_label)
         theme_row.addStretch()
+        yield
         theme_row.addWidget(btn_theme)
         theme_outer.addLayout(theme_row)
 
         # ── divider ──
         _theme_sep = QWidget()
         _theme_sep.setFixedHeight(1)
+        yield
         bind_style(_theme_sep, lambda: f"background: {_th.border_color(0.06)};")
         theme_outer.addSpacing(10)
         theme_outer.addWidget(_theme_sep)
         theme_outer.addSpacing(10)
+        yield
 
         # ── blur effect toggle ──
         from main_ext.class_WebToggle import WebToggle
@@ -2094,15 +2221,18 @@ class AppUI(AppFeatures, QWidget):
         blur_row.setSpacing(10)
 
         blur_text_col = QVBoxLayout()
+        yield
         blur_text_col.setSpacing(2)
 
         blur_title = bind_text(QLabel(), lambda: t("lbl_blur_effect"))
         bind_style(blur_title, lambda: f"font-size:12px; font-weight:600; color:{_th.FG}; background:transparent; border:none;")
         blur_desc = bind_text(QLabel(), lambda: t("txt_blur_effect_desc"))
+        yield
         blur_desc.setWordWrap(True)
         bind_style(blur_desc, lambda: f"font-size:11px; color:{_th.FG_DESC}; background:transparent; border:none;")
         blur_text_col.addWidget(blur_title)
         blur_text_col.addWidget(blur_desc)
+        yield
 
         blur_toggle = WebToggle(_theme.blur_enabled, neutral=True)
         blur_toggle.clicked.connect(
@@ -2111,28 +2241,33 @@ class AppUI(AppFeatures, QWidget):
 
         blur_row.addLayout(blur_text_col, 1)
         blur_row.addWidget(blur_toggle)
+        yield
         theme_outer.addLayout(blur_row)
 
         # ── divider ──
         _anim_sep = QWidget()
         _anim_sep.setFixedHeight(1)
         bind_style(_anim_sep, lambda: f"background: {_th.border_color(0.06)};")
+        yield
         theme_outer.addSpacing(10)
         theme_outer.addWidget(_anim_sep)
         theme_outer.addSpacing(10)
 
         # ── animations toggle ──
         anim_row = QHBoxLayout()
+        yield
         anim_row.setSpacing(10)
 
         anim_text_col = QVBoxLayout()
         anim_text_col.setSpacing(2)
 
         anim_title = bind_text(QLabel(), lambda: t("lbl_animations"))
+        yield
         bind_style(anim_title, lambda: f"font-size:12px; font-weight:600; color:{_th.FG}; background:transparent; border:none;")
         anim_desc = bind_text(QLabel(), lambda: t("txt_animations_desc"))
         anim_desc.setWordWrap(True)
         bind_style(anim_desc, lambda: f"font-size:11px; color:{_th.FG_DESC}; background:transparent; border:none;")
+        yield
         anim_text_col.addWidget(anim_title)
         anim_text_col.addWidget(anim_desc)
 
@@ -2150,76 +2285,52 @@ class AppUI(AppFeatures, QWidget):
                 pending = self._pending_project_removal
                 if pending is not None:
                     pending(animate=False)
+        yield
 
         anim_toggle.clicked.connect(_set_project_animations)
 
         anim_row.addLayout(anim_text_col, 1)
         anim_row.addWidget(anim_toggle)
         theme_outer.addLayout(anim_row)
+        yield
 
         _mode_sep = QWidget()
         _mode_sep.setFixedHeight(1)
         bind_style(_mode_sep, lambda: f"background: {_th.border_color(0.06)};")
         theme_outer.addSpacing(10)
+        yield
         theme_outer.addWidget(_mode_sep)
         theme_outer.addSpacing(10)
 
-        # Project mode uses the same dropdown style and popup as Language.
-        _dropdown_ss = lambda: f"""
-            QPushButton {{
-                background: {_th.border_color(0.05)};
-                border: 1px solid {_th.border_color(0.09)};
-                border-radius: 6px;
-                color: {_th.FG_BLUE_MUTED};
-                font-size: 12px;
-                padding: 0;
-                text-align: left;
-            }}
-            QPushButton:hover {{ background: {_th.border_color(0.09)}; border-color: {_th.border_color(0.15)}; color: {_th.FG}; }}
-            QPushButton:pressed {{ background: {_th.border_color(0.13)}; }}
-        """
-
         mode_row = QHBoxLayout()
         mode_row.setSpacing(10)
+        yield
         mode_text_col = QVBoxLayout()
         mode_text_col.setSpacing(2)
         mode_title = bind_text(QLabel(), lambda: t("lbl_project_mode"))
         bind_style(mode_title, lambda: f"font-size:12px; font-weight:600; color:{_th.FG}; background:transparent; border:none;")
+        yield
         mode_desc = bind_text(QLabel(), lambda: t("txt_tree_view_mode_desc"))
         mode_desc.setWordWrap(True)
         bind_style(mode_desc, lambda: f"font-size:11px; color:{_th.FG_DESC}; background:transparent; border:none;")
         mode_text_col.addWidget(mode_title)
+        yield
         mode_text_col.addWidget(mode_desc)
 
-        btn_project_mode = QPushButton()
+        btn_project_mode = ChoiceDropdown(minimum_width=100)
         btn_project_mode.setObjectName("projectModeDropdown")
-        btn_project_mode.setFixedHeight(28)
-        btn_project_mode.setCursor(Qt.PointingHandCursor)
-        bind_style(btn_project_mode, _dropdown_ss)
-        mode_btn_layout = QHBoxLayout(btn_project_mode)
-        mode_btn_layout.setContentsMargins(12, 0, 9, 0)
-        mode_btn_layout.setSpacing(5)
-        mode_value = bind_text(QLabel(), lambda: t("lbl_mode_single_dir") if _theme.tree_view_mode == "single_dir"
+        mode_value = bind_text(btn_project_mode.caption, lambda: t("lbl_mode_single_dir") if _theme.tree_view_mode == "single_dir"
                             else t("lbl_mode_tree"))
-        bind_style(mode_value, lambda: f"color:{_th.FG_BLUE_MUTED}; background:transparent; border:none; font-size:12px;")
-        mode_value.setAttribute(Qt.WA_TransparentForMouseEvents)
-        mode_arrow = QLabel()
-        bind_pixmap(mode_arrow, lambda: icon_pixmap("arrow_right").scaled(
-            9, 9, Qt.KeepAspectRatio, Qt.SmoothTransformation,
-        ).transformed(QTransform().rotate(90), Qt.SmoothTransformation))
-        mode_arrow.setFixedSize(9, 9)
-        mode_arrow.setAttribute(Qt.WA_TransparentForMouseEvents)
-        mode_btn_layout.addWidget(mode_value)
-        mode_btn_layout.addWidget(mode_arrow)
-        btn_project_mode.setFixedWidth(max(100, mode_value.sizeHint().width() + 35))
+        yield
+        btn_project_mode.fit_width()
         self._project_mode_value = mode_value
         self._project_mode_button = btn_project_mode
 
         def _choose_project_mode(mode):
             _theme.set_tree_view_mode(mode)
-            mode_value.setText(t("lbl_mode_single_dir") if mode == "single_dir"
-                               else t("lbl_mode_tree"))
-            btn_project_mode.setFixedWidth(max(100, mode_value.sizeHint().width() + 35))
+            btn_project_mode.setCaption(t("lbl_mode_single_dir") if mode == "single_dir"
+                                       else t("lbl_mode_tree"))
+        yield
 
         btn_project_mode.clicked.connect(lambda: self._show_choice_popup(
             btn_project_mode,
@@ -2231,6 +2342,7 @@ class AppUI(AppFeatures, QWidget):
         mode_row.addLayout(mode_text_col, 1)
         mode_row.addWidget(btn_project_mode)
         theme_outer.addLayout(mode_row)
+        yield
 
         content_layout.addWidget(theme_card)
         content_layout.addSpacing(8)
@@ -2238,27 +2350,13 @@ class AppUI(AppFeatures, QWidget):
 
         lang_card, lang_outer = build_card_base()
 
-        btn_lang = QPushButton()
-        btn_lang.setFixedHeight(28)
-        btn_lang.setCursor(Qt.PointingHandCursor)
-        bind_style(btn_lang, _dropdown_ss)
-        lang_btn_layout = QHBoxLayout(btn_lang)
-        lang_btn_layout.setContentsMargins(12, 0, 9, 0)
-        lang_btn_layout.setSpacing(5)
-        lang_text = bind_text(QLabel(), lambda: _ul.SUPPORTED.get(_ul._current_lang, "English"))
-        bind_style(lang_text, lambda: f"color:{_th.FG_BLUE_MUTED}; background:transparent; border:none; font-size:12px;")
-        lang_text.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lang_arrow = QLabel()
-        bind_pixmap(lang_arrow, lambda: icon_pixmap("arrow_right").scaled(
-            9, 9, Qt.KeepAspectRatio, Qt.SmoothTransformation,
-        ).transformed(QTransform().rotate(90), Qt.SmoothTransformation))
-        lang_arrow.setFixedSize(9, 9)
-        lang_arrow.setAttribute(Qt.WA_TransparentForMouseEvents)
-        lang_btn_layout.addWidget(lang_text)
-        lang_btn_layout.addWidget(lang_arrow)
-        btn_lang.setFixedWidth(max(80, lang_text.sizeHint().width() + 35))
+        btn_lang = ChoiceDropdown(minimum_width=80)
+        yield
+        lang_text = bind_text(btn_lang.caption, lambda: _ul.SUPPORTED.get(_ul._current_lang, "English"))
+        btn_lang.fit_width()
         self._language_value = lang_text
         self._language_button = btn_lang
+        yield
 
         def _open_lang_menu():
             self._show_lang_popup(btn_lang)
@@ -2267,6 +2365,7 @@ class AppUI(AppFeatures, QWidget):
 
         lang_outer.addLayout(build_card_header("language", lambda: t("hdr_language"), btn_lang))
         content_layout.addWidget(lang_card)
+        yield
         content_layout.addSpacing(8)
 
         self._build_activation_card(content_layout)
@@ -2311,6 +2410,7 @@ class AppUI(AppFeatures, QWidget):
             row.addWidget(btn)
 
             return row
+        yield
 
 
         # LICENSE
@@ -2322,6 +2422,7 @@ class AppUI(AppFeatures, QWidget):
         divider = QFrame()
         divider.setFixedHeight(1)
         bind_style(divider, lambda: f"background: {_th.border_color(0.07)}; border:none;")
+        yield
         lic_outer.addWidget(divider)
 
         # CREDITS
@@ -2331,40 +2432,37 @@ class AppUI(AppFeatures, QWidget):
 
         content_layout.addWidget(lic_card)
         content_layout.addSpacing(8)
+        yield
 
         content_layout.addStretch()
 
 
-        scroll = SmoothScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setWidget(content)
-        self._scroll_settings = scroll
+        yield
         scroll.verticalScrollBar().valueChanged.connect(self._stop_profile_card_transition)
 
-        self.page_settings_layout.addWidget(scroll)
 
 
         bar_set = QHBoxLayout()
         bar_set.setContentsMargins(16, 8, 16, 12)
+        yield
         bar_set.addStretch()
 
         self.btn_back_settings = bind_text(QPushButton(), lambda: t("btn_back"))
         self.btn_back_settings.setLayoutDirection(Qt.LeftToRight)
         bind_icon(self.btn_back_settings, lambda: tint_icon("arrow_right", _th.FG2, 15))
+        yield
         self.btn_back_settings.setIconSize(QSize(15, 15))
         self.btn_back_settings.clicked.connect(self._settings_back)
 
         bar_set.addWidget(self.btn_back_settings)
         footer = QWidget()
+        yield
         footer.setLayout(bar_set)
         self._page_footers[self.page_settings] = footer
         self.page_settings_layout.addWidget(footer)
 
         # REGISTER PAGE
-        self.stack.addWidget(self.page_settings)
+        yield
         self._refresh_startup_frame()
 
         # Load list — semua side effect (timer, network, project load) di-skip saat offscreen.
@@ -2380,25 +2478,64 @@ class AppUI(AppFeatures, QWidget):
             self.page_settings: (self.btn_back_settings,),
         }
         self._collect_profile_endpoints()
+        yield
         self._last_page = self.stack.currentWidget()
         for page in (self.page_projects, self.page_create, self.page_settings):
             page._bound_theme_name = _th.name
         self.stack.currentChanged.connect(self._on_page_changed)
         self._project_header.installEventFilter(self)
+        yield
         self._update_project_drive_layout()
         QTimer.singleShot(0, self, self._enable_project_layout_animation)
         self._create_popup_warm_timer = QTimer(self)
         self._create_popup_warm_timer.setSingleShot(True)
+        yield
         self._create_popup_warm_timer.timeout.connect(self._prepare_create_popup)
         self._create_popup_warm_timer.start(0)
         self._wsl_disk_ui_ready = True
         self._apply_pending_wsl_disk_usage()
+        yield
         self._apply_pending_windows_disk_usage()
+        self._settings_warm_widgets = None
+        self._settings_warm_timer = QTimer(self)
+        self._settings_warm_timer.setSingleShot(True)
+        yield
+        self._settings_warm_timer.timeout.connect(self._warm_settings_page)
+        self._settings_warm_timer.start(10)
 
         if not self._offscreen_mode:
             self._trash_timer.start()
             QTimer.singleShot(0, self, self._maintain_project_trash)
+        yield
 
+
+    def _warm_settings_page(self):
+        if self._startup_rows is not None or getattr(self, "_cached_page_transition_active", False):
+            self._settings_warm_timer.start(100)
+            return
+        if self._startup_reveal_started and not self._startup_revealed_emitted:
+            return
+        if self.page_settings.isVisible() or getattr(self, "_closing", False):
+            return
+        manager = getattr(QApplication.instance(), "_widget_gpu_manager", None)
+        if manager is None:
+            return
+        if self._settings_warm_widgets is None:
+            self.page_settings.ensurePolished()
+            self.page_settings.resize(self.stack.contentsRect().size())
+            self.page_settings.layout().activate()
+            self._settings_warm_widgets = [self.page_settings] + self.page_settings.findChildren(QWidget)
+        started = time.perf_counter()
+        while self._settings_warm_widgets:
+            widget = self._settings_warm_widgets.pop(0)
+            manager._prepare(widget)
+            if time.perf_counter()-started >= .004:
+                self._settings_warm_timer.start(1)
+                return
+        # Glyphs and existing Skia widget surfaces are prepared once while the
+        # page is hidden, instead of after the first Settings morph has begun.
+        self.page_settings.layout().activate()
+        self.page_settings.grab()
 
     def open_license_window(self):
         from windows.license_window import LicenseWindow
@@ -2520,7 +2657,10 @@ class AppUI(AppFeatures, QWidget):
         from main_ext.class_ThemeUi import theme as _th
         trashed = bool(proj.get("_trash_id"))
 
-        root = _ProjectCardWidget()
+        # Inherit the final viewport style before constructing descendants.
+        # Reparenting a complete row later repolishes its entire subtree.
+        root = _ProjectCardWidget(self.list_widget.viewport())
+        root.hide()
         root.setAttribute(Qt.WA_TranslucentBackground)
         root.setAutoFillBackground(False)
         root.setStyleSheet("""
@@ -3042,6 +3182,7 @@ class AppUI(AppFeatures, QWidget):
             return
         if page is self.page_projects:
             self._project_hover_effect.background = QColor(_th.BG)
+            self.list_widget.set_viewport_background(_th.BG)
             for index, (drive, entry) in enumerate(self._project_drive_cards.items()):
                 if entry.get("trash"):
                     self._apply_project_drive_state(drive)
@@ -3079,10 +3220,9 @@ class AppUI(AppFeatures, QWidget):
                 dialog._refresh_for_theme()
 
     def _refresh_language_ui(self):
-        refresh_language(self)
+        refresh_language(self, skip_widgets=(self._language_button,))
         self._update_project_drive_layout()
-        self._language_button.setFixedWidth(max(80, self._language_value.sizeHint().width() + 35))
-        self._project_mode_button.setFixedWidth(max(100, self._project_mode_value.sizeHint().width() + 35))
+        self._project_mode_button.fit_width()
         self._refresh_settings_badge()
         for dialog in getattr(self, "_persistent_dialogs", []) or []:
             if hasattr(dialog, "_refresh_for_language"):
@@ -3092,15 +3232,26 @@ class AppUI(AppFeatures, QWidget):
 
         from app_ext.class_BlurOverlay import CrossfadeOverlay
 
+        button = self._language_button
+        caption = _ul.SUPPORTED.get(_ul._current_lang, "English")
+        if button.currentText() != caption:
+            button.setCaption(caption)
+        parent = button.parentWidget()
+        while parent is not None:
+            if parent.layout() is not None:
+                parent.layout().activate()
+            parent = parent.parentWidget()
+
         existing = getattr(self, "_lang_xfade", None)
         if existing is not None:
             try:
+                existing.hide()
                 existing.deleteLater()
             except Exception:
                 pass
 
         try:
-            self._lang_xfade = CrossfadeOverlay(self)
+            self._lang_xfade = CrossfadeOverlay(self, exclude_widgets=(button,))
         except Exception:
             self._lang_xfade = None
 
@@ -3113,6 +3264,7 @@ class AppUI(AppFeatures, QWidget):
                 if ov is not None:
                     try:
                         ov.setGeometry(self.rect())
+                        ov.refresh_exclusions()
                         ov.raise_()
                         ov.fade_out(duration=240)
                     except Exception:
@@ -3128,30 +3280,16 @@ class AppUI(AppFeatures, QWidget):
         self._show_choice_popup(anchor, _ul.SUPPORTED.items(), _ul._current_lang, set_lang)
 
     def _show_choice_popup(self, anchor: "QPushButton", choices, current, on_select):
-        from app_ext.class_ChoiceMorphPopup import ChoiceMorphPopup
-
-        choices = tuple(choices)
-        if not choices:
-            return
-        existing = getattr(self, "_choice_popup", None)
-        if existing is not None:
-            existing.close()
-            return
-        popup = ChoiceMorphPopup(self, anchor, choices, current)
-        self._choice_popup = popup
-        try:
-            chosen = popup.exec()
-        finally:
-            self._choice_popup = None
-        if chosen is not None:
-            on_select(chosen)
-
+        show_choice_popup(anchor, choices, current, on_select)
 
     def has_project(self) -> bool:
         return bool(_load_projects_json() or self._trash_entries or self._trash_view or self._trash_read_error)
 
     def _settings_back(self):
-        self.stack.setCurrentWidget(self._settings_back_target)
+        self._show_page(self._settings_back_target)
+
+    def _show_page(self, page):
+        self.stack.setCurrentWidget(page)
 
     def apply_window_state(self):
         has_proj = self.has_project()
@@ -3433,7 +3571,7 @@ class AppUI(AppFeatures, QWidget):
                     border: none;
                     border-radius: 6px;
                     color: {fg if enabled else fg_dis};
-                    font-family: 'Poppins','Inter','Segoe UI',sans-serif;
+                    font-family: 'Poppins';
                     font-size: 12px;
                     text-align: left;
                     padding: 0 14px;
@@ -3521,6 +3659,11 @@ class AppUI(AppFeatures, QWidget):
         CreateProjectDialog.show_popup(self)
 
     def _prepare_create_popup(self):
+        if self._startup_rows is not None or getattr(self, "_cached_page_transition_active", False):
+            self._create_popup_warm_timer.start(100)
+            return
+        if self._startup_reveal_started and not self._startup_revealed_emitted:
+            return
         from app_ext.class_CreateProjectDialog import CreateProjectDialog
         CreateProjectDialog.prepare_popup(self)
 
@@ -3611,6 +3754,7 @@ class AppUI(AppFeatures, QWidget):
         self._windows_disk_scan_running = False
         if self._wsl_disk_closed or usage is None:
             return
+        self._windows_disk_usage = usage
         present = {entry["key"].casefold() for entry in usage}
         self._unavailable_project_drives = {f"{chr(65+i)}:".casefold() for i in range(26)} - present
         if self._wsl_disk_ui_ready:
@@ -3785,7 +3929,7 @@ class AppUI(AppFeatures, QWidget):
         bar_color = _th.accent_hex if distro else self._normal_drive_colors.get(drive) or _th.gauge_hex(pct)
         card_fill = self._project_drive_fill(bool(distro))
 
-        drive_widget = _ProjectDriveCard(drive)
+        drive_widget = _ProjectDriveCard(drive, self._project_drive_container)
         drive_widget.setObjectName("projectDriveCard")
         drive_widget.setFixedSize(self._project_drive_card_width, self._project_drive_card_height)
         drive_layout = QHBoxLayout(drive_widget)
@@ -3915,30 +4059,17 @@ class AppUI(AppFeatures, QWidget):
         if not entries:
             animation.deleteLater()
             return
-        normal_duration = 700
-        tail_start = normal_duration * 0.60
-        tail_duration = (normal_duration - tail_start) * 1.5
-        duration = round(tail_start + tail_duration)
-        stagger = duration * 0.05
-        tail_remaining = (1.0 - tail_start / normal_duration) ** 3
-        # Match OutCubic's position and speed at the join; extend only its tail.
-        tail_power = 3.0 * tail_duration / (normal_duration - tail_start)
         previous_progress = [0.0] * len(entries)
 
         def _advance(elapsed):
             for index, entry in enumerate(entries):
-                local_time = max(0.0, min(duration, elapsed - index * stagger))
-                if local_time <= tail_start:
-                    progress = 1.0 - (1.0 - local_time / normal_duration) ** 3
-                else:
-                    tail_phase = (local_time - tail_start) / tail_duration
-                    progress = 1.0 - tail_remaining * (1.0 - tail_phase) ** tail_power
+                progress = DriveUsageTiming.progress(elapsed, index)
                 if progress != previous_progress[index]:
                     previous_progress[index] = progress
                     self._set_project_drive_usage_progress(progress, entry)
 
         fill = QVariantAnimation(animation)
-        total_duration = duration + max(0, len(entries) - 1) * stagger
+        total_duration = DriveUsageTiming.total(len(entries))
         fill.setDuration(round(total_duration))
         fill.setStartValue(0.0)
         fill.setEndValue(float(total_duration))
@@ -4007,7 +4138,7 @@ class AppUI(AppFeatures, QWidget):
                 if not self._trash_view or entry.get("trash")}
 
     def _add_project_trash_card(self):
-        card = _ProjectDriveCard(TRASH_KEY)
+        card = _ProjectDriveCard(TRASH_KEY, self._project_drive_container)
         card.setObjectName("projectDriveCard")
         card.setFixedSize(self._project_drive_card_width, self._project_drive_card_height)
         row = QHBoxLayout(card)
@@ -4470,6 +4601,13 @@ class AppUI(AppFeatures, QWidget):
         self.list_widget._anim.stop()
         self.list_widget.clear()
         self.list_widget._target_scroll = 0
+        self._startup_rows_timer.stop()
+        self._startup_rows = None
+        if self._startup_splash is not None and not self._startup_reveal_started:
+            from collections import deque
+            self._startup_rows = deque(enumerate(self._project_rows_data(data)))
+            self._startup_rows_timer.start(1)
+            return
         for index, project in enumerate(self._project_rows_data(data)):
             self._add_project_row(project, index)
             if index % 3 == 2:
@@ -4498,30 +4636,26 @@ class AppUI(AppFeatures, QWidget):
         editor = self.editor
         loader = self.loader
         editor._begin_entry_transition()
-        # Polish and settle the hidden layout without mapping a native window
-        # or running nested event processing during the handoff.
-        editor.ensurePolished()
-        if editor.layout() is not None:
-            editor.layout().activate()
-
-        def show_editor():
-            if self.editor is not editor or getattr(editor, "_closing", False):
-                editor._complete_entry_transition()
-                return
-            reveal = StartupContentReveal(editor, cover_until_start=True)
-            editor._entry_content_reveal = reveal
-            reveal.finished.connect(finish_editor_reveal)
-            reveal.show()
-            editor.show()
-            reveal.start()
-            self._log_project_entered(project_root, opened_at, origin)
 
         def finish_editor_reveal():
             editor._entry_content_reveal = None
             editor._complete_entry_transition()
 
+        reveal = WindowContentReveal(editor)
+        editor._entry_content_reveal = reveal
+        reveal.finished.connect(finish_editor_reveal)
+
+        def show_editor():
+            if self.editor is not editor or getattr(editor, "_closing", False):
+                reveal.stop()
+                finish_editor_reveal()
+                return
+            reveal.start()
+            self._log_project_entered(project_root, opened_at, origin)
+
         if loader is None:
-            show_editor()
+            reveal.prepared.connect(show_editor)
+            reveal.prepare()
             return
 
         # Keep dismissal routed through the loading cancellation callback until
@@ -4543,14 +4677,16 @@ class AppUI(AppFeatures, QWidget):
             if self.loader is loader:
                 self.loader = None
             if dismissed:
-                editor._complete_entry_transition()
+                reveal.stop()
+                finish_editor_reveal()
                 log_project_event("OPEN_CANCELLED", project_root, origin=origin)
                 return
             show_editor()
 
         fade.finished.connect(finish_loader_fade)
         loader._handoff_fade = fade
-        fade.start()
+        reveal.prepared.connect(fade.start)
+        reveal.prepare()
 
     def _log_project_entered(self, project_root: str, opened_at: float, origin: str):
         editor = self.editor

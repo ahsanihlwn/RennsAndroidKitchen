@@ -764,7 +764,7 @@ class _Theme:
 QWidget {{
     background-color: {self.BG};
     color: {self.FG};
-    font-family: 'Poppins', 'Inter', 'Segoe UI', sans-serif;
+    font-family: 'Poppins';
     font-size: 13px;
 }}
 QLineEdit {{

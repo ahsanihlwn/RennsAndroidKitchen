@@ -1,0 +1,1482 @@
+[
+  {
+    "path": "root",
+    "type": "AppUI",
+    "name": "",
+    "geometry": [
+      0,
+      0,
+      1080,
+      700
+    ],
+    "contents": [
+      0,
+      0,
+      1080,
+      700
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "QWidget { font-family: 'Poppins', 'Inter', 'Segoe UI', sans-serif; font-size: 13px; }"
+  },
+  {
+    "path": "root/0",
+    "type": "QStackedWidget",
+    "name": "",
+    "geometry": [
+      11,
+      11,
+      1058,
+      678
+    ],
+    "contents": [
+      0,
+      0,
+      1058,
+      678
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      0,
+      0,
+      1058,
+      678
+    ],
+    "contents": [
+      0,
+      0,
+      1058,
+      678
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\nQWidget {\n    background-color: #1e2430;\n    color: #d8dee9;\n    font-family: 'Poppins', 'Inter', 'Segoe UI', sans-serif;\n    font-size: 13px;\n}\nQLineEdit {\n    background-color: #212a38;\n    border: 1px solid rgba(255,255,255,0.1);\n    border-radius: 7px;\n    padding: 6px 10px;\n    color: #d8dee9;\n}\nQLineEdit:focus {\n    border: 1px solid rgba(136,192,208,0.55);\n    background-color: #2e3f55;\n}\nQLineEdit:disabled {\n    color: #28303e;\n    background-color: #18202c;\n    border-color: rgba(255,255,255,0.04);\n}\nQRadioButton {\n    spacing: 8px;\n    color: #d8dee9;\n}\nQRadioButton::indicator {\n    width: 14px; height: 14px;\n    border-radius: 7px;\n    border: 1px solid rgba(255,255,255,0.2);\n    background: transparent;\n}\nQRadioButton::indicator:checked {\n    background-color: rgba(136,192,208,0.85);\n    border: 1px solid rgba(136,192,208,0.7);\n}\nQPushButton {\n    background: rgba(255,255,255,0.05);\n    border: 1px solid rgba(255,255,255,0.09);\n    border-radius: 7px;\n    padding: 0 14px;\n    height: 30px;\n    color: #88c0d0;\n    font-size: 12px;\n}\nQPushButton:hover {\n    background: rgba(255,255,255,0.09);\n    border-color: rgba(255,255,255,0.15);\n    color: #eceff4;\n}\nQPushButton:pressed { background: rgba(255,255,255,0.13); }\nQPushButton:disabled {\n    color: #202830;\n    background: rgba(255,255,255,0.02);\n    border-color: rgba(255,255,255,0.04);\n}\nQPushButton[role=\"primary\"] {\n    background: rgba(136,192,208,0.18);\n    border: 1px solid rgba(136,192,208,0.38);\n    color: #88c0d0;\n    font-weight: 600;\n}\nQPushButton[role=\"primary\"]:hover {\n    background: rgba(136,192,208,0.3);\n    border-color: rgba(136,192,208,0.55);\n    color: #a8d8e8;\n}\nQPushButton[role=\"primary\"]:pressed { background: rgba(136,192,208,0.44); }\nQPushButton[role=\"primary\"]:disabled {\n    background: rgba(136,192,208,0.07);\n    border-color: rgba(136,192,208,0.12);\n    color: rgba(136,192,208,0.3);\n}\nQScrollBar:vertical {\n    background: transparent; width: 4px; margin: 0; border: none;\n}\nQScrollBar::handle:vertical {\n    background: #354560; border-radius: 2px; min-height: 20px;\n}\nQScrollBar::handle:vertical:hover { background: rgba(136,192,208,0.45); }\nQScrollBar::add-line:vertical, QScrollBar::sub-line:vertical,\nQScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {\n    height: 0; border: none; background: transparent;\n}\nQScrollBar:horizontal {\n    background: transparent; height: 4px; margin: 0; border: none;\n}\nQScrollBar::handle:horizontal {\n    background: #354560; border-radius: 2px; min-width: 20px;\n}\nQScrollBar::handle:horizontal:hover { background: rgba(136,192,208,0.45); }\nQScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal,\nQScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {\n    width: 0; border: none; background: transparent;\n}\n"
+  },
+  {
+    "path": "root/0/2/0",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      9,
+      9,
+      1040,
+      51
+    ],
+    "contents": [
+      0,
+      0,
+      1040,
+      51
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/0/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      16,
+      12,
+      1008,
+      31
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      31
+    ],
+    "font": "Poppins,-1,22,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Settings",
+    "stylesheet": "\n            font-size: 22px;\n            font-weight: 600;\n        "
+  },
+  {
+    "path": "root/0/2/1",
+    "type": "SmoothScrollArea",
+    "name": "",
+    "geometry": [
+      9,
+      66,
+      1040,
+      545
+    ],
+    "contents": [
+      0,
+      0,
+      1040,
+      545
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0",
+    "type": "QWidget",
+    "name": "qt_scrollarea_viewport",
+    "geometry": [
+      0,
+      0,
+      1040,
+      545
+    ],
+    "contents": [
+      0,
+      0,
+      1040,
+      545
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      0,
+      0,
+      1040,
+      1084
+    ],
+    "contents": [
+      0,
+      0,
+      1040,
+      1084
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/0",
+    "type": "QWidget",
+    "name": "profileCard",
+    "geometry": [
+      16,
+      8,
+      1008,
+      74
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      74
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QWidget#profileCard {\n                background-color: #242d3a;\n                border: 1px solid rgba(255,255,255,0.08);\n                border-radius: 10px;\n            }\n            QWidget#profileCard QLabel {\n                background: transparent;\n                border: none;\n            }\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/0/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      12,
+      48,
+      48
+    ],
+    "contents": [
+      0,
+      0,
+      48,
+      48
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": "background: transparent; border: none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/0/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      74,
+      12,
+      95,
+      23
+    ],
+    "contents": [
+      0,
+      0,
+      95,
+      23
+    ],
+    "font": "Poppins,-1,13,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "ahsanihalwan",
+    "stylesheet": "font-size: 13px; font-weight: 600;"
+  },
+  {
+    "path": "root/0/2/1/0/0/0/4",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      74,
+      37,
+      439,
+      23
+    ],
+    "contents": [
+      0,
+      0,
+      439,
+      23
+    ],
+    "font": "Poppins,-1,11,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "rennsyt",
+    "stylesheet": "font-size:11px; color:#4a5870; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/0/5",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      964,
+      21,
+      30,
+      30
+    ],
+    "contents": [
+      0,
+      0,
+      30,
+      30
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n                    QPushButton {\n                        padding: 0px;\n                        background: transparent;\n                        border: none;\n                    }\n                    QPushButton:hover {\n                        background-color: rgba(255,255,255,0.06);\n                        border-radius: 6px;\n                    }\n                "
+  },
+  {
+    "path": "root/0/2/1/0/0/1",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      16,
+      102,
+      1008,
+      139
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      139
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n        QWidget {\n            background-color: #242d3a;\n            border: 1px solid rgba(255,255,255,0.08);\n            border-radius: 10px;\n        }\n        QLabel {\n            background: transparent;\n            border: none;\n        }\n        "
+  },
+  {
+    "path": "root/0/2/1/0/0/1/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      12,
+      20,
+      20
+    ],
+    "contents": [
+      0,
+      0,
+      20,
+      20
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/1/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      42,
+      12,
+      86,
+      20
+    ],
+    "contents": [
+      0,
+      0,
+      86,
+      20
+    ],
+    "font": "Poppins,-1,14,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Product Info",
+    "stylesheet": "font-size:14px; font-weight:600; color:#d8dee9; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/1/2",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      52,
+      40,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      40,
+      19
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Name",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/1/3",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      79,
+      52,
+      915,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      915,
+      19
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Renns Android Kitchen",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/1/4",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      79,
+      49,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      49,
+      19
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Version",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/1/5",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      79,
+      79,
+      915,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      915,
+      19
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "1.0.0",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/1/6",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      106,
+      44,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      44,
+      19
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Edition",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/1/7",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      79,
+      106,
+      915,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      915,
+      19
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "OFCL",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/2",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      16,
+      261,
+      1008,
+      54
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      54
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QWidget {\n                background-color: #242d3a;\n                border: 1px solid rgba(255,255,255,0.08);\n                border-radius: 10px;\n            }\n            QLabel {\n                background: transparent;\n                border: none;\n            }\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/2/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      12,
+      20,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      20,
+      28
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/2/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      42,
+      12,
+      70,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      70,
+      28
+    ],
+    "font": "Poppins,-1,14,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Packages",
+    "stylesheet": "\n                font-size: 14px;\n                font-weight: 600;\n                color: #e0e5ef;\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/2/2",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      918,
+      12,
+      76,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      76,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QPushButton {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.09);\n                border-radius: 6px;\n                color: #88c0d0;\n                font-size: 12px;\n                padding: 0 12px;\n            }\n            QPushButton:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.15); color: #d8dee9; }\n            QPushButton:pressed { background: rgba(255,255,255,0.13); }\n        "
+  },
+  {
+    "path": "root/0/2/1/0/0/3",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      16,
+      335,
+      1008,
+      86
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      86
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QWidget {\n                background-color: #242d3a;\n                border: 1px solid rgba(255,255,255,0.08);\n                border-radius: 10px;\n            }\n            QLabel {\n                background: transparent;\n                border: none;\n            }\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/3/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      12,
+      20,
+      20
+    ],
+    "contents": [
+      0,
+      0,
+      20,
+      20
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/3/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      42,
+      12,
+      169,
+      20
+    ],
+    "contents": [
+      0,
+      0,
+      169,
+      20
+    ],
+    "font": "Poppins,-1,14,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Default Project Location",
+    "stylesheet": "\n                font-size: 14px;\n                font-weight: 600;\n                color: #e0e5ef;\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/3/2",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      44,
+      831,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      831,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Documents (system default)",
+    "stylesheet": "color:#4a5870; font-size:12px; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/3/3",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      851,
+      44,
+      55,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      55,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QPushButton {\n                background: transparent;\n                border: 1px solid rgba(255,255,255,0.07);\n                border-radius: 6px;\n                color: #3c4a5e;\n                font-size: 12px;\n                padding: 0 10px;\n            }\n            QPushButton:hover { background: rgba(255,255,255,0.06); color: #88c0d0; }\n            QPushButton:pressed { background: rgba(255,255,255,0.1); }\n        "
+  },
+  {
+    "path": "root/0/2/1/0/0/3/4",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      912,
+      44,
+      82,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      82,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QPushButton {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.09);\n                border-radius: 6px;\n                color: #88c0d0;\n                font-size: 12px;\n                padding: 0 12px;\n            }\n            QPushButton:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.15); color: #d8dee9; }\n            QPushButton:pressed { background: rgba(255,255,255,0.13); }\n        "
+  },
+  {
+    "path": "root/0/2/1/0/0/4",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      16,
+      441,
+      1008,
+      298
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      298
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QWidget {\n                background-color: #242d3a;\n                border: 1px solid rgba(255,255,255,0.08);\n                border-radius: 10px;\n            }\n            QLabel {\n                background: transparent;\n                border: none;\n            }\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/4/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      12,
+      20,
+      20
+    ],
+    "contents": [
+      0,
+      0,
+      20,
+      20
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/4/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      42,
+      12,
+      89,
+      20
+    ],
+    "contents": [
+      0,
+      0,
+      89,
+      20
+    ],
+    "font": "Poppins,-1,14,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Appearance",
+    "stylesheet": "\n                font-size: 14px;\n                font-weight: 600;\n                color: #e0e5ef;\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/4/2",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      40,
+      40,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      40,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Ocean",
+    "stylesheet": "font-size:12px; color:#4a5870; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/3",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      875,
+      40,
+      119,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      119,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QPushButton {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.09);\n                border-radius: 6px;\n                color: #88c0d0;\n                font-size: 12px;\n                padding: 0 12px;\n            }\n            QPushButton:hover {\n                background: rgba(255,255,255,0.09);\n                border-color: rgba(255,255,255,0.15);\n                color: #d8dee9;\n            }\n            QPushButton:pressed { background: rgba(255,255,255,0.13); }\n        "
+  },
+  {
+    "path": "root/0/2/1/0/0/4/4",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      14,
+      86,
+      980,
+      1
+    ],
+    "contents": [
+      0,
+      0,
+      980,
+      1
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "background: rgba(255,255,255,0.06);"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/5",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      105,
+      928,
+      17
+    ],
+    "contents": [
+      0,
+      0,
+      928,
+      17
+    ],
+    "font": "Poppins,-1,12,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Blur Effect",
+    "stylesheet": "font-size:12px; font-weight:600; color:#d8dee9; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/6",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      124,
+      928,
+      16
+    ],
+    "contents": [
+      0,
+      0,
+      928,
+      16
+    ],
+    "font": "Poppins,-1,11,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Frosted-glass blur on cards & overlays. Turn off for a flat gray background — lighter on performance.",
+    "stylesheet": "font-size:11px; color:#3c4a5e; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/7",
+    "type": "WebToggle",
+    "name": "",
+    "geometry": [
+      952,
+      110,
+      42,
+      24
+    ],
+    "contents": [
+      0,
+      0,
+      42,
+      24
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "background: transparent;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/8",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      14,
+      158,
+      980,
+      1
+    ],
+    "contents": [
+      0,
+      0,
+      980,
+      1
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "background: rgba(255,255,255,0.06);"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/9",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      177,
+      928,
+      17
+    ],
+    "contents": [
+      0,
+      0,
+      928,
+      17
+    ],
+    "font": "Poppins,-1,12,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Animations",
+    "stylesheet": "font-size:12px; font-weight:600; color:#d8dee9; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/10",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      196,
+      928,
+      16
+    ],
+    "contents": [
+      0,
+      0,
+      928,
+      16
+    ],
+    "font": "Poppins,-1,11,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Fade & slide transitions on dialogs, overlays and toggles. Turn off for instant, snappier UI.",
+    "stylesheet": "font-size:11px; color:#3c4a5e; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/11",
+    "type": "WebToggle",
+    "name": "",
+    "geometry": [
+      952,
+      182,
+      42,
+      24
+    ],
+    "contents": [
+      0,
+      0,
+      42,
+      24
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "background: transparent;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/12",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      14,
+      230,
+      980,
+      1
+    ],
+    "contents": [
+      0,
+      0,
+      980,
+      1
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "background: rgba(255,255,255,0.06);"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/13",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      249,
+      870,
+      17
+    ],
+    "contents": [
+      0,
+      0,
+      870,
+      17
+    ],
+    "font": "Poppins,-1,12,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Project mode",
+    "stylesheet": "font-size:12px; font-weight:600; color:#d8dee9; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/14",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      268,
+      870,
+      16
+    ],
+    "contents": [
+      0,
+      0,
+      870,
+      16
+    ],
+    "font": "Poppins,-1,11,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Tree: expandable sidebar hierarchy. Single Dir: classic Explorer-style — double-click a folder to open it.",
+    "stylesheet": "font-size:11px; color:#3c4a5e; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/15",
+    "type": "QPushButton",
+    "name": "projectModeDropdown",
+    "geometry": [
+      894,
+      252,
+      100,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      100,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QPushButton {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.09);\n                border-radius: 6px;\n                color: #88c0d0;\n                font-size: 12px;\n                padding: 0;\n                text-align: left;\n            }\n            QPushButton:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.15); color: #d8dee9; }\n            QPushButton:pressed { background: rgba(255,255,255,0.13); }\n        "
+  },
+  {
+    "path": "root/0/2/1/0/0/4/15/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      12,
+      0,
+      65,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      65,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Tree",
+    "stylesheet": "color:#88c0d0; background:transparent; border:none; font-size:12px;"
+  },
+  {
+    "path": "root/0/2/1/0/0/4/15/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      82,
+      9,
+      9,
+      9
+    ],
+    "contents": [
+      0,
+      0,
+      9,
+      9
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/5",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      16,
+      759,
+      1008,
+      54
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      54
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QWidget {\n                background-color: #242d3a;\n                border: 1px solid rgba(255,255,255,0.08);\n                border-radius: 10px;\n            }\n            QLabel {\n                background: transparent;\n                border: none;\n            }\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/5/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      12,
+      20,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      20,
+      28
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/5/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      42,
+      12,
+      72,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      72,
+      28
+    ],
+    "font": "Poppins,-1,14,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Language",
+    "stylesheet": "\n                font-size: 14px;\n                font-weight: 600;\n                color: #e0e5ef;\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/5/2",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      914,
+      12,
+      80,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      80,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QPushButton {\n                background: rgba(255,255,255,0.05);\n                border: 1px solid rgba(255,255,255,0.09);\n                border-radius: 6px;\n                color: #88c0d0;\n                font-size: 12px;\n                padding: 0;\n                text-align: left;\n            }\n            QPushButton:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.15); color: #d8dee9; }\n            QPushButton:pressed { background: rgba(255,255,255,0.13); }\n        "
+  },
+  {
+    "path": "root/0/2/1/0/0/5/2/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      12,
+      0,
+      45,
+      28
+    ],
+    "contents": [
+      0,
+      0,
+      45,
+      28
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "English",
+    "stylesheet": "color:#88c0d0; background:transparent; border:none; font-size:12px;"
+  },
+  {
+    "path": "root/0/2/1/0/0/5/2/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      62,
+      9,
+      9,
+      9
+    ],
+    "contents": [
+      0,
+      0,
+      9,
+      9
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/6",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      16,
+      833,
+      1008,
+      112
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      112
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QWidget {\n                background-color: #242d3a;\n                border: 1px solid rgba(255,255,255,0.08);\n                border-radius: 10px;\n            }\n            QLabel {\n                background: transparent;\n                border: none;\n            }\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/6/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      12,
+      20,
+      20
+    ],
+    "contents": [
+      0,
+      0,
+      20,
+      20
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/6/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      42,
+      12,
+      123,
+      20
+    ],
+    "contents": [
+      0,
+      0,
+      123,
+      20
+    ],
+    "font": "Poppins,-1,14,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Activation Status",
+    "stylesheet": "font-size:14px; font-weight:600; color:#d8dee9; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/6/2",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      52,
+      41,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      41,
+      19
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Status",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/6/3",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      74,
+      52,
+      920,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      920,
+      19
+    ],
+    "font": "Poppins,-1,13,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "…",
+    "stylesheet": "font-weight:600; color:#4a5870; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/6/4",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      79,
+      44,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      44,
+      19
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Details",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/6/5",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      74,
+      79,
+      920,
+      19
+    ],
+    "contents": [
+      0,
+      0,
+      920,
+      19
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": "font-size:12px; color:#4a5870; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/7",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      16,
+      965,
+      1008,
+      95
+    ],
+    "contents": [
+      0,
+      0,
+      1008,
+      95
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n            QWidget {\n                background-color: #242d3a;\n                border: 1px solid rgba(255,255,255,0.08);\n                border-radius: 10px;\n            }\n            QLabel {\n                background: transparent;\n                border: none;\n            }\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/7/0",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      12,
+      20,
+      26
+    ],
+    "contents": [
+      0,
+      0,
+      20,
+      26
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/7/1",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      44,
+      12,
+      50,
+      26
+    ],
+    "contents": [
+      0,
+      0,
+      50,
+      26
+    ],
+    "font": "Poppins,-1,13,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "License",
+    "stylesheet": "font-size:13px; font-weight:600; color:#d8dee9; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/7/2",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      939,
+      12,
+      55,
+      26
+    ],
+    "contents": [
+      0,
+      0,
+      55,
+      26
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n                QPushButton {\n                    background: rgba(255,255,255,0.05);\n                    border: 1px solid rgba(255,255,255,0.09);\n                    border-radius: 6px;\n                    color: #88c0d0;\n                    font-size: 12px;\n                    padding: 0 12px;\n                }\n                QPushButton:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.15); color: #d8dee9; }\n                QPushButton:pressed { background: rgba(255,255,255,0.13); }\n            "
+  },
+  {
+    "path": "root/0/2/1/0/0/7/3",
+    "type": "QFrame",
+    "name": "",
+    "geometry": [
+      14,
+      46,
+      980,
+      1
+    ],
+    "contents": [
+      0,
+      0,
+      980,
+      1
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "background: rgba(255,255,255,0.07); border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/7/4",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      14,
+      55,
+      20,
+      26
+    ],
+    "contents": [
+      0,
+      0,
+      20,
+      26
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "",
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/1/0/0/7/5",
+    "type": "QLabel",
+    "name": "",
+    "geometry": [
+      44,
+      55,
+      48,
+      26
+    ],
+    "contents": [
+      0,
+      0,
+      48,
+      26
+    ],
+    "font": "Poppins,-1,13,5,600,0,0,0,0,0,0,0,0,0,0,192",
+    "text": "Credits",
+    "stylesheet": "font-size:13px; font-weight:600; color:#d8dee9; background:transparent; border:none;"
+  },
+  {
+    "path": "root/0/2/1/0/0/7/6",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      939,
+      55,
+      55,
+      26
+    ],
+    "contents": [
+      0,
+      0,
+      55,
+      26
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": "\n                QPushButton {\n                    background: rgba(255,255,255,0.05);\n                    border: 1px solid rgba(255,255,255,0.09);\n                    border-radius: 6px;\n                    color: #88c0d0;\n                    font-size: 12px;\n                    padding: 0 12px;\n                }\n                QPushButton:hover { background: rgba(255,255,255,0.09); border-color: rgba(255,255,255,0.15); color: #d8dee9; }\n                QPushButton:pressed { background: rgba(255,255,255,0.13); }\n            "
+  },
+  {
+    "path": "root/0/2/2",
+    "type": "QWidget",
+    "name": "",
+    "geometry": [
+      9,
+      617,
+      1040,
+      52
+    ],
+    "contents": [
+      0,
+      0,
+      1040,
+      52
+    ],
+    "font": "Poppins,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": ""
+  },
+  {
+    "path": "root/0/2/2/0",
+    "type": "QPushButton",
+    "name": "",
+    "geometry": [
+      945,
+      8,
+      79,
+      32
+    ],
+    "contents": [
+      0,
+      0,
+      79,
+      32
+    ],
+    "font": "Poppins,-1,12,5,400,0,0,0,0,0,0,0,0,0,0,192",
+    "text": null,
+    "stylesheet": ""
+  }
+]

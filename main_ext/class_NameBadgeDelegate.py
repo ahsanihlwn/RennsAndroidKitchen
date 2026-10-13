@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: MPL-2.0
 from PySide6.QtWidgets import QStyledItemDelegate
 from PySide6.QtGui import QPixmap
+from collections import OrderedDict
+from PySide6.QtCore import QPersistentModelIndex, QPointF
+from PySide6.QtGui import QImage
 from main_ext.class_ThemeUi import theme as _th
 import sys, os, re, shutil
 from core.fsdetect import detect_fs_type
@@ -294,6 +297,129 @@ class NameBadgeDelegate(QStyledItemDelegate):
         self._size_font_key = None
         self._size_font = None
         self._size_fm = None
+        self._cell_cache = OrderedDict()
+        self._cell_keys = {}
+        self._cell_cache_bytes = 0
+        self._cell_cache_limit = 8 * 1024 * 1024
+        self._cell_cache_hits = 0
+        self._cell_cache_misses = 0
+        self._cache_enabled = True
+        self._cache_new_cells = True
+        tree.installEventFilter(self)
+        model = tree.model()
+        model.dataChanged.connect(self._invalidate_cells)
+        model.modelAboutToBeReset.connect(self._clear_cells)
+        model.rowsAboutToBeRemoved.connect(self._clear_cells)
+        model.layoutAboutToBeChanged.connect(self._clear_cells)
+
+    def _clear_cells(self, *_args):
+        self._cell_cache.clear()
+        self._cell_keys.clear()
+        self._cell_cache_bytes = 0
+
+    def eventFilter(self, obj, event):
+        if event.type() in (QEvent.StyleChange, QEvent.FontChange,
+                            QEvent.PaletteChange, QEvent.LayoutDirectionChange):
+            self._clear_cells()
+        return False
+
+    @staticmethod
+    def _cell_id(index):
+        return index.internalId(), index.column()
+
+    def _discard_cell(self, cell_id):
+        record = self._cell_keys.pop(cell_id, None)
+        if record is not None:
+            for key in record[1]:
+                cached = self._cell_cache.pop(key, None)
+                if cached is not None:
+                    self._cell_cache_bytes -= cached.sizeInBytes()
+
+    def _invalidate_cells(self, top, bottom, _roles=()):
+        if not self._cell_keys:
+            return
+        if top.row() == bottom.row() and top.parent() == bottom.parent():
+            for column in range(top.column(), bottom.column() + 1):
+                self._discard_cell((top.internalId(), column))
+            return
+        parent = top.parent()
+        for cell_id, (index, _keys) in tuple(self._cell_keys.items()):
+            if (not index.isValid() or (index.parent() == parent
+                    and top.row() <= index.row() <= bottom.row()
+                    and top.column() <= index.column() <= bottom.column())):
+                self._discard_cell(cell_id)
+
+    def paint(self, painter, option, index):
+        if not self._cache_enabled:
+            return self._paint_uncached(painter, option, index)
+        cell_id = self._cell_id(index)
+        if not self._cache_new_cells and cell_id not in self._cell_keys:
+            return self._paint_uncached(painter, option, index)
+        rect = option.rect
+        if rect.isEmpty():
+            return
+        ratio = painter.device().devicePixelRatioF()
+        transform = painter.worldTransform()
+        device_transform = painter.deviceTransform()
+        if (transform.m11() != 1 or transform.m22() != 1
+                or transform.m12() != 0 or transform.m21() != 0
+                or abs(device_transform.m11() - ratio) > .00001
+                or abs(device_transform.m22() - ratio) > .00001
+                or option.palette.color(option.palette.ColorRole.Base).alpha() != 255):
+            return self._paint_uncached(painter, option, index)
+        import math
+        origin = painter.deviceTransform().map(QPointF(rect.topLeft()))
+        phase_x = round(origin.x() - math.floor(origin.x()), 6)
+        phase_y = round(origin.y() - math.floor(origin.y()), 6)
+        # Qt's style, metrics and rasterizer draw the complete cell. Cache only
+        # its pixels, retaining elision/icons/fonts and all state variants.
+        # Model signals invalidate data; widget events invalidate style/font.
+        key = (cell_id, rect.width(), rect.height(), ratio, phase_x, phase_y,
+               painter.device().logicalDpiX(), painter.device().logicalDpiY(), option.state.value,
+               option.direction.value, option.font.toString(), option.palette.cacheKey(),
+               option.decorationSize.width(), option.decorationSize.height(),
+               option.textElideMode.value,
+               (_th.FG3, _th.accent_hex, _th.warning_hex, _th.safe_hex, _th.danger_hex, _th.is_light))
+        image = self._cell_cache.pop(key, None)
+        if image is None:
+            self._cell_cache_misses += 1
+            if not self._cache_new_cells:
+                return self._paint_uncached(painter, option, index)
+            image = QImage(math.ceil(rect.width() * ratio + phase_x), math.ceil(rect.height() * ratio + phase_y),
+                           QImage.Format_RGB32)
+            if image.sizeInBytes() > self._cell_cache_limit:
+                return self._paint_uncached(painter, option, index)
+            image.setDevicePixelRatio(ratio)
+            image.setDotsPerMeterX(round(painter.device().logicalDpiX() * 1000 / 25.4))
+            image.setDotsPerMeterY(round(painter.device().logicalDpiY() * 1000 / 25.4))
+            # FileTree has an opaque native Base background. Match that paint
+            # device so Qt keeps the same glyph antialiasing as direct painting.
+            image.fill(option.palette.color(option.palette.ColorRole.Base))
+            capture = QPainter(image)
+            capture.setFont(painter.font())
+            capture.setRenderHints(painter.renderHints())
+            capture.translate(phase_x / ratio - rect.x(), phase_y / ratio - rect.y())
+            self._paint_uncached(capture, option, index)
+            capture.end()
+            self._cell_cache_bytes += image.sizeInBytes()
+            record = self._cell_keys.get(cell_id)
+            if record is None:
+                record = self._cell_keys[cell_id] = (QPersistentModelIndex(index), set())
+            record[1].add(key)
+        else:
+            self._cell_cache_hits += 1
+        self._cell_cache[key] = image
+        while self._cell_cache_bytes > self._cell_cache_limit or len(self._cell_cache) > 256:
+            old_key, old_image = self._cell_cache.popitem(last=False)
+            self._cell_cache_bytes -= old_image.sizeInBytes()
+            record = self._cell_keys[old_key[0]]
+            record[1].discard(old_key)
+            if not record[1]:
+                self._cell_keys.pop(old_key[0])
+        painter.save()
+        painter.setClipRect(rect, Qt.IntersectClip)
+        painter.drawImage(QPointF(rect.x() - phase_x / ratio, rect.y() - phase_y / ratio), image)
+        painter.restore()
 
     def _item_size_label(self, item):
         if is_folder_item(item):
@@ -354,7 +480,7 @@ class NameBadgeDelegate(QStyledItemDelegate):
 
         painter.restore()
 
-    def paint(self, painter, option, index):
+    def _paint_uncached(self, painter, option, index):
         from PySide6.QtWidgets import QStyle as _QStyle, QApplication as _QApplication
         from PySide6.QtGui import QFont as _QFont, QFontMetrics as _QFontMetrics
         from PySide6.QtCore import QRectF as _QRectF

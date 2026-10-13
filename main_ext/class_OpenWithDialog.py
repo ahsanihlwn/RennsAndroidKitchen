@@ -2,14 +2,18 @@
 import os
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QPushButton, QWidget, QSizePolicy, QCheckBox
+    QPushButton, QWidget, QSizePolicy, QFrame, QLayout
 )
-from PySide6.QtCore import Qt, Signal, QEvent, QRectF
-from PySide6.QtGui import QIcon, QColor, QPainter, QPainterPath, QPen
+from PySide6.QtCore import Qt, Signal, QEvent, QRectF, QRect, QPoint
+from PySide6.QtGui import QIcon, QColor, QPainter
 
 from icons.handler import icon
 from main_ext.class_ThemeUi import theme as _th
 from core.ui_lang import t
+from app_ext.class_SmoothScrollArea import SmoothScrollArea
+from app_ext.class_BlurOverlay import BlurCard
+from core.skia_button import ButtonSurface
+from core.skia_patch import SurfacePatch
 
 
 def _card_style():
@@ -167,21 +171,16 @@ class _OptionCard(QWidget):
         else:
             bg = self._qcolor(_th.border_color(0.03)); border = self._qcolor(_th.border_color(0.06))
 
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        path = QPainterPath()
-        path.addRoundedRect(r, 8.0, 8.0)
-        p.fillPath(path, bg)
-        pen = QPen(border)
-        pen.setWidth(1)
-        p.setPen(pen)
-        p.setBrush(Qt.NoBrush)
-        p.drawPath(path)
-        p.end()
+        key = (bg.rgba(), border.rgba(), self.devicePixelRatioF())
+        if key != getattr(self, "_surface_key", None):
+            self._surface_patch = SurfacePatch(ButtonSurface(bg, border, 1, 8), key[2])
+            self._surface_key = key
+        painter = QPainter(self)
+        self._surface_patch.draw(painter, QRectF(self.rect()))
 
 
 class OpenWithDialog(QDialog):
+    _MAX_VISIBLE_OPTIONS = 5
     # (key, icon_name) — label & desc diambil dari translasi saat build
     _OPTIONS = [
         ("editor",  "edit"),
@@ -201,18 +200,29 @@ class OpenWithDialog(QDialog):
 
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setObjectName("openWithDialog")
+        self.setStyleSheet("QDialog#openWithDialog {background:transparent; border:none;}")
         self.setModal(True)
         self.setFixedWidth(380)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSizeConstraint(QLayout.SetNoConstraint)
 
         card = QWidget()
         card.setObjectName("dlg_card")
         card.setStyleSheet(_card_style())
         outer.addWidget(card)
+        self._card = card
+        tint = QColor(_th.BG2)
+        tint.setAlpha(72)
+        self._blur_surface = BlurCard(self, radius=18, tint=tint,
+                                      border=QColor(0, 0, 0, 0), corner=14)
+        self._blur_surface.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._blur_surface.hide()
 
         root = QVBoxLayout(card)
+        root.setSizeConstraint(QLayout.SetNoConstraint)
         root.setContentsMargins(20, 18, 20, 18)
         root.setSpacing(12)
 
@@ -224,6 +234,9 @@ class OpenWithDialog(QDialog):
             hint = QLabel(file_name)
             hint.setStyleSheet(_hint_style())
             hint.setWordWrap(True)
+            hint.setToolTip(file_name)
+            hint.ensurePolished()
+            hint.setMaximumHeight(hint.fontMetrics().lineSpacing() * 3)
             root.addWidget(hint)
 
         sep = QWidget()
@@ -240,12 +253,29 @@ class OpenWithDialog(QDialog):
             "payload": t("ow_payload"),
             "super":   t("ow_super"),
         }
+        self._scroll = SmoothScrollArea()
+        self._scroll.setObjectName("openWithOptions")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._scroll.setStyleSheet("QScrollArea#openWithOptions {background:transparent; border:none;}")
+        self._scroll.viewport().setStyleSheet("background:transparent; border:none;")
+        self._options_body = QWidget()
+        self._options_body.setStyleSheet("background:transparent; border:none;")
+        options_layout = QVBoxLayout(self._options_body)
+        options_layout.setContentsMargins(0, 0, 0, 0)
+        options_layout.setSpacing(12)
+        options_layout.setAlignment(Qt.AlignTop)
         for key, icon_name in self._OPTIONS:
             c = _OptionCard(key, icon_name, _label[key], "")
             c.selected.connect(self._on_card_selected)
             c.chosen.connect(self._on_card_chosen)
-            root.addWidget(c)
+            options_layout.addWidget(c)
             self._cards.append(c)
+        self._scroll.setWidget(self._options_body)
+        root.addWidget(self._scroll, 1)
 
         sep2 = QWidget()
         sep2.setFixedHeight(1)
@@ -271,6 +301,7 @@ class OpenWithDialog(QDialog):
         chk_label = QLabel(t("ow_always"))
         chk_label.setStyleSheet(f"color:{_th.FG_MUTED}; font-size:12px; background:transparent;")
         chk_label.setCursor(Qt.PointingHandCursor)
+        chk_label.setWordWrap(True)
 
         # Biar klik label juga nge-toggle checkbox
         chk_label.mousePressEvent = lambda e: self.chk_always.toggle()
@@ -279,8 +310,7 @@ class OpenWithDialog(QDialog):
         chk_layout.setContentsMargins(0, 0, 0, 0)
         chk_layout.setSpacing(10)
         chk_layout.addWidget(self.chk_always)
-        chk_layout.addWidget(chk_label)
-        chk_layout.addStretch()
+        chk_layout.addWidget(chk_label, 1)
         root.addLayout(chk_layout)
 
         foot = QHBoxLayout()
@@ -304,7 +334,53 @@ class OpenWithDialog(QDialog):
         foot.addWidget(self._btn_ok)
         root.addLayout(foot)
 
-        self.adjustSize()
+        self._fit_to_bounds()
+
+    def _available_bounds(self):
+        parent = self.parentWidget()
+        screen = parent.screen() if parent else self.screen()
+        bounds = screen.availableGeometry()
+        if parent is not None:
+            window = parent.window()
+            rect = QRect(window.mapToGlobal(QPoint()), window.size())
+            intersection = bounds.intersected(rect)
+            if not intersection.isEmpty():
+                bounds = intersection
+        return bounds.adjusted(12, 12, -12, -12)
+
+    def _fit_to_bounds(self):
+        bounds = self._available_bounds()
+        self.setFixedWidth(max(1, min(380, bounds.width())))
+        self.ensurePolished()
+        for child in self._card.findChildren(QWidget):
+            child.ensurePolished()
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(16777215)
+        visible = min(len(self._cards), self._MAX_VISIBLE_OPTIONS)
+        wanted = visible * 56 + max(0, visible-1) * 12
+        self._scroll.setFixedHeight(wanted)
+        self._card.layout().invalidate()
+        self.layout().invalidate()
+        self._card.layout().activate()
+        self.layout().activate()
+        desired = self.layout().totalHeightForWidth(self.width())
+        if desired < 0:
+            desired = self.layout().sizeHint().height()
+        chrome = desired - wanted
+        # Only the option viewport shrinks; title, remember toggle and actions
+        # stay outside it. QScrollArea supplies native child clipping.
+        self._scroll.setFixedHeight(max(1, min(wanted, bounds.height()-chrome)))
+        self.setFixedHeight(max(1, min(desired, bounds.height())))
+        self._card.layout().activate()
+        self.layout().activate()
+        self.move(bounds.center() - self.rect().center())
+        self._sync_blur_surface()
+
+    def _sync_blur_surface(self):
+        self._blur_surface.setGeometry(self._card.geometry())
+        self._blur_surface.lower()
+        self._blur_surface.show()
+        self._card.raise_()
 
     @staticmethod
     def _btn_primary():
@@ -342,16 +418,12 @@ class OpenWithDialog(QDialog):
 
     def showEvent(self, e):
         super().showEvent(e)
-        p = self.parent()
-        if p:
-            try:
-                g = p.geometry()
-                self.move(
-                    g.x() + (g.width() - self.width()) // 2,
-                    g.y() + (g.height() - self.height()) // 2,
-                )
-            except Exception:
-                pass
+        self._fit_to_bounds()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_blur_surface"):
+            self._sync_blur_surface()
 
     @staticmethod
     def pick(parent, file_name: str = "", with_blur: bool = True):

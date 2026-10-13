@@ -1,0 +1,53 @@
+         91898 function calls (91834 primitive calls) in 2.251 seconds
+
+   Ordered by: cumulative time
+   List reduced from 387 to 45 due to restriction <45>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.822    0.822    2.236    2.236 {method 'exec' of 'PySide6.QtCore.QEventLoop' objects}
+       18    0.001    0.000    1.173    0.065 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:1001(_prepare_startup_paints)
+       90    0.001    0.000    1.159    0.013 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\tools\benchmark_startup_reveal.py:53(tracked_grab)
+       90    0.877    0.010    1.158    0.013 {function main.<locals>.tracked_grab at 0x000002816C2709E0}
+     1136    0.007    0.000    0.171    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:255(eventFilter)
+       38    0.000    0.000    0.161    0.004 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_gpu.py:266(render_gpu)
+       38    0.003    0.000    0.161    0.004 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_gpu.py:165(render)
+       62    0.011    0.000    0.154    0.002 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_StartupTransition.py:155(paintEvent)
+       21    0.002    0.000    0.141    0.007 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:117(render_widget_surface)
+        1    0.000    0.000    0.099    0.099 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:1021(_start_prepared_startup_scene)
+        1    0.001    0.001    0.098    0.098 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_StartupTransition.py:88(__init__)
+       38    0.089    0.002    0.089    0.002 {built-in method skia.flushAndSubmit}
+       34    0.002    0.000    0.077    0.002 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:418(render_button)
+      106    0.003    0.000    0.072    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:296(button_surface)
+       50    0.000    0.000    0.072    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_ButtonPressAnimation.py:100(event)
+       50    0.000    0.000    0.072    0.001 {function PressAnimatedButton.event at 0x000002816C88F690}
+       30    0.001    0.000    0.071    0.002 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_ButtonPressAnimation.py:106(paintEvent)
+      140    0.012    0.000    0.065    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:182(_declarations)
+      124    0.007    0.000    0.059    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_StartupTransition.py:63(draw)
+     1529    0.054    0.000    0.054    0.000 {method 'drawImage' of 'PySide6.QtGui.QPainter' objects}
+       38    0.048    0.001    0.048    0.001 {built-in method skia.readPixels}
+       64    0.001    0.000    0.045    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:46(_layers)
+        9    0.001    0.000    0.041    0.005 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:200(_flush)
+       43    0.000    0.000    0.039    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:222(_prepare)
+     3560    0.035    0.000    0.036    0.000 {built-in method builtins.getattr}
+      464    0.036    0.000    0.036    0.000 {method 'fillRect' of 'PySide6.QtGui.QPainter' objects}
+      293    0.025    0.000    0.025    0.000 {method 'drawText' of 'PySide6.QtGui.QPainter' objects}
+      232    0.018    0.000    0.025    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_patch.py:42(draw)
+     1136    0.016    0.000    0.025    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:42(eventFilter)
+     7116    0.011    0.000    0.022    0.000 {method 'type' of 'PySide6.QtCore.QEvent' objects}
+1132/1131    0.005    0.000    0.017    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_ButtonPressAnimation.py:286(eventFilter)
+      758    0.002    0.000    0.017    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:175(_source_sheet)
+7983/7977    0.007    0.000    0.015    0.000 C:\Users\ahsanihlwn\AppData\Local\Programs\Python\Python314\Lib\enum.py:676(__call__)
+        1    0.001    0.001    0.015    0.015 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:977(reveal_startup)
+        1    0.004    0.004    0.013    0.013 {built-in method processEvents}
+       34    0.003    0.000    0.012    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:389(button_label)
+      316    0.002    0.000    0.012    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:183(_eligible)
+      632    0.010    0.000    0.010    0.000 {built-in method builtins.hasattr}
+       12    0.002    0.000    0.010    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_StartupVisual.py:228(paintEvent)
+       30    0.002    0.000    0.010    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:427(paintEvent)
+     1136    0.004    0.000    0.008    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\tools\benchmark_startup_reveal.py:114(eventFilter)
+      860    0.004    0.000    0.008    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:205(<genexpr>)
+       38    0.007    0.000    0.007    0.000 {method 'makeCurrent' of 'PySide6.QtGui.QOpenGLContext' objects}
+     1566    0.002    0.000    0.007    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:138(_matches)
+      154    0.006    0.000    0.006    0.000 {method 'elidedText' of 'PySide6.QtGui.QFontMetrics' objects}
+
+

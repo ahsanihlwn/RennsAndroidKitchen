@@ -1,10 +1,16 @@
 # SPDX-License-Identifier: MPL-2.0
 from itertools import zip_longest
+from math import ceil
 
 from PySide6.QtCore import (
-    Qt, QPoint, QRect, Signal, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve,
+    Qt, QPoint, QRect, QRectF, Signal, QParallelAnimationGroup, QPropertyAnimation, QEasingCurve,
 )
-from PySide6.QtWidgets import QWidget, QPushButton, QGraphicsOpacityEffect
+from PySide6.QtGui import QColor, QImage, QPainter
+from PySide6.QtWidgets import (
+    QWidget, QPushButton, QGraphicsOpacityEffect, QStyle, QStyleOptionButton,
+)
+from core.skia_gpu import render_gpu
+from core.skia_button import button_surface, button_label, _source_sheet
 
 
 class FooterActionTransition(QWidget):
@@ -48,6 +54,10 @@ class FooterActionTransition(QWidget):
         self._group.finished.connect(self._finish)
         self._label_views = []
         self._shape_views = []
+        self._views = []
+        self._view_images = {}
+        self._background = QColor(theme.BG)
+        self._skia_gpu_active = False
 
         for old, new in zip_longest(source, target):
             if old is None or new is None:
@@ -77,6 +87,8 @@ class FooterActionTransition(QWidget):
 
     def _button_view(self, button, rect, kind):
         view = QPushButton(self)
+        view._skia_layer_kind = kind
+        view.setProperty("skipButtonGpuRendering", True)
         view.setObjectName("footerActionLabel" if kind == "label" else "footerActionView")
         view.setAttribute(Qt.WA_TransparentForMouseEvents)
         view.setAttribute(Qt.WA_TranslucentBackground)
@@ -92,8 +104,10 @@ class FooterActionTransition(QWidget):
             view.setText(button.text())
             view.setIcon(button.icon())
 
-        stylesheet = button.styleSheet()
+        stylesheet = _source_sheet(button)
         if kind == "label":
+            if stylesheet.strip() and "{" not in stylesheet:
+                stylesheet = "QPushButton {" + stylesheet + "}"
             stylesheet += """
                 QPushButton#footerActionLabel,
                 QPushButton#footerActionLabel:hover,
@@ -105,7 +119,10 @@ class FooterActionTransition(QWidget):
             """
         view.setStyleSheet(stylesheet)
         view.setGeometry(rect)
-        view.show()
+        # Keep native buttons as style/animation models. Their Qt-rendered
+        # textures are composed by one GPU canvas instead of child effects.
+        view.hide()
+        self._views.append(view)
         return view
 
     def _animate(self, target, prop, start, end, keyframes=()):
@@ -116,6 +133,7 @@ class FooterActionTransition(QWidget):
         animation.setEndValue(end)
         for at, value in keyframes:
             animation.setKeyValueAt(at, value)
+        animation.valueChanged.connect(self.update)
         self._group.addAnimation(animation)
 
     def _fade(self, view, start, end, label=False):
@@ -128,6 +146,70 @@ class FooterActionTransition(QWidget):
         if label:
             keyframes = ((0.45, 0.0),) if start else ((0.25, 0.0), (0.65, 1.0))
         self._animate(effect, b"opacity", start, end, keyframes)
+
+    def _view_image(self, view):
+        dpr = self.devicePixelRatioF()
+        key = (view.width(), view.height(), dpr)
+        cached = self._view_images.get(view)
+        if cached is not None and cached[0] == key:
+            return cached[1]
+        image = QImage(max(1, ceil(view.width() * dpr)),
+                       max(1, ceil(view.height() * dpr)),
+                       QImage.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(dpr)
+        image.fill(Qt.transparent)
+        option = QStyleOptionButton()
+        view.ensurePolished()
+        view.initStyleOption(option)
+        option.state &= ~(QStyle.State_MouseOver | QStyle.State_HasFocus | QStyle.State_Sunken)
+        painter = QPainter(image)
+        painter.setFont(view.font())
+        painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing |
+                               QPainter.SmoothPixmapTransform)
+        view.style().drawControl(QStyle.CE_PushButton, option, painter, view)
+        painter.end()
+        # Labels keep their final geometry, so glyphs and icons are captured
+        # once per DPR. Only blank shapes need a new texture after resizing.
+        self._view_images[view] = (key, image)
+        return image
+
+    def _layers(self):
+        for view in self._views:
+            opacity = view.graphicsEffect().opacity()
+            if opacity > 0.0:
+                yield self._view_image(view), QRectF(view.geometry()), opacity
+
+    def _paint_gpu(self, canvas, bridge):
+        canvas.clear(bridge.color(self._background))
+        for view in self._views:
+            opacity = view.graphicsEffect().opacity()
+            if opacity <= 0.0:
+                continue
+            option = QStyleOptionButton()
+            view.ensurePolished()
+            view.initStyleOption(option)
+            option.state &= ~(QStyle.State_MouseOver | QStyle.State_HasFocus | QStyle.State_Sunken)
+            rect = QRectF(view.geometry())
+            surface = button_surface(view, option)
+            if surface is None:
+                bridge.draw_image(canvas, self._view_image(view), rect, opacity)
+                continue
+            surface.draw(canvas, bridge, rect, opacity)
+            if view._skia_layer_kind != "shape":
+                bridge.draw_image(canvas, button_label(view, option, self.devicePixelRatioF()),
+                                  rect, opacity)
+
+    def paintEvent(self, event):
+        image = render_gpu(self.size(), self.devicePixelRatioF(), self._paint_gpu)
+        self._skia_gpu_active = image is not None
+        painter = QPainter(self)
+        if image is not None:
+            painter.drawImage(QPoint(), image)
+            return
+        painter.fillRect(self.rect(), self._background)
+        for layer, rect, opacity in self._layers():
+            painter.setOpacity(opacity)
+            painter.drawImage(rect, layer)
 
     def start(self):
         self.show()

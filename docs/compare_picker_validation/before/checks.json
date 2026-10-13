@@ -1,0 +1,17 @@
+{
+  "rows_per_column": 128,
+  "description": "GUI dispatch intervals, not presentation FPS; actual dialog with frozen glass; no filesystem comparison.",
+  "median_ms": 21.054399985587224,
+  "p95_ms": 41.9263000076171,
+  "max_ms": 50.57900000247173,
+  "cpu_ms": 1875.0,
+  "style_changes": 496,
+  "paints": 1154,
+  "gpu_frames": 58,
+  "scroll_value": 960,
+  "scroll_maximum": 6436,
+  "labels": [
+    "Tree 1",
+    "Tree 2"
+  ]
+}

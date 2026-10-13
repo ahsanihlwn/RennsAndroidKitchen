@@ -45,8 +45,10 @@ def refresh_theme(root, recursive=True):
     for widget in widgets:
         for setter, factory in getattr(widget, "_theme_bindings", {}).items():
             value = factory()
-            if setter == "setStyleSheet" and value == widget.styleSheet():
-                continue
+            if setter == "setStyleSheet":
+                from core.skia_button import _source_sheet
+                if value == _source_sheet(widget):
+                    continue
             getattr(widget, setter)(value)
         callback = getattr(widget, "_refresh_theme", None)
         if callback is not None:

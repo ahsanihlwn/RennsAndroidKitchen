@@ -12,11 +12,13 @@ from core.loading import LoadingAnimator
 from main_ext.class_LoadingBar import LoadingBar
 from core.code_editor import CodeHighlighter
 from core.fsdetect import detect_fs_root
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Signal, Slot
 from core.terminal import Terminal
 from icons.handler import icon, icon_pixmap, tint_icon, create_themed_icon
 from main_ext.class_WebToggle import WebToggle
 from app_ext.class_SmoothScrollArea import SmoothScrollArea
+from app_ext.class_ChoiceDropdown import ChoiceDropdown, show_choice_popup
+from core.theme_binding import refresh_theme
 from app_ext.class_BlurOverlay import BlurOverlay as _BlurOverlay
 from PySide6.QtWidgets import (
     QApplication,
@@ -206,6 +208,10 @@ def extract_terminal_command_name(raw_cmd: str) -> str:
 
 class Main(MainFeatures, QWidget):
     instance = None
+    # Register the optional mixin callback on Main's Qt meta-object too. Adding
+    # Python slots dynamically during connect crashes this PySide/Python build.
+    if callable(getattr(MainFeatures, "run_automation", None)):
+        run_automation = Slot()(MainFeatures.run_automation)
     ready = Signal()
     return_to_project_signal = Signal()
     preparation_status = Signal(str)
@@ -617,33 +623,8 @@ class Main(MainFeatures, QWidget):
         self._wsl_ready = False
         self._wsl_probe_running = False
         self._wsl_probe_checked_at = None
-        self.root_selector = QPushButton()
-        self.root_selector.setFixedHeight(24)
-        self.root_selector.setFixedWidth(44)
-        self.root_selector.setCursor(Qt.PointingHandCursor)
-        self.root_selector.setLayoutDirection(Qt.RightToLeft)
-        self.root_selector.setIconSize(QSize(12, 12))
-        self.root_selector.setStyleSheet(f"""
-            QPushButton {{
-                background: {_th.border_color(0.06)};
-                border: 1px solid {_th.border_color(0.12)};
-                border-radius: 6px;
-                padding-left: 2px;
-                padding-right: 5px;
-                color: {_th.FG2};
-                font-family: 'Poppins', 'Inter', 'Segoe UI', sans-serif;
-                font-size: 11px;
-                font-weight: 500;
-            }}
-            QPushButton:hover {{
-                background: {_th.border_color(0.12)};
-                border-color: {_th.border_color(0.24)};
-                color: {_th.FG_BRIGHT};
-            }}
-            QPushButton:pressed {{
-                background: {_th.border_color(0.16)};
-            }}
-        """)
+        self.root_selector = ChoiceDropdown(minimum_width=44)
+        self.root_selector.setObjectName("terminalRootDropdown")
         self._update_root_selector_display()
         self.root_selector.clicked.connect(self.show_root_menu)
 
@@ -798,6 +779,7 @@ class Main(MainFeatures, QWidget):
         # tapi kalau dipanggil manual (misal setelah splitter geser) trigger juga.
         self.smart_bar.check_overflow()
 
+    @Slot()
     def return_to_project(self):
         if not AppDialog.confirm(
             self, t("main_return_title"),
@@ -906,28 +888,7 @@ class Main(MainFeatures, QWidget):
                     }}
                 """)
             if hasattr(self, "root_selector"):
-                self.root_selector.setStyleSheet(f"""
-                    QPushButton {{
-                        background: {_th.border_color(0.06)};
-                        border: 1px solid {_th.border_color(0.12)};
-                        border-radius: 6px;
-                        padding-left: 2px;
-                        padding-right: 5px;
-                        color: {_th.FG2};
-                        font-family: 'Poppins', 'Inter', 'Segoe UI', sans-serif;
-                        font-size: 11px;
-                        font-weight: 500;
-                    }}
-                    QPushButton:hover {{
-                        background: {_th.border_color(0.12)};
-                        border-color: {_th.border_color(0.24)};
-                        color: {_th.FG_BRIGHT};
-                    }}
-                    QPushButton:pressed {{
-                        background: {_th.border_color(0.16)};
-                    }}
-                """)
-
+                refresh_theme(self.root_selector)
                 self._update_root_selector_display()
             if hasattr(self, "spam_enter_wrap"):
                 self._update_spam_enter_bar_ui(self._is_spam_enter_enabled())
@@ -1150,12 +1111,14 @@ class Main(MainFeatures, QWidget):
         self._preparation_timer.timeout.connect(self._check_preparation_gate)
         self._preparation_timer.start()
 
+    @Slot()
     def _on_editor_ready(self):
         if self._preparation_failed or self._preparation_aborted or getattr(self, "_closing", False):
             return
         self._editor_ready = True
         self._check_preparation_gate()
 
+    @Slot()
     def _check_preparation_gate(self):
         if getattr(self, "_ready_emitted", False) or self._preparation_failed or self._preparation_aborted or getattr(self, "_closing", False):
             return
@@ -1208,9 +1171,13 @@ class Main(MainFeatures, QWidget):
 
     def _begin_entry_transition(self):
         self._entry_transition_active = True
+        for tree in self._get_active_trees():
+            tree.set_entry_transition_active(True)
 
     def _complete_entry_transition(self):
         self._entry_transition_active = False
+        for tree in self._get_active_trees():
+            tree.set_entry_transition_active(False)
         result = self._pending_prescan_result
         self._pending_prescan_result = None
         if result is not None and not getattr(self, "_closing", False) and not self._preparation_aborted:
@@ -1332,14 +1299,14 @@ class Main(MainFeatures, QWidget):
                 if hasattr(term, "set_spam_enter"):
                     term.set_spam_enter(enabled)
 
+    def _terminal_root_caption(self, root_id):
+        return {"tree1": "1", "tree2": "2", "linux": "Linux"}[root_id]
+
     def _update_root_selector_display(self):
         if not hasattr(self, "root_selector"):
             return
-        label = {"tree1": "1", "tree2": "2", "linux": "Linux"}[self.active_root_id]
-        self.root_selector.setText(label)
-        self.root_selector.setFixedWidth(70 if self.active_root_id == "linux" else 44)
+        self.root_selector.setCaption(self._terminal_root_caption(self.active_root_id))
         self.root_selector.setToolTip("Terminal mode: Linux (WSL)" if self.active_root_id == "linux" else "Terminal mode")
-        self.root_selector.setIcon(create_themed_icon("arrow_open", _th.FG_MUTED, _th.FG_BRIGHT, 12))
 
     def _refresh_wsl_terminal_status(self):
 
@@ -1377,6 +1344,7 @@ class Main(MainFeatures, QWidget):
             return self.tree2.base
         return self.tree.base
 
+    @Slot()
     def _on_terminal_bar_spam_enter_toggled(self):
         enabled = self.toggle_terminal_spam_enter.isChecked()
         self._set_all_terminals_spam_enter(enabled)
@@ -1468,6 +1436,7 @@ class Main(MainFeatures, QWidget):
         return data
 
 
+    @Slot()
     def open_project_settings(self):
         from main_ext.class_WebToggle import WebToggle
         from PySide6.QtWidgets import QFrame
@@ -1614,64 +1583,19 @@ class Main(MainFeatures, QWidget):
         erofs_card, erofs_body = build_card("EROFS", "Default", erofs_toggle)
         self.sync_card(erofs_toggle, erofs_body, erofs_cfg.get("default", True))
 
-        # Custom dropdown (BlurCard popup) — replace QComboBox
         _method_items = ["lz4", "lz4hc", "lzma", "deflate", "zstd"]
         _method_state = {"value": erofs_cfg.get("method", "lz4")}
+        method = ChoiceDropdown(_method_state["value"], minimum_width=92)
+        method.setObjectName("compressionMethodDropdown")
 
-        _dropdown_ss = f"""
-            QPushButton {{
-                background: {_th.border_color(0.05)};
-                border: 1px solid {_th.border_color(0.09)};
-                border-radius: 6px;
-                color: {_th.FG};
-                font-size: 12px;
-                padding: 0;
-                text-align: left;
-            }}
-            QPushButton:hover {{
-                background: {_th.border_color(0.09)};
-                border-color: {_th.border_color(0.15)};
-                color: {_th.FG_HOVER};
-            }}
-            QPushButton:pressed {{ background: {_th.border_color(0.13)}; }}
-            QLabel {{ background: transparent; border: none; }}
-        """
+        def _on_method_pick(value):
+            _method_state["value"] = value
+            method.setCaption(value)
 
-        # Custom button: label di kiri, panah file tree di kanan
-        method = QPushButton()
-        method.setFixedHeight(28)
-        method.setFixedWidth(92)
-        method.setCursor(Qt.PointingHandCursor)
-        method.setStyleSheet(_dropdown_ss)
-
-        _btn_lay = QHBoxLayout(method)
-        _btn_lay.setContentsMargins(10, 0, 8, 0)
-        _btn_lay.setSpacing(6)
-        _method_label = QLabel(_method_state["value"])
-        _method_label.setStyleSheet(f"color:{_th.FG}; background:transparent; border:none; font-size:12px;")
-        _method_label.setAttribute(Qt.WA_TransparentForMouseEvents)
-        _chev = QLabel()
-        _chev.setPixmap(icon_pixmap("arrow_right").scaled(
-            9, 9, Qt.KeepAspectRatio, Qt.SmoothTransformation,
-        ).transformed(QTransform().rotate(90), Qt.SmoothTransformation))
-        _chev.setFixedSize(14, 14)
-        _chev.setAlignment(Qt.AlignCenter)
-        _chev.setStyleSheet("background:transparent; border:none;")
-        _chev.setAttribute(Qt.WA_TransparentForMouseEvents)
-        _btn_lay.addWidget(_method_label)
-        _btn_lay.addStretch()
-        _btn_lay.addWidget(_chev)
-
-        # API compat: shim currentText() supaya kode existing (line save) jalan
-        method.currentText = lambda: _method_state["value"]
-
-        def _on_method_pick(v):
-            _method_state["value"] = v
-            _method_label.setText(v)
-
-        def _open_method_popup():
-            self._show_blur_dropdown(method, _method_items, _method_state["value"], _on_method_pick)
-        method.clicked.connect(_open_method_popup)
+        method.clicked.connect(lambda: show_choice_popup(
+            method, ((value, value) for value in _method_items),
+            _method_state["value"], _on_method_pick,
+        ))
 
         lvl_slider = build_level_slider()
         lvl_slider.setValue(erofs_cfg.get("level", 6))
@@ -1868,6 +1792,7 @@ class Main(MainFeatures, QWidget):
         self.update_root_selector()
 
 
+    @Slot()
     def toggle_terminal(self):
         self._refresh_wsl_terminal_status()
 
@@ -1933,160 +1858,21 @@ class Main(MainFeatures, QWidget):
 
         menu.exec(QCursor.pos())
 
+    @Slot()
     def show_root_menu(self):
         self._refresh_wsl_terminal_status()
-        from app_ext.class_BlurOverlay import BlurCard
-        from PySide6.QtCore import QEventLoop, QPoint
-        from PySide6.QtGui import QColor as _QC
-
-        popup = QWidget(None, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
-        popup.setAttribute(Qt.WA_TranslucentBackground)
-        popup.setAttribute(Qt.WA_DeleteOnClose)
-
-        outer = QVBoxLayout(popup)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        _br, _bg, _bb = _th._palette["_border_rgb"]
-        _tint = _QC(_th.BG2); _tint.setAlpha(128)
-        card = BlurCard(radius=12.0, tint=_tint,
-                        border=_QC(_br, _bg, _bb, int(0.18 * 255)))
-        outer.addWidget(card)
-
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(1)
-
         items = self._terminal_root_items()
 
-        chosen = [None]
-        for label, root_id in items:
-            active = (root_id == self.active_root_id)
-            b = QPushButton(label)
-            b.setFixedHeight(32)
-            b.setCursor(Qt.PointingHandCursor)
-            fg = _th.FG_BLUE if active else _th.FG
-            fw = "600" if active else "400"
-            b.setStyleSheet(f"""
-                QPushButton {{
-                    background: {"" + _th.accent(0.12) if active else "transparent"};
-                    border: none; border-radius: 6px;
-                    color: {fg}; font-size: 12px; font-weight: {fw};
-                    text-align: left; padding: 0 14px;
-                }}
-                QPushButton:hover {{ background: {_th.accent(0.14)}; color: {_th.FG_BRIGHT}; }}
-                QPushButton:pressed {{ background: {_th.border_color(0.08)}; }}
-            """)
-            def _pick(_, rid=root_id):
-                chosen[0] = rid
-                popup.close()
-            b.clicked.connect(_pick)
-            lay.addWidget(b)
+        def choose(root_id):
+            self.switch_root(root_id)
+            # A root can disappear during the WSL probe, or session startup
+            # can fail. Keep the caption aligned with the actual active root.
+            self._update_root_selector_display()
 
-        card.adjustSize()
-        popup.adjustSize()
-
-        anchor = self.root_selector
-        global_pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
-        global_pos.setY(global_pos.y() + 4)
-
-        # clamp biar nggak bocor keluar window
-        hint = popup.sizeHint()
-        pw = hint.width() if hint.width() > 0 else popup.width()
-        ph = hint.height() if hint.height() > 0 else popup.height()
-        tl = self.mapToGlobal(self.rect().topLeft())
-        br = self.mapToGlobal(self.rect().bottomRight())
-        x = global_pos.x() if global_pos.x() + pw <= br.x() else max(tl.x(), br.x() - pw)
-        y = global_pos.y() if global_pos.y() + ph <= br.y() else max(tl.y(), br.y() - ph)
-        popup.move(QPoint(x, y))
-
-        card.freeze(self, popup.pos())
-        popup.show()
-
-        loop = QEventLoop()
-        popup.destroyed.connect(loop.quit)
-        loop.exec()
-
-        if chosen[0]:
-            self.switch_root(chosen[0])
-
-    def _show_blur_dropdown(self, anchor, items, current, on_pick):
-
-        from app_ext.class_BlurOverlay import BlurCard
-        from PySide6.QtCore import QEventLoop, QPoint
-        from PySide6.QtGui import QColor as _QC
-
-        popup = QWidget(None, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
-        popup.setAttribute(Qt.WA_TranslucentBackground)
-        popup.setAttribute(Qt.WA_DeleteOnClose)
-
-        outer = QVBoxLayout(popup)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        _br, _bg, _bb = _th._palette["_border_rgb"]
-        _tint = _QC(_th.BG2); _tint.setAlpha(128)
-        card = BlurCard(radius=12.0, tint=_tint,
-                        border=_QC(_br, _bg, _bb, int(0.18 * 255)))
-        outer.addWidget(card)
-
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(4, 4, 4, 4)
-        lay.setSpacing(1)
-
-        chosen = [None]
-        for value in items:
-            active = (value == current)
-            b = QPushButton(value)
-            b.setFixedHeight(30)
-            b.setCursor(Qt.PointingHandCursor)
-            fg = _th.FG_BLUE if active else _th.FG
-            fw = "600" if active else "400"
-            b.setStyleSheet(f"""
-                QPushButton {{
-                    background: {"" + _th.accent(0.12) if active else "transparent"};
-                    border: none; border-radius: 6px;
-                    color: {fg}; font-size: 12px; font-weight: {fw};
-                    text-align: left; padding: 0 14px;
-                }}
-                QPushButton:hover {{ background: {_th.accent(0.14)}; color: {_th.FG_BRIGHT}; }}
-                QPushButton:pressed {{ background: {_th.border_color(0.08)}; }}
-            """)
-            def _pick(_, v=value):
-                chosen[0] = v
-                popup.close()
-            b.clicked.connect(_pick)
-            lay.addWidget(b)
-
-        card.adjustSize()
-        popup.adjustSize()
-        # Lebar minimum mengikuti anchor button
-        if popup.width() < anchor.width():
-            popup.setFixedWidth(anchor.width())
-
-        global_pos = anchor.mapToGlobal(anchor.rect().bottomLeft())
-        global_pos.setY(global_pos.y() + 4)
-
-
-        anchor_win = anchor.window()
-
-        # Clamp ke anchor's top-level window (settings dialog)
-        hint = popup.sizeHint()
-        pw = hint.width() if hint.width() > 0 else popup.width()
-        ph = hint.height() if hint.height() > 0 else popup.height()
-        tl = anchor_win.mapToGlobal(anchor_win.rect().topLeft())
-        br = anchor_win.mapToGlobal(anchor_win.rect().bottomRight())
-        x = global_pos.x() if global_pos.x() + pw <= br.x() else max(tl.x(), br.x() - pw)
-        y = global_pos.y() if global_pos.y() + ph <= br.y() else max(tl.y(), br.y() - ph)
-        popup.move(QPoint(x, y))
-
-        card.freeze(self, popup.pos())
-        popup.show()
-
-        loop = QEventLoop()
-        popup.destroyed.connect(loop.quit)
-        loop.exec()
-
-        if chosen[0] is not None:
-            on_pick(chosen[0])
+        show_choice_popup(
+            self.root_selector, ((root_id, label) for label, root_id in items),
+            self.active_root_id, choose, caption_for_choice=self._terminal_root_caption,
+        )
 
     def switch_root(self, root_id):
         if root_id not in {rid for _, rid in self._terminal_root_items()}:
@@ -2496,6 +2282,7 @@ class Main(MainFeatures, QWidget):
                 self._apply_terminal_close_button(i)
                 break
 
+    @Slot()
     def create_terminal_session(self):
         import random
         root = self.active_root_id   # tree1 / tree2 / linux
@@ -2605,6 +2392,7 @@ class Main(MainFeatures, QWidget):
                 self.switch_terminal_session(term)
                 return
 
+    @Slot(int)
     def _on_terminal_tab_changed(self, index):
         widget = self.session_tabs.tabData(index)
         if widget:
@@ -2766,6 +2554,7 @@ class Main(MainFeatures, QWidget):
             self.apply_tree_mode()
         self.update_smartbar_visibility()
 
+    @Slot(str)
     def run_editor_file(self, filepath):
         if not is_runnable_file(filepath):
             return
@@ -2885,6 +2674,7 @@ class Main(MainFeatures, QWidget):
         return anim
 
 
+    @Slot()
     def toggle_tree_mode(self):
 
 
@@ -2972,6 +2762,7 @@ class Main(MainFeatures, QWidget):
         except ValueError:
             pass
 
+    @Slot()
     def clear_loading_history(self):
 
         self._ensure_loading_manager()
@@ -3009,6 +2800,7 @@ class Main(MainFeatures, QWidget):
 
         return
 
+    @Slot()
     def import_files(self):
 
         tree = self.active_tree
@@ -3163,6 +2955,7 @@ class Main(MainFeatures, QWidget):
     def set_active_tree(self, tree):
         self.active_tree = tree
 
+    @Slot()
     def _tree_delete_hotkey(self):
         focus_w = QApplication.focusWidget()
         if focus_w and isinstance(focus_w, (QPlainTextEdit, QTextEdit, QLineEdit)):
@@ -3175,6 +2968,7 @@ class Main(MainFeatures, QWidget):
     def save_editor_to_file(self):
         self.unified_tabs.save_current()
 
+    @Slot()
     def save_hotkey(self):
         self.unified_tabs.save_current()
 
@@ -3201,12 +2995,14 @@ class Main(MainFeatures, QWidget):
 
         pass
 
+    @Slot()
     def _on_all_editor_tabs_closed(self):
 
         if self.unified_tabs.aux_tab_count() > 0:
             return
         self._on_all_tabs_closed()
 
+    @Slot()
     def _on_all_tabs_closed(self):
 
         if self.terminal_wrap.isVisible():
@@ -3236,6 +3032,7 @@ class Main(MainFeatures, QWidget):
 
         pass
 
+    @Slot()
     def open_find_dialog(self):
         from PySide6.QtWidgets import QApplication
         focused = QApplication.focusWidget()
@@ -3259,6 +3056,7 @@ class Main(MainFeatures, QWidget):
                 "editor && editor.getAction('actions.find').run();"
             )
 
+    @Slot()
     def open_android_tools(self):
         from main_ext.class_AndroidToolsDialog import AndroidToolsDialog
         AndroidToolsDialog.open(self, self)

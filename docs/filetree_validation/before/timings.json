@@ -1,0 +1,54 @@
+{
+  "description": "FileTree with synthetic cached metadata; grab + dispatch, not FPS",
+  "rows": 4000,
+  "samples": 60,
+  "idle": {
+    "median_ms": 39.45965000457363,
+    "p95_ms": 47.01160000695381,
+    "max_ms": 50.93630000192206,
+    "cpu_seconds": 2.203125,
+    "gpu_frames": 0,
+    "profile": "         275769 function calls in 2.218 seconds\n\n   Ordered by: cumulative time\n   List reduced from 150 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n       60    0.134    0.002    2.151    0.036 {method 'grab' of 'PySide6.QtWidgets.QWidget' objects}\n       60    0.005    0.000    1.939    0.032 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_FileTree.py:7138(paintEvent)\n       60    0.339    0.006    1.926    0.032 {function FileTree.paintEvent at 0x0000029134551900}\n     2760    0.367    0.000    1.464    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:357(paint)\n     1380    0.229    0.000    0.229    0.000 {function NameBadgeDelegate.paint at 0x0000029104ACCBF0}\n     1380    0.226    0.000    0.229    0.000 {method 'drawControl' of 'PySide6.QtWidgets.QCommonStyle' objects}\n     1380    0.059    0.000    0.123    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_FileTree.py:1078(drawBranches)\n     2520    0.111    0.000    0.111    0.000 {method 'drawText' of 'PySide6.QtGui.QPainter' objects}\n     2760    0.104    0.000    0.110    0.000 {method 'subElementRect' of 'PySide6.QtWidgets.QCommonStyle' objects}\n       60    0.012    0.000    0.067    0.001 {built-in method processEvents}\n     3900    0.067    0.000    0.067    0.000 {method 'horizontalAdvance' of 'PySide6.QtGui.QFontMetrics' objects}\n      540    0.006    0.000    0.060    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:238(eventFilter)\n       60    0.001    0.000    0.051    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:198(_flush)\n       60    0.001    0.000    0.050    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:206(_prepare)\n     8761    0.015    0.000    0.048    0.000 shibokensupport/signature/loader.py:59(feature_import)\n     1140    0.031    0.000    0.047    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:96(_file_badge_colors)\n       60    0.001    0.000    0.044    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:45(_layers)\n       60    0.002    0.000    0.043    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_button.py:293(button_surface)\n     3840    0.038    0.000    0.041    0.000 {built-in method builtins.getattr}\n       60    0.006    0.000    0.037    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_button.py:179(_declarations)\n     1380    0.033    0.000    0.035    0.000 {method 'elidedText' of 'PySide6.QtGui.QFontMetrics' objects}\n     8761    0.021    0.000    0.034    0.000 shibokensupport/feature.py:88(feature_import)\n      180    0.012    0.000    0.031    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:312(_draw_branch_icon)\n     8280    0.014    0.000    0.024    0.000 C:\\Users\\ahsanihlwn\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\enum.py:676(__call__)\n      480    0.004    0.000    0.023    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:182(_eligible)\n\n\n"
+  },
+  "scroll": {
+    "median_ms": 66.74190000194358,
+    "p95_ms": 89.12799999234267,
+    "max_ms": 192.1245999983512,
+    "cpu_seconds": 4.734375,
+    "gpu_frames": 59,
+    "profile": "         548125 function calls in 4.149 seconds\n\n   Ordered by: cumulative time\n   List reduced from 222 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n      119    0.008    0.000    3.521    0.030 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_FileTree.py:7138(paintEvent)\n      119    0.622    0.005    3.498    0.029 {function FileTree.paintEvent at 0x0000029134551900}\n     5474    0.667    0.000    2.649    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:357(paint)\n       60    0.089    0.001    2.127    0.035 {built-in method processEvents}\n       60    0.116    0.002    2.013    0.034 {method 'grab' of 'PySide6.QtWidgets.QWidget' objects}\n     2737    0.411    0.000    0.411    0.000 {function NameBadgeDelegate.paint at 0x0000029104ACCBF0}\n     2737    0.402    0.000    0.406    0.000 {method 'drawControl' of 'PySide6.QtWidgets.QCommonStyle' objects}\n     1141    0.015    0.000    0.321    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:238(eventFilter)\n     2737    0.110    0.000    0.228    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_FileTree.py:1078(drawBranches)\n     5018    0.206    0.000    0.206    0.000 {method 'drawText' of 'PySide6.QtGui.QPainter' objects}\n      236    0.007    0.000    0.203    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:116(render_widget_surface)\n     5474    0.190    0.000    0.201    0.000 {method 'subElementRect' of 'PySide6.QtWidgets.QCommonStyle' objects}\n       59    0.000    0.000    0.162    0.003 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_gpu.py:264(render_gpu)\n       59    0.004    0.000    0.162    0.003 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_gpu.py:163(render)\n     7755    0.119    0.000    0.119    0.000 {method 'horizontalAdvance' of 'PySide6.QtGui.QFontMetrics' objects}\n    17233    0.027    0.000    0.089    0.000 shibokensupport/signature/loader.py:59(feature_import)\n     2281    0.058    0.000    0.088    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:96(_file_badge_colors)\n       59    0.080    0.001    0.080    0.001 {built-in method skia.flushAndSubmit}\n      122    0.006    0.000    0.072    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:45(_layers)\n     2737    0.059    0.000    0.063    0.000 {method 'elidedText' of 'PySide6.QtGui.QFontMetrics' objects}\n    17233    0.040    0.000    0.062    0.000 shibokensupport/feature.py:88(feature_import)\n      302    0.005    0.000    0.062    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_button.py:293(button_surface)\n     7802    0.055    0.000    0.060    0.000 {built-in method builtins.getattr}\n      236    0.059    0.000    0.059    0.000 {method 'drawImage' of 'PySide6.QtGui.QPainter' objects}\n       60    0.001    0.000    0.056    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\core\\skia_widgets.py:198(_flush)\n\n\n"
+  },
+  "hover_paint_regions": [
+    [
+      0,
+      0,
+      934,
+      639
+    ]
+  ],
+  "dialog": {
+    "size": [
+      320,
+      138
+    ],
+    "corner_alpha": [
+      255,
+      255,
+      255,
+      255
+    ],
+    "root_gpu_surface": true,
+    "box_gpu_surface": true
+  },
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 66,
+    "texture_uploads": 2,
+    "texture_bytes": 19200,
+    "surface_bytes": 2885088,
+    "last_error": null
+  }
+}

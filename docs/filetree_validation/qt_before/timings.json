@@ -1,0 +1,47 @@
+{
+  "description": "FileTree with synthetic cached metadata; grab + dispatch, not FPS",
+  "rows": 4000,
+  "samples": 3,
+  "idle": {
+    "median_ms": 32.81119999883231,
+    "p95_ms": 44.15229998994619,
+    "max_ms": 44.15229998994619,
+    "cpu_seconds": 0.109375,
+    "gpu_frames": 0,
+    "profile": "         12486 function calls in 0.106 seconds\n\n   Ordered by: cumulative time\n   List reduced from 93 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        3    0.009    0.003    0.105    0.035 {method 'grab' of 'PySide6.QtWidgets.QWidget' objects}\n        3    0.000    0.000    0.096    0.032 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_FileTree.py:7138(paintEvent)\n        3    0.017    0.006    0.095    0.032 {function FileTree.paintEvent at 0x0000018DFEDB1900}\n      138    0.018    0.000    0.072    0.001 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:357(paint)\n       69    0.011    0.000    0.011    0.000 {function NameBadgeDelegate.paint at 0x0000018DDD34CBF0}\n       69    0.011    0.000    0.011    0.000 {method 'drawControl' of 'PySide6.QtWidgets.QCommonStyle' objects}\n       69    0.003    0.000    0.006    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_FileTree.py:1078(drawBranches)\n      126    0.006    0.000    0.006    0.000 {method 'drawText' of 'PySide6.QtGui.QPainter' objects}\n      138    0.005    0.000    0.005    0.000 {method 'subElementRect' of 'PySide6.QtWidgets.QCommonStyle' objects}\n      195    0.003    0.000    0.003    0.000 {method 'horizontalAdvance' of 'PySide6.QtGui.QFontMetrics' objects}\n      439    0.001    0.000    0.003    0.000 shibokensupport/signature/loader.py:59(feature_import)\n       57    0.001    0.000    0.002    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:96(_file_badge_colors)\n      439    0.001    0.000    0.002    0.000 shibokensupport/feature.py:88(feature_import)\n       69    0.002    0.000    0.002    0.000 {method 'elidedText' of 'PySide6.QtGui.QFontMetrics' objects}\n        9    0.001    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:312(_draw_branch_icon)\n      324    0.001    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\enum.py:676(__call__)\n      439    0.000    0.000    0.001    0.000 shibokensupport/signature/loader.py:67(feature_imported)\n       69    0.001    0.000    0.001    0.000 {method 'toString' of 'PySide6.QtGui.QFont' objects}\n      525    0.001    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\enum.py:186(__get__)\n       69    0.000    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\enum.py:1582(__or__)\n       57    0.001    0.000    0.001    0.000 {method 'drawRoundedRect' of 'PySide6.QtGui.QPainter' objects}\n      297    0.001    0.000    0.001    0.000 {method 'setPen' of 'PySide6.QtGui.QPainter' objects}\n      345    0.001    0.000    0.001    0.000 {method 'data' of 'PySide6.QtWidgets.QTreeWidgetItem' objects}\n       69    0.001    0.000    0.001    0.000 {method 'initStyleOption' of 'PySide6.QtWidgets.QStyledItemDelegate' objects}\n       21    0.000    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\app_ext\\class_ButtonPressAnimation.py:281(eventFilter)\n\n\n"
+  },
+  "scroll": {
+    "median_ms": 53.76789999718312,
+    "p95_ms": 55.38950000482146,
+    "max_ms": 55.38950000482146,
+    "cpu_seconds": 0.125,
+    "gpu_frames": 0,
+    "profile": "         20685 function calls in 0.136 seconds\n\n   Ordered by: cumulative time\n   List reduced from 103 to 25 due to restriction <25>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n        5    0.000    0.000    0.126    0.025 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_FileTree.py:7138(paintEvent)\n        5    0.023    0.005    0.125    0.025 {function FileTree.paintEvent at 0x0000018DFEDB1900}\n      230    0.024    0.000    0.094    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:357(paint)\n        3    0.006    0.002    0.082    0.027 {method 'grab' of 'PySide6.QtWidgets.QWidget' objects}\n        3    0.003    0.001    0.053    0.018 {built-in method processEvents}\n      115    0.015    0.000    0.015    0.000 {function NameBadgeDelegate.paint at 0x0000018DDD34CBF0}\n      115    0.014    0.000    0.014    0.000 {method 'drawControl' of 'PySide6.QtWidgets.QCommonStyle' objects}\n      115    0.004    0.000    0.008    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_FileTree.py:1078(drawBranches)\n      210    0.008    0.000    0.008    0.000 {method 'drawText' of 'PySide6.QtGui.QPainter' objects}\n      230    0.007    0.000    0.007    0.000 {method 'subElementRect' of 'PySide6.QtWidgets.QCommonStyle' objects}\n      325    0.004    0.000    0.004    0.000 {method 'horizontalAdvance' of 'PySide6.QtGui.QFontMetrics' objects}\n      723    0.001    0.000    0.003    0.000 shibokensupport/signature/loader.py:59(feature_import)\n       95    0.002    0.000    0.003    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:96(_file_badge_colors)\n      115    0.002    0.000    0.002    0.000 {method 'elidedText' of 'PySide6.QtGui.QFontMetrics' objects}\n      723    0.001    0.000    0.002    0.000 shibokensupport/feature.py:88(feature_import)\n       11    0.001    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\PROJ\\RennsAndroidKitchen_WebHybrid\\main_ext\\class_NameBadgeDelegate.py:312(_draw_branch_icon)\n      723    0.001    0.000    0.001    0.000 shibokensupport/signature/loader.py:67(feature_imported)\n      576    0.001    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\enum.py:676(__call__)\n      115    0.001    0.000    0.001    0.000 {method 'toString' of 'PySide6.QtGui.QFont' objects}\n       95    0.001    0.000    0.001    0.000 {method 'drawRoundedRect' of 'PySide6.QtGui.QPainter' objects}\n      851    0.001    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\enum.py:186(__get__)\n      115    0.001    0.000    0.001    0.000 C:\\Users\\ahsanihlwn\\AppData\\Local\\Programs\\Python\\Python314\\Lib\\enum.py:1582(__or__)\n      479    0.001    0.000    0.001    0.000 {method 'setPen' of 'PySide6.QtGui.QPainter' objects}\n      115    0.001    0.000    0.001    0.000 {method 'initStyleOption' of 'PySide6.QtWidgets.QStyledItemDelegate' objects}\n      575    0.001    0.000    0.001    0.000 {method 'data' of 'PySide6.QtWidgets.QTreeWidgetItem' objects}\n\n\n"
+  },
+  "hover_paint_regions": [
+    [
+      0,
+      0,
+      934,
+      639
+    ]
+  ],
+  "dialog": {
+    "size": [
+      320,
+      138
+    ],
+    "corner_alpha": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "root_gpu_surface": false,
+    "box_gpu_surface": false
+  },
+  "backend": {
+    "backend": "qt",
+    "reason": "disabled by RAK_DISABLE_SKIA_GPU"
+  }
+}

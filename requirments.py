@@ -16,6 +16,7 @@ REQUIREMENTS = [
     # UI
     "PySide6==6.10.1",
     "shiboken6==6.10.1",
+    "skia-python==144.0.post2",
     # Runtime
     "requests==2.32.5",
     "websockets==15.0.1",

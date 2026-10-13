@@ -2,19 +2,22 @@
 from PySide6.QtCore import QEvent, QEventLoop, QPoint, QRect, Qt, Signal, Property, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QColor, QRegion
 from PySide6.QtWidgets import (
-    QApplication, QWidget, QPushButton, QLabel, QVBoxLayout,
-    QScrollArea, QFrame, QSizePolicy, QGraphicsOpacityEffect,
+    QApplication, QWidget, QLabel, QVBoxLayout,
+    QScrollArea, QFrame, QSizePolicy,
 )
 
 from app_ext.class_BlurOverlay import BlurCard
-from app_ext.class_ButtonPressAnimation import reset_button_press_feedback
+from app_ext.class_ButtonPressAnimation import PressAnimatedButton, reset_button_press_feedback
+from app_ext.class_ButtonCardMorph import ButtonCardMorph
+from core.skia_gpu import GpuOpacityEffect
 from main_ext.class_ThemeUi import theme
+from shiboken6 import isValid
 
 
 class ChoiceMorphPopup(QWidget):
     closed = Signal()
 
-    def __init__(self, root, anchor, choices, current):
+    def __init__(self, root, anchor, choices, current, *, caption_for_choice=None):
         super().__init__(root, Qt.Popup | Qt.FramelessWindowHint | Qt.NoDropShadowWindowHint)
         self.setObjectName("choiceMorphPopup")
         self.setAttribute(Qt.WA_TranslucentBackground)
@@ -25,8 +28,12 @@ class ChoiceMorphPopup(QWidget):
         self._finalizing = False
         self._closed = False
         self._source_effect = None
+        self._closing_morph = None
+        self._preview_caption = None
         self.selected = None
         choices = tuple(choices)
+        self._choice_labels = dict(choices)
+        self._caption_for_choice = caption_for_choice
         if not choices:
             raise ValueError("A choice popup needs at least one option")
         anchor.ensurePolished()
@@ -38,6 +45,11 @@ class ChoiceMorphPopup(QWidget):
         tint.setAlpha(128)
         self.card = BlurCard(self, radius=18, tint=tint, border=QColor(*border, 46), corner=6)
         self.card.setObjectName("choiceMorphCard")
+        # Capture the live Qt options as Qt pixels, then compose the card on
+        # GPU. Keeping the QWidget hierarchy retains focus, masks and input.
+        self._card_gpu_effect = GpuOpacityEffect(self.card)
+        self._card_gpu_effect.setOpacity(1.0)
+        self.card.setGraphicsEffect(self._card_gpu_effect)
         self._body = QWidget(self.card)
         self._body.setStyleSheet("background: transparent; border: none;")
         layout = QVBoxLayout(self._body)
@@ -57,10 +69,13 @@ class ChoiceMorphPopup(QWidget):
         options_layout.setContentsMargins(0, 0, 0, 0)
         options_layout.setSpacing(1)
         self.buttons = []
+        self._choice_buttons = {}
         self._current_button = None
         for code, label in choices:
             active = code == current
-            button = QPushButton(label, options)
+            # Paint the press transform directly. A child QGraphicsEffect
+            # inside the card effect loses its source during popup captures.
+            button = PressAnimatedButton(label, options)
             button.setObjectName("choiceMorphOption")
             button.setFixedHeight(32)
             button.setAutoDefault(False)
@@ -79,12 +94,14 @@ class ChoiceMorphPopup(QWidget):
             button.clicked.connect(lambda checked=False, value=code: self._pick(value))
             options_layout.addWidget(button)
             self.buttons.append(button)
+            self._choice_buttons[code] = button
             if active:
                 self._current_button = button
         scroll.setWidget(options)
 
         # Align one edge with the source and grow into the side with more room.
         anchor_rect = QRect(anchor.mapToGlobal(QPoint()), anchor.size())
+        self._initial_anchor_rect = QRect(anchor_rect)
         available = QRect(root.mapToGlobal(QPoint()), root.size())
         screen = anchor.screen()
         if screen is not None:
@@ -110,7 +127,7 @@ class ChoiceMorphPopup(QWidget):
         self._source_caption.setStyleSheet("background: transparent; border: none;")
         self._source_caption.setPixmap(source)
         self._source_caption.setGeometry(self._source_rect)
-        self._caption_effect = QGraphicsOpacityEffect(self._source_caption)
+        self._caption_effect = GpuOpacityEffect(self._source_caption)
         self._source_caption.setGraphicsEffect(self._caption_effect)
         self._animation = QPropertyAnimation(self, b"progress", self)
         self._animation.setEasingCurve(QEasingCurve.OutCubic)
@@ -133,7 +150,8 @@ class ChoiceMorphPopup(QWidget):
         clip = QRect(0, -self._body.y(), rect.width(), rect.height()).adjusted(4, 4, -4, -4)
         self._body.setMask(QRegion(clip))
         self._body.setVisible(value >= 0.30)
-        self._caption_effect.setOpacity(max(0.0, 1 - value / 0.30))
+        fade = max(0.0, min(1.0, (1-value)/0.5)) if self._closing else max(0.0, 1-value/0.30)
+        self._caption_effect.setOpacity(fade)
 
     progress = Property(float, lambda self: self._progress, _set_progress)
 
@@ -144,7 +162,7 @@ class ChoiceMorphPopup(QWidget):
         self.closed.connect(loop.quit)
         self.destroyed.connect(loop.quit)
         if self._anchor.graphicsEffect() is None:
-            self._source_effect = QGraphicsOpacityEffect(self._anchor)
+            self._source_effect = GpuOpacityEffect(self._anchor)
             self._source_effect.setOpacity(0)
             self._anchor.setGraphicsEffect(self._source_effect)
         self.card.setGeometry(self._target_rect)
@@ -172,6 +190,13 @@ class ChoiceMorphPopup(QWidget):
 
     def _animation_finished(self):
         if self._closing:
+            # Paint the destination into its owner's backing store while the
+            # settled popup still covers it. Hiding first leaves a blank frame.
+            self._restore_anchor()
+            if isValid(self._root) and isValid(self._anchor) and self._root.isVisible():
+                rect = QRect(self._anchor.mapToGlobal(QPoint()), self._anchor.size())
+                rect = rect.united(self._initial_anchor_rect).translated(-self._root.mapToGlobal(QPoint()))
+                self._root.repaint(rect)
             self._finalizing = True
             self.close()
         else:
@@ -189,6 +214,63 @@ class ChoiceMorphPopup(QWidget):
             self.selected = code
             self.close()
 
+    def _start_closing_morph(self):
+        self._animation.stop()
+        text = self._choice_labels.get(self.selected)
+        selected_button = self._choice_buttons.get(self.selected)
+        caption_start = None
+        if selected_button is not None:
+            caption_start = selected_button.mapTo(self, selected_button.rect().center()).toPointF()
+            # This caption travels independently of the shrinking option clip.
+            selected_button.setText("")
+        if self.selected is not None and self._caption_for_choice is not None:
+            text = self._caption_for_choice(self.selected)
+        draw = None
+        if hasattr(self._anchor, "setCaption"):
+            current_caption = self._anchor.currentText()
+            if text is not None and text != current_caption:
+                self._preview_caption = current_caption
+                self._anchor.setCaption(text)
+                parent = self._anchor.parentWidget()
+                while parent is not None:
+                    if parent.layout() is not None:
+                        parent.layout().activate()
+                    parent = parent.parentWidget()
+            draw = self._anchor.caption_drawer(text if text is not None else current_caption)
+        destination_rect = QRect(self._anchor.mapToGlobal(QPoint()), self._anchor.size())
+        # A longer caption can grow a left-aligned anchor beyond the opening
+        # popup bounds. Retain both rectangles without moving the live card.
+        previous = self.geometry()
+        bounds = previous.united(destination_rect)
+        if bounds != previous:
+            offset = previous.topLeft() - bounds.topLeft()
+            self.setGeometry(bounds)
+            self.card.move(self.card.pos() + offset)
+            if caption_start is not None:
+                caption_start += offset.toPointF()
+        self._source_rect = destination_rect.translated(-self.pos())
+        # Keep the exact native button pixels for the last, settled frames.
+        # This also preserves the real child's text, arrow and rounded surface.
+        if self._source_effect is not None:
+            self._source_effect.setOpacity(1)
+        try:
+            destination = self._anchor.grab()
+        finally:
+            if self._source_effect is not None:
+                self._source_effect.setOpacity(0)
+        self._source_caption.hide()
+        morph = ButtonCardMorph(self, self.card, self._anchor, self._source_rect,
+                                opening=False, source_effect=self._source_effect,
+                                defer_source_handoff=True, caption_draw=draw,
+                                caption_start=caption_start, destination_frame=destination)
+        self._closing_morph = morph
+        morph._group.finished.disconnect(morph._finish)
+        morph.finished.connect(self._animation_finished)
+        morph._group.finished.connect(morph.finished.emit)
+        tint, border = self.card._tint, self.card._border
+        morph._card_surface.setStyleSheet(f'QWidget#{self.card.objectName()} {{background:rgba({tint.red()},{tint.green()},{tint.blue()},{tint.alpha()}); border:1px solid rgba({border.red()},{border.green()},{border.blue()},{border.alpha()}); border-radius:10px;}}')
+        morph.start()
+
     def closeEvent(self, event):
         if (not self._finalizing and self.isVisible() and self._anchor.isVisible()
                 and theme.animations_enabled and self._progress > 0):
@@ -197,11 +279,20 @@ class ChoiceMorphPopup(QWidget):
                 self._closing = True
                 for button in self.buttons:
                     reset_button_press_feedback(button)
-                self._animate(0, max(60, round(180 * self._progress)))
+                self._start_closing_morph()
             return
         super().closeEvent(event)
 
     def _restore_anchor(self):
+        if self._preview_caption is not None:
+            try:
+                # A confirmed selection remains on its destination caption.
+                # Rolling it back here produces new -> old -> new on close.
+                if self.selected is None or not self._root.isVisible():
+                    self._anchor.setCaption(self._preview_caption)
+            except RuntimeError:
+                pass
+            self._preview_caption = None
         if self._source_effect is not None:
             try:
                 if self._anchor.graphicsEffect() is self._source_effect:
@@ -212,6 +303,9 @@ class ChoiceMorphPopup(QWidget):
 
     def hideEvent(self, event):
         self._animation.stop()
+        if self._closing_morph is not None:
+            self._closing_morph.stop(restore=False)
+            self._closing_morph = None
         self._restore_anchor()
         QApplication.instance().removeEventFilter(self)
         super().hideEvent(event)

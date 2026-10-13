@@ -18,6 +18,7 @@ from icons.handler import tint_icon, create_themed_icon
 from app_ext.class_BlurOverlay import BlurOverlay, install_window_fade
 from app_ext.class_SmoothScrollArea import SmoothScrollArea
 from app_ext.class_ButtonCardMorph import ButtonCardMorph
+from app_ext.class_RomModeButton import bind_rom_mode_button
 from app_ext.class_ButtonPressAnimation import (
     button_press_scale, has_button_press_feedback, reset_button_press_feedback,
 )
@@ -260,8 +261,8 @@ class CreateProjectDialog(QDialog):
         self.radio_1 = QRadioButton(); self.radio_1.setChecked(True); self.radio_1.hide()
         self.radio_2 = QRadioButton(); self.radio_2.hide()
 
-        self._btn_single = bind_text(QPushButton(), lambda: _t("btn_single_rom"))
-        self._btn_dual   = bind_text(QPushButton(), lambda: _t("btn_dual_rom"))
+        self._btn_single = bind_rom_mode_button(QPushButton(), 1, lambda: self._port_mode == 1, _t)
+        self._btn_dual = bind_rom_mode_button(QPushButton(), 2, lambda: self._port_mode == 2, _t)
         for b in (self._btn_single, self._btn_dual):
             b.setCursor(Qt.PointingHandCursor)
             b.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)

@@ -1,0 +1,740 @@
+{
+  "cycles": 60,
+  "errors": [],
+  "warnings": [],
+  "visible_overlays": [],
+  "scene_active": false,
+  "cached_transition_active": false,
+  "window_size": [
+    1080,
+    700
+  ],
+  "settings_back_bounds": [
+    965,
+    636,
+    79,
+    32
+  ],
+  "checks": [
+    {
+      "index": 0,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 1,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 2,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 3,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 4,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 5,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 6,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 7,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 8,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 9,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 10,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 11,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 12,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 13,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 14,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 15,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 16,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 17,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 18,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 19,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 20,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 21,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 22,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 23,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 24,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 25,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 26,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 27,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 28,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 29,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 30,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 31,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 32,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 33,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 34,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 35,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 36,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 37,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 38,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 39,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 40,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 41,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 42,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 43,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 44,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 45,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 46,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 47,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 48,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 49,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 50,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 51,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 52,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 53,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 54,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 55,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 56,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 57,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 58,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 59,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 60,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 61,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 62,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 63,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 64,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 65,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 66,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 67,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 68,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 69,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 70,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 71,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 72,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 73,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 74,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 75,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 76,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 77,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 78,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 79,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 80,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 81,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 82,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 83,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 84,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 85,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 86,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 87,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 88,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 89,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 90,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 91,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 92,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 93,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 94,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 95,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 96,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 97,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 98,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 99,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 100,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 101,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 102,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 103,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 104,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 105,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 106,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 107,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 108,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 109,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 110,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 111,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 112,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 113,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 114,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 115,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 116,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 117,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 118,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 119,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    }
+  ]
+}

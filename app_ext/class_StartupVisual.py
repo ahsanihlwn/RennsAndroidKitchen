@@ -3,10 +3,11 @@ import os
 import re
 import sys
 import time
+import math
 import xml.etree.ElementTree as ET
 
-from PySide6.QtCore import Qt, QTimer, QRect, QPoint, QEvent, Signal
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QRegion, QTransform
+from PySide6.QtCore import Qt, QTimer, QRect, QRectF, QSizeF, QPointF, QPoint, QEvent, Signal
+from PySide6.QtGui import QColor, QIcon, QImage, QPainter, QPainterPath, QPen, QPixmap, QRegion, QTransform
 from PySide6.QtWidgets import QWidget
 
 
@@ -298,7 +299,7 @@ class StartupContentReveal(QWidget):
     _ROW_DELAY = 0.06
 
     def __init__(self, page, project_list=None, cover_until_start=False,
-                 excluded_widgets=(), bottom_up=False):
+                 excluded_widgets=(), bottom_up=False, freeze_content=False):
         super().__init__(page)
         from main_ext.class_ThemeUi import theme
 
@@ -310,6 +311,19 @@ class StartupContentReveal(QWidget):
         self._cover_until_start = cover_until_start
         self._started_at = None
         self._end_at = 0.0
+        # An opaque snapshot keeps translucent reveal paints from repainting
+        # the entire live FileTree on every frame. Other page reveals retain
+        # their live content, including interactive excluded widgets.
+        self._freeze_content = bool(freeze_content and not self._excluded_widgets)
+        self._snapshot = None
+        self._snapshot_frame = None
+        self._snapshot_frame_key = None
+        self._gpu_frame = None
+        self._snapshot_gpu_error = None
+        self._snapshot_presented = False
+        self._awaiting_presentation = False
+        self._last_band_alphas = None
+        self._stopped = False
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.setAttribute(Qt.WA_NoSystemBackground)
         self.setStyleSheet("background: transparent;")
@@ -320,11 +334,139 @@ class StartupContentReveal(QWidget):
         self._timer.setTimerType(Qt.PreciseTimer)
         self._timer.setInterval(16)
         self._timer.timeout.connect(self._tick)
+        self._presentation_timer = QTimer(self)
+        self._presentation_timer.setSingleShot(True)
+        self._presentation_timer.setInterval(1000)
+        self._presentation_timer.timeout.connect(self._presentation_timeout)
 
     def eventFilter(self, watched, event):
-        if watched is self._page and event.type() == QEvent.Resize:
+        if watched is self._page and event.type() in (QEvent.Resize, QEvent.DevicePixelRatioChange):
             self.setGeometry(self._page.rect())
+            if self._snapshot is not None:
+                # Resize ends the short freeze so the live layout is never
+                # stretched, clipped or recaptured during an animation.
+                self.stop()
+                self.finished.emit()
         return super().eventFilter(watched, event)
+
+    def prepare_snapshot(self):
+        """Capture Qt text/widgets once, before the loader starts fading."""
+        if not self._freeze_content or self._stopped or self._snapshot is not None:
+            return
+        visible = self.isVisible()
+        self.hide()
+        try:
+            self._page.ensurePolished()
+            if self._page.layout() is not None:
+                self._page.layout().activate()
+            self.setGeometry(self._page.rect())
+            snapshot = self._page.grab().toImage()
+            if not snapshot.isNull():
+                self._snapshot = snapshot.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                self.setAttribute(Qt.WA_TranslucentBackground, False)
+                self.setAttribute(Qt.WA_NoSystemBackground, False)
+                self.setStyleSheet("")
+                self.setAttribute(Qt.WA_OpaquePaintEvent)
+                from core.skia_gpu import gpu_available
+                from PySide6.QtWidgets import QApplication
+                allowed = getattr(QApplication.instance(), "_skia_direct_composition_allowed", None)
+                if allowed is None:
+                    from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
+                    allowed = QQuickWindow.graphicsApi() == QSGRendererInterface.GraphicsApi.OpenGL
+                if gpu_available() and allowed:
+                    from core.skia_snapshot import SnapshotGpuFrame
+                    self._gpu_frame = SnapshotGpuFrame(self, self._snapshot, self._background)
+                    self._gpu_frame.frameSwapped.connect(self._on_snapshot_presented)
+                    # Initialize/upload while the loader is still opaque.
+                    # This one preparation readback never runs in the fade.
+                    self._gpu_frame.grabFramebuffer()
+                    if not self._gpu_frame.isValid() or self._gpu_frame.error:
+                        self._snapshot_gpu_failed()
+                    else:
+                        self._gpu_frame.show()
+                if self._gpu_frame is None:
+                    self._snapshot_frame = self._compose_snapshot(self._bands(), None)
+        finally:
+            if visible:
+                self.show()
+
+    def _snapshot_gpu_failed(self):
+        frame = self._gpu_frame
+        self._gpu_frame = None
+        if frame is not None:
+            self._snapshot_gpu_error = frame.error or "Qt snapshot framebuffer is unavailable"
+            frame.shutdown()
+            frame.hide()
+            frame.deleteLater()
+        self.update()
+        if self._awaiting_presentation:
+            self._begin_clock()
+
+    def _on_snapshot_presented(self):
+        window = self._page.windowHandle()
+        if window is not None and window.isExposed():
+            self._snapshot_presented = True
+            if self._awaiting_presentation:
+                self._begin_clock()
+
+    def _presentation_timeout(self):
+        self._snapshot_gpu_failed()
+
+    def _cover_state(self):
+        bands = self._bands()
+        elapsed = None if self._started_at is None else time.monotonic() - self._started_at
+        return bands, self._band_alphas(bands, elapsed)
+
+    def _band_alphas(self, bands, elapsed):
+        return tuple(255 if elapsed is None else round(255 * (1.0 - max(0.0, min(1.0,
+            (elapsed - self._FIRST_DELAY - index * self._ROW_DELAY) / self._DURATION))) ** 3)
+            for index in range(len(bands)))
+
+    def _compose_snapshot(self, bands, elapsed, damage=None):
+        from core.skia_gpu import render_gpu, skia
+        alphas = self._band_alphas(bands, elapsed)
+        ratio = self.devicePixelRatioF()
+        physical_top = 0 if damage is None else math.floor(damage.top() * ratio)
+        physical_bottom = self._snapshot.height() if damage is None else math.ceil((damage.bottom() + 1) * ratio)
+        origin_y = physical_top / ratio
+        size = self.size() if damage is None else QSizeF(self.width(), (physical_bottom - physical_top) / ratio)
+        key = (self._snapshot.cacheKey(), self.width(), self.height(), tuple(bands), alphas, physical_top, physical_bottom)
+        if key == self._snapshot_frame_key:
+            return self._snapshot_frame
+
+        def draw(canvas, bridge):
+            canvas.clear(bridge.color(self._background))
+            canvas.save()
+            canvas.scale(1.0 / ratio, 1.0 / ratio)
+            canvas.drawImage(bridge.image(self._snapshot), 0, -physical_top,
+                             skia.SamplingOptions(skia.FilterMode.kNearest))
+            canvas.restore()
+            canvas.translate(0, -origin_y)
+            for (top, bottom), alpha in zip(bands, alphas):
+                if alpha:
+                    color = QColor(self._background)
+                    color.setAlpha(alpha)
+                    canvas.drawRect(skia.Rect.MakeXYWH(0, top, self.width(), bottom - top),
+                                    skia.Paint(Color4f=bridge.color(color)))
+
+        frame = render_gpu(size, ratio, draw)
+        if frame is None:
+            # Native Qt fallback still reuses the snapshot and its Qt glyphs.
+            frame = QImage(self._snapshot) if damage is None else self._snapshot.copy(
+                0, physical_top, self._snapshot.width(), physical_bottom - physical_top)
+            painter = QPainter(frame)
+            painter.translate(0, -origin_y)
+            for (top, bottom), alpha in zip(bands, alphas):
+                if alpha:
+                    color = QColor(self._background)
+                    color.setAlpha(alpha)
+                    painter.fillRect(QRect(0, top, self.width(), bottom - top), color)
+            painter.end()
+        else:
+            frame = frame.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+        self._snapshot_frame_key = key
+        self._snapshot_frame = frame
+        return frame
 
     def _bands(self):
         height = self.height()
@@ -359,9 +501,29 @@ class StartupContentReveal(QWidget):
         return bands[::-1] if self._bottom_up else bands
 
     def start(self):
+        if self._stopped:
+            return
+        if self._freeze_content and self._snapshot is None:
+            self.prepare_snapshot()
         self.show()
         self.raise_()
+        if (self._gpu_frame is not None and not self._snapshot_presented
+                and not self._page.testAttribute(Qt.WA_DontShowOnScreen)):
+            # First native presentation can compile Qt's compositor shaders.
+            # Keep the cover fully opaque until that one-off work is complete.
+            self._awaiting_presentation = True
+            self._presentation_timer.start()
+            self._gpu_frame.update()
+            return
+        self._begin_clock()
+
+    def _begin_clock(self):
+        if self._stopped or self._started_at is not None:
+            return
+        self._presentation_timer.stop()
+        self._awaiting_presentation = False
         self._started_at = time.monotonic()
+        self._last_band_alphas = self._band_alphas(self._bands(), None)
         self._end_at = (self._FIRST_DELAY
                         + max(0, len(self._bands()) - 1) * self._ROW_DELAY
                         + self._DURATION)
@@ -371,18 +533,56 @@ class StartupContentReveal(QWidget):
     def _tick(self):
         if self._started_at is None:
             return
-        self.update()
+        if self._gpu_frame is not None:
+            self._gpu_frame.update()
+        elif self._snapshot is not None:
+            bands, alphas = self._cover_state()
+            changed = [(top, bottom) for index, (top, bottom) in enumerate(bands)
+                       if self._last_band_alphas is None or alphas[index] != self._last_band_alphas[index]]
+            self._last_band_alphas = alphas
+            if changed:
+                top = min(band[0] for band in changed)
+                bottom = max(band[1] for band in changed)
+                self.update(QRect(0, top, self.width(), bottom - top))
+        else:
+            self.update()
         if time.monotonic() - self._started_at >= self._end_at:
             self.stop()
             self.finished.emit()
 
     def stop(self):
-
+        if self._stopped:
+            return
+        self._stopped = True
         self._timer.stop()
+        self._presentation_timer.stop()
+        if self._gpu_frame is not None:
+            self._gpu_frame.shutdown()
+            self._gpu_frame = None
         self.hide()
+        self._page.removeEventFilter(self)
+        self._snapshot = self._snapshot_frame = None
         self.deleteLater()
 
     def paintEvent(self, event):
+        if self._gpu_frame is not None:
+            # The GL child presents Skia's framebuffer directly. Keep its
+            # opaque parent inexpensive; never compose/read back a duplicate.
+            painter = QPainter(self)
+            painter.fillRect(event.rect(), self._background)
+            painter.end()
+            return
+        if self._snapshot is not None:
+            elapsed = None if self._started_at is None else time.monotonic() - self._started_at
+            damage = event.rect()
+            # Read back only the changing bands. Static background and fully
+            # revealed rows remain in Qt's opaque backing store.
+            frame = self._compose_snapshot(self._bands(), elapsed, damage)
+            painter = QPainter(self)
+            ratio = self.devicePixelRatioF()
+            painter.drawImage(QPointF(0, math.floor(damage.top() * ratio) / ratio), frame)
+            painter.end()
+            return
         region = QRegion(self.rect())
         for widget in self._excluded_widgets:
             if widget.isVisible():

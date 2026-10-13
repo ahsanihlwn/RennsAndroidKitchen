@@ -6,9 +6,10 @@ from PySide6.QtCore    import (
 )
 from PySide6.QtGui import (
     QPainter, QColor, QPainterPath,
-    QMouseEvent
+    QMouseEvent, QImage
 )
 from main_ext.class_ThemeUi import theme as _th
+from core.skia_gpu import render_gpu, skia
 
 
 def _accent_color(alpha: int = 230) -> QColor:
@@ -31,7 +32,7 @@ def _off_color(alpha: int = 30) -> QColor:
 
 class WebToggle(QWidget):
 
-
+    _paints_button_press_feedback = True
     clicked = Signal()
 
     # Colors yang fixed (KNOB & shadow). BG_ON & BG_OFF dihitung per-paint.
@@ -74,11 +75,7 @@ class WebToggle(QWidget):
 
     # paint
     def paintEvent(self, _):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-
-        if not self.isEnabled():
-            p.setOpacity(0.35)
+        from app_ext.class_ButtonPressAnimation import button_press_scale
 
         w, h = self._w, self._h
         r    = h / 2          # track corner radius
@@ -98,14 +95,53 @@ class WebToggle(QWidget):
             int(bg_off.alpha() + t * (bg_on.alpha() - bg_off.alpha())),
         )
 
+        kx = pad + self._pos * travel
+        ky = pad
+        opacity = 1.0 if self.isEnabled() else 0.35
+        scale = button_press_scale(self)
+        cx, cy = self.width() / 2, self.height() / 2
+
+        def draw_gpu(canvas, bridge):
+            def fill(color):
+                paint = skia.Paint(AntiAlias=True, Color4f=bridge.color(color))
+                paint.setAlphaf(color.alphaF() * opacity)
+                return paint
+
+            canvas.translate(cx, cy)
+            canvas.scale(scale, scale)
+            canvas.translate(-cx, -cy)
+            canvas.drawRoundRect(skia.Rect.MakeXYWH(0, 0, w, h), r, r, fill(bg))
+            canvas.drawOval(skia.Rect.MakeXYWH(kx + 0.5, ky + 1.5, kd, kd), fill(self._KNOB_SH))
+            canvas.drawOval(skia.Rect.MakeXYWH(kx, ky, kd, kd), fill(self._KNOB))
+
+        ratio = self.devicePixelRatioF()
+        key = (self.width(), self.height(), ratio, self._pos, scale,
+               bg.rgba(), self._KNOB.rgba(), self._KNOB_SH.rgba(), opacity)
+        cached = getattr(self, "_skia_toggle_frame", None)
+        if cached is not None and cached[0] == key:
+            image = cached[1]
+        else:
+            image = render_gpu(self.size(), ratio, draw_gpu)
+            if image is not None:
+                image = image.convertToFormat(QImage.Format_ARGB32_Premultiplied)
+                self._skia_toggle_frame = (key, image)
+        p = QPainter(self)
+        if image is not None:
+            p.drawImage(0, 0, image)
+            p.end()
+            return
+
+        # Keep the Qt rendering path available when no GPU context is usable.
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setOpacity(opacity)
+        p.translate(cx, cy)
+        p.scale(scale, scale)
+        p.translate(-cx, -cy)
         track_path = QPainterPath()
         track_path.addRoundedRect(0, 0, w, h, r, r)
         p.fillPath(track_path, bg)
 
         # knob
-        kx = pad + self._pos * travel
-        ky = pad
-
         # shadow (offset 1px ke bawah)
         shadow_path = QPainterPath()
         shadow_path.addEllipse(kx + 0.5, ky + 1.5, kd, kd)
@@ -129,6 +165,9 @@ class WebToggle(QWidget):
             return
         if e.button() == Qt.MouseButton.LeftButton:
             self._toggle()
+            # A parent can also be clickable (the Spam Enter wrapper).
+            e.accept()
+            return
         super().mousePressEvent(e)
 
     def _toggle(self):

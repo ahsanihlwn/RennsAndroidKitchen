@@ -1,0 +1,64 @@
+{
+  "rows": 128,
+  "build_ms": 2982.9177999927197,
+  "description": "Actual AppUI with synthetic projects; no service/network/project writes. Intervals measure GUI dispatch, not display FPS.",
+  "cases": {
+    "build": {
+      "action_ms": 7550.114400015445,
+      "cpu_ms": 8109.375,
+      "ticks": 44,
+      "median_ms": 149.21844999480527,
+      "p95_ms": 323.82349998806603,
+      "max_ms": 828.3572999935132,
+      "readback_gpu_frames": 23,
+      "paints": {
+        "QWidget": 22,
+        "QLabel": 26,
+        "QPushButton": 11,
+        "SmoothScrollArea": 2,
+        "QLineEdit": 2,
+        "StartupVisual": 84
+      }
+    },
+    "reveal": {
+      "action_ms": 4.56339999800548,
+      "cpu_ms": 1546.875,
+      "ticks": 29,
+      "median_ms": 43.961499992292374,
+      "p95_ms": 98.39329999522306,
+      "max_ms": 136.5012000023853,
+      "readback_gpu_frames": 118,
+      "paints": {
+        "StartupVisual": 12,
+        "AppUI": 43,
+        "QStackedWidget": 43,
+        "QWidget": 373,
+        "QLabel": 839,
+        "QLineEdit": 20,
+        "QToolButton": 20,
+        "_ProjectDriveCard": 93,
+        "_ResponsiveDriveUsageLabel": 73,
+        "QProgressBar": 73,
+        "SmoothListWidget": 20,
+        "_ProjectCardWidget": 161,
+        "_ElidedProjectLabel": 280,
+        "_ScrollingPathLabel": 161,
+        "PressAnimatedButton": 280,
+        "QPushButton": 40,
+        "StartupContentReveal": 35
+      }
+    }
+  },
+  "reveal_finished": true,
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 141,
+    "texture_uploads": 82,
+    "texture_bytes": 1445576,
+    "surface_bytes": 5818376,
+    "last_error": null
+  }
+}

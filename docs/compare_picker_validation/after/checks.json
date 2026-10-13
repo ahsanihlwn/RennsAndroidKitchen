@@ -1,0 +1,17 @@
+{
+  "rows_per_column": 128,
+  "description": "GUI dispatch intervals, not presentation FPS; actual dialog with frozen glass; no filesystem comparison.",
+  "median_ms": 15.967499988619238,
+  "p95_ms": 17.445200006477535,
+  "max_ms": 20.359699992695823,
+  "cpu_ms": 1218.75,
+  "style_changes": 0,
+  "paints": 2687,
+  "gpu_frames": 36,
+  "scroll_value": 868,
+  "scroll_maximum": 6436,
+  "labels": [
+    "bedah",
+    "target"
+  ]
+}

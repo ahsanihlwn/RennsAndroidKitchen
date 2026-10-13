@@ -1,0 +1,84 @@
+{
+  "description": "Real event-loop reveal: 1080x700, cached Qt rows plus pending file icon work; no forced grabs during animation",
+  "rows": 12000,
+  "freeze_content": false,
+  "pause_icons": false,
+  "runs": [
+    {
+      "run": 0,
+      "prepare_ms": 0.00100000761449337,
+      "elapsed_ms": 639.7536000004038,
+      "cpu_ms": 625.0,
+      "ticks": 30,
+      "spacing_median_ms": 22.751850017812103,
+      "spacing_p95_ms": 30.29569998034276,
+      "spacing_max_ms": 46.48640000959858,
+      "tree_paints": 26,
+      "reveal_paints": 26,
+      "icons_remaining": 11351
+    },
+    {
+      "run": 1,
+      "prepare_ms": 0.001400010660290718,
+      "elapsed_ms": 638.9571000181604,
+      "cpu_ms": 687.5,
+      "ticks": 32,
+      "spacing_median_ms": 22.116050007753074,
+      "spacing_p95_ms": 38.936000026296824,
+      "spacing_max_ms": 43.198600003961474,
+      "tree_paints": 26,
+      "reveal_paints": 25,
+      "icons_remaining": 11345
+    },
+    {
+      "run": 2,
+      "prepare_ms": 0.000600004568696022,
+      "elapsed_ms": 627.0451000018511,
+      "cpu_ms": 703.125,
+      "ticks": 32,
+      "spacing_median_ms": 21.785749995615333,
+      "spacing_p95_ms": 37.68770000897348,
+      "spacing_max_ms": 41.34299998986535,
+      "tree_paints": 26,
+      "reveal_paints": 26,
+      "icons_remaining": 11341
+    },
+    {
+      "run": 3,
+      "prepare_ms": 0.000600004568696022,
+      "elapsed_ms": 631.8268999748398,
+      "cpu_ms": 640.625,
+      "ticks": 31,
+      "spacing_median_ms": 21.29050000803545,
+      "spacing_p95_ms": 38.301499997032806,
+      "spacing_max_ms": 40.72599997743964,
+      "tree_paints": 26,
+      "reveal_paints": 26,
+      "icons_remaining": 11329
+    },
+    {
+      "run": 4,
+      "prepare_ms": 0.2502000133972615,
+      "elapsed_ms": 646.4120000018738,
+      "cpu_ms": 656.25,
+      "ticks": 30,
+      "spacing_median_ms": 22.447999988798983,
+      "spacing_p95_ms": 34.6471999946516,
+      "spacing_max_ms": 40.8344000170473,
+      "tree_paints": 27,
+      "reveal_paints": 27,
+      "icons_remaining": 11347
+    }
+  ],
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 5,
+    "texture_uploads": 4,
+    "texture_bytes": 137280,
+    "surface_bytes": 3058320,
+    "last_error": null
+  }
+}

@@ -1,0 +1,53 @@
+         228637 function calls (228038 primitive calls) in 1.195 seconds
+
+   Ordered by: cumulative time
+   List reduced from 908 to 45 due to restriction <45>
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    0.124    0.124    1.167    1.167 {method 'exec' of 'PySide6.QtCore.QEventLoop' objects}
+       36    0.001    0.000    0.451    0.013 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:921(_advance_startup_build)
+  299/143    0.001    0.000    0.449    0.003 {built-in method builtins.next}
+      139    0.001    0.000    0.449    0.003 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\tools\benchmark_startup_reveal.py:74(fixture_build)
+      139    0.023    0.000    0.446    0.003 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:1213(_build_ui_steps)
+        9    0.000    0.000    0.314    0.035 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:953(_build_startup_project_rows)
+        8    0.001    0.000    0.293    0.037 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:4558(_add_project_row)
+        8    0.015    0.002    0.184    0.023 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:2658(build_project_item_widget)
+      185    0.107    0.001    0.167    0.001 {method 'setStyleSheet' of 'PySide6.QtWidgets.QWidget' objects}
+       22    0.001    0.000    0.161    0.007 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:200(_flush)
+       28    0.001    0.000    0.159    0.006 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:222(_prepare)
+     7322    0.036    0.000    0.151    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:255(eventFilter)
+       55    0.068    0.001    0.133    0.002 {method 'addLayout' of 'PySide6.QtWidgets.QBoxLayout' objects}
+     6821    0.081    0.000    0.119    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:42(eventFilter)
+    44279    0.055    0.000    0.109    0.000 {method 'type' of 'PySide6.QtCore.QEvent' objects}
+        8    0.042    0.005    0.106    0.013 {method 'setItemWidget' of 'PySide6.QtWidgets.QListWidget' objects}
+      202    0.054    0.000    0.098    0.000 {method 'addWidget' of 'PySide6.QtWidgets.QBoxLayout' objects}
+      195    0.002    0.000    0.097    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\theme_binding.py:18(_bind)
+     3585    0.065    0.000    0.065    0.000 {built-in method builtins.hasattr}
+    44884    0.031    0.000    0.056    0.000 C:\Users\ahsanihlwn\AppData\Local\Programs\Python\Python314\Lib\enum.py:676(__call__)
+7322/7242    0.022    0.000    0.055    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_ButtonPressAnimation.py:286(eventFilter)
+        1    0.001    0.001    0.054    0.054 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:4142(_add_project_trash_card)
+7322/7317    0.021    0.000    0.046    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\fonts.py:87(eventFilter)
+       30    0.000    0.000    0.043    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\theme_binding.py:35(bind_pixmap)
+      141    0.000    0.000    0.041    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\theme_binding.py:26(bind_style)
+     7322    0.020    0.000    0.038    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\tools\benchmark_startup_reveal.py:114(eventFilter)
+     3070    0.037    0.000    0.037    0.000 {built-in method builtins.getattr}
+     1162    0.007    0.000    0.034    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:183(_eligible)
+        2    0.002    0.001    0.032    0.016 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:3920(_add_project_drive_card)
+        1    0.030    0.030    0.032    0.032 {method 'show' of 'PySide6.QtWidgets.QWidget' objects}
+       36    0.008    0.000    0.028    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_StartupVisual.py:228(paintEvent)
+        1    0.000    0.000    0.028    0.028 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\tools\benchmark_startup_reveal.py:182(build)
+        1    0.000    0.000    0.028    0.028 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app.py:913(_finish_startup_build)
+        1    0.000    0.000    0.027    0.027 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\rennsproject\app_ui.py:121(_init_account_features)
+       28    0.001    0.000    0.027    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_widgets.py:46(_layers)
+       30    0.001    0.000    0.026    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:296(button_surface)
+    44884    0.024    0.000    0.024    0.000 C:\Users\ahsanihlwn\AppData\Local\Programs\Python\Python314\Lib\enum.py:1145(__new__)
+        2    0.000    0.000    0.023    0.012 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\rennsproject\app_ui.py:1228(_add_account_footer)
+        2    0.000    0.000    0.023    0.012 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\rennsproject\app_ui.py:676(build_profile_mini)
+        2    0.002    0.001    0.023    0.012 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\rennsproject\app_ext\class_ProfileMiniProfider.py:23(build_profile_mini)
+        6    0.001    0.000    0.023    0.004 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\icons\handler.py:183(tint_icon)
+        9    0.022    0.002    0.023    0.003 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\icons\handler.py:151(_tint_pixmap)
+  452/376    0.004    0.000    0.022    0.000 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\app_ext\class_ButtonPressAnimation.py:100(event)
+       30    0.004    0.000    0.022    0.001 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\core\skia_button.py:182(_declarations)
+        1    0.002    0.002    0.021    0.021 C:\Users\ahsanihlwn\PROJ\RennsAndroidKitchen_WebHybrid\rennsproject\app_ui.py:179(_build_profile_card)
+
+

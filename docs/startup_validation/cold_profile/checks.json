@@ -1,0 +1,120 @@
+{
+  "rows": 8,
+  "build_ms": 409.01230002054945,
+  "description": "Actual AppUI with synthetic projects; no service/network/project writes. Intervals measure GUI dispatch, not display FPS.",
+  "cases": {
+    "build": {
+      "action_ms": 27.92209998006001,
+      "cpu_ms": 1218.75,
+      "ticks": 38,
+      "median_ms": 28.18244998343289,
+      "p95_ms": 54.978700005449355,
+      "max_ms": 103.05400000652298,
+      "elapsed_ms": 1205.0808999920264,
+      "preparation_readbacks": 0,
+      "post_preparation_readbacks": 0,
+      "readback_gpu_frames": 0,
+      "paints": {
+        "_StartupSplash": 36
+      }
+    },
+    "reveal": {
+      "action_ms": 14.830600004643202,
+      "cpu_ms": 1453.125,
+      "ticks": 76,
+      "median_ms": 16.017349989851937,
+      "p95_ms": 24.293399997986853,
+      "max_ms": 879.0813999949023,
+      "elapsed_ms": 2258.5015000076964,
+      "preparation_readbacks": 0,
+      "post_preparation_readbacks": 38,
+      "readback_gpu_frames": 38,
+      "paints": {
+        "_StartupSplash": 12,
+        "QLabel": 114,
+        "_ResponsiveDriveUsageLabel": 6,
+        "QProgressBar": 6,
+        "QLineEdit": 3,
+        "QToolButton": 4,
+        "_ElidedProjectLabel": 44,
+        "_ScrollingPathLabel": 22,
+        "PressAnimatedButton": 44,
+        "QPushButton": 6,
+        "AppUI": 2,
+        "QStackedWidget": 2,
+        "QWidget": 28,
+        "_ProjectDriveCard": 6,
+        "SmoothListWidget": 2,
+        "_ProjectCardWidget": 14,
+        "StartupTransition": 62
+      },
+      "preparation_ms": 1258.0258999951184,
+      "animation": {
+        "p95_ms": 16.796399984741583,
+        "max_ms": 17.50349998474121,
+        "ticks": 62,
+        "readbacks": 0
+      }
+    }
+  },
+  "reveal_finished": true,
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 40,
+    "texture_uploads": 18,
+    "texture_bytes": 76416,
+    "surface_bytes": 5794216,
+    "last_error": null
+  },
+  "slow_build_steps": [
+    {
+      "line": 1229,
+      "ms": 27.126100001623854
+    },
+    {
+      "line": 1303,
+      "ms": 86.70690000872128
+    }
+  ],
+  "slow_grabs": [
+    {
+      "type": "QLabel",
+      "name": "",
+      "text": "My Projects",
+      "font": [
+        "Poppins"
+      ],
+      "ms": 857.5587999948766
+    },
+    {
+      "type": "QProgressBar",
+      "name": "",
+      "text": "89%",
+      "font": [
+        "Poppins"
+      ],
+      "ms": 86.82050000061281
+    },
+    {
+      "type": "AppUI",
+      "name": "",
+      "text": "",
+      "font": [
+        "Poppins"
+      ],
+      "ms": 86.20250000967644
+    },
+    {
+      "type": "AppUI",
+      "name": "",
+      "text": "",
+      "font": [
+        "Poppins"
+      ],
+      "ms": 39.53660000115633
+    }
+  ]
+}

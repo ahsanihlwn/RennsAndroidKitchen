@@ -669,6 +669,7 @@ class MountDiskMixin:
 
         from PySide6.QtCore import QMimeData, QPoint
         from PySide6.QtGui import QDrag
+        from shiboken6 import isValid
         import json
 
         refs, ref_items = [], []
@@ -697,15 +698,15 @@ class MountDiskMixin:
 
         drag = QDrag(self)
         drag.setMimeData(mime)
-
-
-        pm = self._mount_drag_pixmap(ref_items)
-        if pm is not None:
-            drag.setPixmap(pm)
-            drag.setHotSpot(QPoint(min(12, pm.width() - 1),
-                                   min(10, pm.height() - 1)))
-
-        drag.exec(Qt.CopyAction)
+        preview = self._mount_drag_pixmap(ref_items)
+        if preview is not None:
+            drag.setPixmap(preview)
+            drag.setHotSpot(QPoint(min(12, preview.width()-1), min(10, preview.height()-1)))
+        try:
+            drag.exec(Qt.CopyAction)
+        finally:
+            if isValid(self):
+                self._clear_drag_hover()
 
     def drop_mount_extract(self, items_info, dest_dir,
                            target_phys=None, branch_target=False,
@@ -839,9 +840,12 @@ class MountDiskMixin:
                       callback=lambda ok, p: finish(p) if ok else fail(p))
 
     def _mount_drag_pixmap(self, items, max_rows=6):
+        # Shared native Qt icon/name preview for physical and mounted entries.
+        # Build it from item data; do not grab the widget or delegate row.
 
         from PySide6.QtCore import QRect
         from PySide6.QtGui import QPixmap, QPainter, QFontMetrics
+        from math import ceil
 
         rows = []
         for it in items[:max_rows]:
@@ -867,7 +871,9 @@ class MountDiskMixin:
         if w < 1 or h < 1 or w > 4096 or h > 4096:
             return None
 
-        pm = QPixmap(w, h)
+        ratio = self.devicePixelRatioF()
+        pm = QPixmap(ceil(w*ratio), ceil(h*ratio))
+        pm.setDevicePixelRatio(ratio)
         pm.fill(Qt.transparent)
         painter = QPainter(pm)
         try:

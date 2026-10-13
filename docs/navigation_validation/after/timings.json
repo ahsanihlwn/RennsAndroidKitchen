@@ -1,0 +1,96 @@
+{
+  "rows": 128,
+  "description": "Actual App event loop; native fonts and controls; no per-frame grabs. Gaps are GUI dispatch, not screen FPS.",
+  "cases": {
+    "scroll": {
+      "elapsed_ms": 1200.8358999737538,
+      "cpu_ms": 750.0,
+      "ticks": 72,
+      "median_ms": 16.063900009612553,
+      "p95_ms": 25.887600000714883,
+      "max_ms": 41.10109998146072,
+      "readback_gpu_frames": 14,
+      "paints": {
+        "QWidget": 129,
+        "_ProjectCardWidget": 87,
+        "QLabel": 101,
+        "_ElidedProjectLabel": 64,
+        "_ScrollingPathLabel": 69,
+        "PressAnimatedButton": 80
+      }
+    },
+    "scroll_hovered": {
+      "elapsed_ms": 1200.8223999873735,
+      "cpu_ms": 531.25,
+      "ticks": 75,
+      "median_ms": 15.963599988026544,
+      "p95_ms": 22.899199975654483,
+      "max_ms": 28.160399990156293,
+      "readback_gpu_frames": 0,
+      "paints": {
+        "QWidget": 235,
+        "_ProjectCardWidget": 184,
+        "QLabel": 104,
+        "_ElidedProjectLabel": 69,
+        "_ScrollingPathLabel": 158,
+        "PressAnimatedButton": 76
+      }
+    },
+    "to_settings": {
+      "elapsed_ms": 1201.0747999884188,
+      "cpu_ms": 343.75,
+      "ticks": 69,
+      "median_ms": 15.961700002662838,
+      "p95_ms": 16.94359999964945,
+      "max_ms": 122.01400002231821,
+      "readback_gpu_frames": 4,
+      "paints": {
+        "QLabel": 41,
+        "QPushButton": 12,
+        "QWidget": 21,
+        "SmoothScrollArea": 2,
+        "AppPageTransition": 39,
+        "AppUI": 1,
+        "QStackedWidget": 1
+      }
+    },
+    "to_projects": {
+      "elapsed_ms": 1199.17720000376,
+      "cpu_ms": 593.75,
+      "ticks": 50,
+      "median_ms": 16.036800006986596,
+      "p95_ms": 20.559299999149516,
+      "max_ms": 340.3755000035744,
+      "readback_gpu_frames": 4,
+      "paints": {
+        "QWidget": 14,
+        "QLabel": 38,
+        "QPushButton": 3,
+        "QLineEdit": 1,
+        "QToolButton": 1,
+        "_ProjectDriveCard": 3,
+        "_ResponsiveDriveUsageLabel": 2,
+        "QProgressBar": 2,
+        "SmoothListWidget": 1,
+        "_ProjectCardWidget": 7,
+        "_ElidedProjectLabel": 14,
+        "_ScrollingPathLabel": 7,
+        "PressAnimatedButton": 14,
+        "AppPageTransition": 50
+      }
+    }
+  },
+  "scroll_maximum": 8952,
+  "scroll_after": 480,
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 85,
+    "texture_uploads": 47,
+    "texture_bytes": 322544,
+    "surface_bytes": 2048192,
+    "last_error": null
+  }
+}

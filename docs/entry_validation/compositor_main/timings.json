@@ -1,0 +1,80 @@
+{
+  "description": "Real event-loop reveal: 1080x700, cached Qt rows plus pending file icon work; no forced grabs during animation",
+  "rows": 12000,
+  "freeze_content": false,
+  "window_opacity": true,
+  "actual_main": true,
+  "pause_icons": true,
+  "runs": [
+    {
+      "run": 0,
+      "prepare_ms": 640.6938000000082,
+      "show_ms": 0.008100003469735384,
+      "elapsed_ms": 627.5051000120584,
+      "cpu_ms": 78.125,
+      "presentation_wait_ms": 0.0,
+      "ticks": 39,
+      "spacing_median_ms": 16.027400008169934,
+      "spacing_p95_ms": 17.298899998422712,
+      "spacing_max_ms": 21.25670001260005,
+      "tree_paints": 0,
+      "reveal_paints": 0,
+      "direct_gpu_frames": 0,
+      "direct_gpu_error": null,
+      "readback_gpu_frames": 0,
+      "icons_remaining": 12000
+    },
+    {
+      "run": 1,
+      "prepare_ms": 47.785600007046014,
+      "show_ms": 0.007700000423938036,
+      "elapsed_ms": 627.4916999973357,
+      "cpu_ms": 15.625,
+      "presentation_wait_ms": 0.0,
+      "ticks": 39,
+      "spacing_median_ms": 16.02049998473376,
+      "spacing_p95_ms": 17.95280000078492,
+      "spacing_max_ms": 19.20770001015626,
+      "tree_paints": 0,
+      "reveal_paints": 0,
+      "direct_gpu_frames": 0,
+      "direct_gpu_error": null,
+      "readback_gpu_frames": 0,
+      "icons_remaining": 12000
+    },
+    {
+      "run": 2,
+      "prepare_ms": 50.09500001324341,
+      "show_ms": 0.006499991286545992,
+      "elapsed_ms": 627.1090999944136,
+      "cpu_ms": 46.875,
+      "presentation_wait_ms": 0.0,
+      "ticks": 39,
+      "spacing_median_ms": 15.983099990990013,
+      "spacing_p95_ms": 17.052600014721975,
+      "spacing_max_ms": 18.72569997794926,
+      "tree_paints": 0,
+      "reveal_paints": 0,
+      "direct_gpu_frames": 0,
+      "direct_gpu_error": null,
+      "readback_gpu_frames": 0,
+      "icons_remaining": 12000
+    }
+  ],
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 21,
+    "texture_uploads": 8,
+    "texture_bytes": 25088,
+    "surface_bytes": 8890480,
+    "last_error": null
+  },
+  "native_window_exposed": true,
+  "webengine_after_entry": {
+    "value": "# Native Monaco after Skia entry\nprint('Qt WebEngine is still alive')\n",
+    "lines": 3
+  }
+}

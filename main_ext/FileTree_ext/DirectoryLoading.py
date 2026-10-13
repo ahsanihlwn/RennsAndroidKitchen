@@ -32,6 +32,7 @@ class DirectoryLoadingMixin:
         self._icon_queue = deque()
         self._yellow_icon_queue = deque()
         self._icon_generation = 0
+        self._entry_transition_active = False
         self._paint_barrier_pending = False
         self._paint_update_requested = False
         self._icon_timer = QTimer(self)
@@ -49,6 +50,14 @@ class DirectoryLoadingMixin:
             or bool(getattr(self, "_yellow_icon_queue", None))
             or (hasattr(self, "_icon_timer") and self._icon_timer.isActive())
         )
+
+    def set_entry_transition_active(self, active):
+        """Keep deferred icon/thumbnail work out of the entry animation."""
+        self._entry_transition_active = bool(active)
+        if active:
+            self._icon_timer.stop()
+        else:
+            self._start_icon_drain(1)
 
     def _reset_icon_work(self):
         self._icon_generation += 1
@@ -73,7 +82,7 @@ class DirectoryLoadingMixin:
         self._directory_errors = 0
 
     def _acknowledge_paint_barrier(self):
-        if getattr(self, "_background_stopped", False):
+        if getattr(self, "_background_stopped", False) or self._entry_transition_active:
             return
         self._paint_update_requested = False
         if getattr(self, "_icon_queue", None) or self.directory_work_pending():
@@ -85,7 +94,7 @@ class DirectoryLoadingMixin:
             self._start_icon_drain(1)
 
     def _start_icon_drain(self, delay_ms=1):
-        if getattr(self, "_background_stopped", False) or not (
+        if getattr(self, "_background_stopped", False) or self._entry_transition_active or not (
             getattr(self, "_icon_queue", None) or getattr(self, "_yellow_icon_queue", None)
         ):
             return
@@ -105,7 +114,7 @@ class DirectoryLoadingMixin:
             self._icon_timer.start(max(1, delay_ms))
 
     def _drain_icon_tasks(self):
-        if getattr(self, "_background_stopped", False):
+        if getattr(self, "_background_stopped", False) or self._entry_transition_active:
             return
 
         if getattr(self, "_icon_queue", None):
