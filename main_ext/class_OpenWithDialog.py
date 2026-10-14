@@ -258,7 +258,8 @@ class OpenWithDialog(QDialog):
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # Keep the list scrollable by wheel without showing a scrollbar hint.
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._scroll.setStyleSheet("QScrollArea#openWithOptions {background:transparent; border:none;}")
         self._scroll.viewport().setStyleSheet("background:transparent; border:none;")
