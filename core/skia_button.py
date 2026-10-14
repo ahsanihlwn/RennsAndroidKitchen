@@ -407,7 +407,11 @@ def button_label(widget, option, ratio, include_children=False):
     painter.setFont(widget.font())
     painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing |
                            QPainter.SmoothPixmapTransform)
-    widget.style().drawControl(QStyle.CE_PushButtonLabel, label, painter, widget)
+    caption = getattr(widget, "_qt_button_caption", None)
+    if caption is not None:
+        caption(painter, option, QRectF(label.rect))
+    else:
+        widget.style().drawControl(QStyle.CE_PushButtonLabel, label, painter, widget)
     if children is not None:
         painter.drawImage(QPoint(), children)
     painter.end()

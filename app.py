@@ -144,7 +144,7 @@ from app_ext.class_LoadingWindow import LoadingWindow
 from app_ext.class_StartupVisual import StartupVisual, StartupContentReveal
 from app_ext.class_StartupTransition import StartupTransition, DriveUsageTiming
 from app_ext.class_ChoiceDropdown import ChoiceDropdown, show_choice_popup
-from app_ext.class_RomModeButton import bind_rom_mode_button
+from app_ext.class_RomModeButton import RomModeButton, bind_rom_mode_button
 from app_ext.class_AppPageTransition import AppPageTransition
 from app_ext.class_WindowContentReveal import WindowContentReveal
 from app_ext.class_FooterActionTransition import FooterActionTransition
@@ -1651,8 +1651,8 @@ class AppUI(AppFeatures, QWidget):
         yield
         self._port_mode = 1  # 1 = single, 2 = dual
 
-        btn_single = bind_rom_mode_button(QPushButton(), 1, lambda: self._port_mode == 1)
-        btn_dual = bind_rom_mode_button(QPushButton(), 2, lambda: self._port_mode == 2)
+        btn_single = bind_rom_mode_button(RomModeButton(), 1, lambda: self._port_mode == 1)
+        btn_dual = bind_rom_mode_button(RomModeButton(), 2, lambda: self._port_mode == 2)
         for b in (btn_single, btn_dual):
             b.setCursor(Qt.PointingHandCursor)
             b.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -2214,8 +2214,9 @@ class AppUI(AppFeatures, QWidget):
         theme_outer.addSpacing(10)
         yield
 
-        # ── blur effect toggle ──
+        # ── shared effect-level dropdown ──
         from main_ext.class_WebToggle import WebToggle
+        from app_ext.class_EffectLevelDropdown import EffectLevelDropdown
 
         blur_row = QHBoxLayout()
         blur_row.setSpacing(10)
@@ -2224,9 +2225,9 @@ class AppUI(AppFeatures, QWidget):
         yield
         blur_text_col.setSpacing(2)
 
-        blur_title = bind_text(QLabel(), lambda: t("lbl_blur_effect"))
+        blur_title = bind_text(QLabel(), lambda: t("lbl_effect_level"))
         bind_style(blur_title, lambda: f"font-size:12px; font-weight:600; color:{_th.FG}; background:transparent; border:none;")
-        blur_desc = bind_text(QLabel(), lambda: t("txt_blur_effect_desc"))
+        blur_desc = bind_text(QLabel(), lambda: t("txt_effect_level_desc"))
         yield
         blur_desc.setWordWrap(True)
         bind_style(blur_desc, lambda: f"font-size:11px; color:{_th.FG_DESC}; background:transparent; border:none;")
@@ -2234,13 +2235,11 @@ class AppUI(AppFeatures, QWidget):
         blur_text_col.addWidget(blur_desc)
         yield
 
-        blur_toggle = WebToggle(_theme.blur_enabled, neutral=True)
-        blur_toggle.clicked.connect(
-            lambda: _theme.set_blur_enabled(blur_toggle.isChecked())
-        )
+        effect_level = EffectLevelDropdown()
+        self._effect_level_button = effect_level
 
         blur_row.addLayout(blur_text_col, 1)
-        blur_row.addWidget(blur_toggle)
+        blur_row.addWidget(effect_level)
         yield
         theme_outer.addLayout(blur_row)
 

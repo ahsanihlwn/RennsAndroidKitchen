@@ -24,8 +24,10 @@ __pycache__/
 venv/
 env/
 /native/rak_native/target/
+/native/rak_blur/target/
 *.lock
 !/native/rak_native/Cargo.lock
+!/native/rak_blur/Cargo.lock
 
 # Local state
 *.log

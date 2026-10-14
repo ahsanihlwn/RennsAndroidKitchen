@@ -1,0 +1,80 @@
+{
+  "scope": "Qt resize/blur work in an off-desktop fixture, not presented FPS",
+  "source_root": {
+    "resize_and_blur_paint": {
+      "median_ms": 6.763049997971393,
+      "p95_ms": 9.496299986494705,
+      "max_ms": 12.185300001874566
+    },
+    "dispatch": {
+      "median_ms": 16.003000011551194,
+      "p95_ms": 16.89489997806959,
+      "max_ms": 17.30370000586845
+    },
+    "slowest_step": {
+      "step": 53,
+      "resize_ms": 2.642000006744638,
+      "source_paint_ms": 0.13979998766444623,
+      "blur_paint_ms": 9.403500007465482
+    },
+    "blur_updates_during_drag": 0,
+    "blur_updates_after_drag": 1,
+    "gpu_composite_frames_during_drag": 0,
+    "distinct_backdrop_sizes_during_drag": 1,
+    "capture_finished": true,
+    "final_texture_logical_size": [
+      794.8270833333332,
+      611.2145833333333
+    ],
+    "final_root_size": [
+      706,
+      523
+    ]
+  },
+  "card_only": {
+    "resize_and_blur_paint": {
+      "median_ms": 14.07509998534806,
+      "p95_ms": 20.4117999819573,
+      "max_ms": 21.88789998763241
+    },
+    "dispatch": {
+      "median_ms": 24.202399989007972,
+      "p95_ms": 41.731699981028214,
+      "max_ms": 46.81920001166873
+    },
+    "slowest_step": {
+      "step": 33,
+      "resize_ms": 5.269799992674962,
+      "source_paint_ms": 0.001600012183189392,
+      "blur_paint_ms": 16.616499982774258
+    },
+    "blur_updates_during_drag": 0,
+    "blur_updates_after_drag": 0,
+    "gpu_composite_frames_during_drag": 8,
+    "distinct_backdrop_sizes_during_drag": 1,
+    "capture_finished": true,
+    "final_texture_logical_size": [
+      1058.0,
+      778.0708333333333
+    ],
+    "final_root_size": [
+      1000,
+      720
+    ]
+  },
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 10,
+    "texture_uploads": 1,
+    "blur_frames": 3,
+    "blur_backend": "rust-gaussian-opengl",
+    "rust_blur_frames": 3,
+    "rust_blur_error": null,
+    "texture_bytes": 2711040,
+    "surface_bytes": 5003944,
+    "last_error": null
+  }
+}

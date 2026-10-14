@@ -1,0 +1,68 @@
+{
+  "scope": "Qt resize/blur work in an off-desktop fixture, not presented FPS",
+  "source_root": {
+    "resize_and_blur_paint": {
+      "median_ms": 4.204900003969669,
+      "p95_ms": 6.4796000078786165,
+      "max_ms": 7.378000009339303
+    },
+    "dispatch": {
+      "median_ms": 16.093799989903346,
+      "p95_ms": 16.74229998025112,
+      "max_ms": 17.757800000254065
+    },
+    "blur_updates_during_drag": 0,
+    "blur_updates_after_drag": 0,
+    "gpu_composite_frames_during_drag": 0,
+    "distinct_backdrop_sizes_during_drag": 1,
+    "capture_finished": true,
+    "final_texture_logical_size": [
+      1088.0,
+      808.0666666666667
+    ],
+    "final_root_size": [
+      706,
+      523
+    ]
+  },
+  "card_only": {
+    "resize_and_blur_paint": {
+      "median_ms": 12.33295000565704,
+      "p95_ms": 19.306400005007163,
+      "max_ms": 21.752200002083555
+    },
+    "dispatch": {
+      "median_ms": 17.775950007489882,
+      "p95_ms": 24.49089998845011,
+      "max_ms": 28.608599997824058
+    },
+    "blur_updates_during_drag": 0,
+    "blur_updates_after_drag": 0,
+    "gpu_composite_frames_during_drag": 89,
+    "distinct_backdrop_sizes_during_drag": 1,
+    "capture_finished": true,
+    "final_texture_logical_size": [
+      1058.0,
+      778.0708333333333
+    ],
+    "final_root_size": [
+      1000,
+      720
+    ]
+  },
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 90,
+    "texture_uploads": 1,
+    "blur_frames": 2,
+    "blur_backend": "rust-gaussian-opengl",
+    "rust_blur_frames": 2,
+    "rust_blur_error": null,
+    "texture_bytes": 2711040,
+    "surface_bytes": 24565400,
+    "last_error": null
+  }
+}

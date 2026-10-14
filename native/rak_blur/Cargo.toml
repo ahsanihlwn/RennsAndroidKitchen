@@ -1,0 +1,19 @@
+[package]
+name = "rak-blur"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+license = "MPL-2.0"
+description = "RAK custom Gaussian GPU shader; no Windows Acrylic or text rendering"
+
+[lib]
+name = "rak_blur"
+crate-type = ["cdylib"]
+
+[dependencies]
+gl = "=0.14.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "unwind"

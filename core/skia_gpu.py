@@ -48,6 +48,8 @@ class _SkiaGpuRenderer(QObject):
         self._surface_bytes = 0
         self._frames = 0
         self._uploads = 0
+        self._blur_frames = 0
+        self._rust_gaussian = None
         self._last_error = None
         self._gpu = None
         self._sampling = skia.SamplingOptions(skia.FilterMode.kLinear)
@@ -209,6 +211,29 @@ class _SkiaGpuRenderer(QObject):
                 previous.makeCurrent(previous_surface)
             self._rendering = False
 
+    def gaussian(self, source, sigma):
+        if self._closed or self._rendering or source.width()*source.height()*4 > _SURFACE_BUDGET:
+            return None
+        previous = QOpenGLContext.currentContext()
+        previous_surface = previous.surface() if previous is not None else None
+        self._rendering = True
+        try:
+            if not self._context.makeCurrent(self._surface):
+                return None
+            self._gpu.flushAndSubmit()
+            if self._rust_gaussian is None:
+                from core.rust_blur import RustGaussian
+                self._rust_gaussian = RustGaussian()
+            return self._rust_gaussian.blur(source, sigma)
+        finally:
+            # Raw GL is external to Ganesh's state cache. Re-establish its
+            # state before any button/card/Qt-font asset composition.
+            self._gpu.resetContext()
+            self._context.doneCurrent()
+            if previous is not None and previous_surface is not None:
+                previous.makeCurrent(previous_surface)
+            self._rendering = False
+
     def close(self):
         if self._closed:
             return
@@ -217,6 +242,9 @@ class _SkiaGpuRenderer(QObject):
         previous_surface = previous.surface() if previous is not None else None
         current = self._surface is not None and self._context.makeCurrent(self._surface)
         try:
+            if self._rust_gaussian is not None:
+                self._rust_gaussian.close()
+                self._rust_gaussian = None
             self._textures.clear()
             self._surfaces.clear()
             if self._gpu is not None:
@@ -276,6 +304,39 @@ def gpu_available():
     return _renderer() is not None
 
 
+def blur_gpu(source, radius=18.0):
+    """Custom Rust Gaussian on the shared GPU context, in logical pixels.
+
+    Rust's separable GLSL shader runs on the existing OpenGL context. Only the
+    finished, frozen backdrop is read back for Qt's native window compositor;
+    fades reuse that image rather than re-running the filter every frame.
+    None requests the Qt fallback when a GPU/context/allocation is unavailable.
+    """
+    renderer = _renderer()
+    radius = float(radius)
+    if renderer is None or source.isNull() or not math.isfinite(radius):
+        return None
+    ratio = source.devicePixelRatioF()
+    size = (source.width() / ratio, source.height() / ratio)
+    sigma = max(0.0, radius) * 0.5
+    result = renderer.gaussian(source, sigma*ratio)
+    if result is not None:
+        renderer._blur_frames += 1
+        return result
+
+    def draw(canvas, bridge):
+        texture = bridge.image(source)
+        paint = skia.Paint()
+        if sigma > 0:
+            paint.setImageFilter(skia.ImageFilters.Blur(sigma, sigma, skia.TileMode.kClamp))
+        canvas.drawImageRect(texture, skia.Rect.MakeWH(*size), bridge._sampling, paint)
+
+    result = renderer.render(size, ratio, draw)
+    if result is not None:
+        renderer._blur_frames += 1
+    return result
+
+
 class GpuOpacityEffect(QGraphicsOpacityEffect):
     """Qt-compatible opacity effect composed on the shared Skia GPU surface."""
     def __init__(self, parent=None):
@@ -325,6 +386,10 @@ def gpu_backend_status():
         "backend": "skia-gpu", "renderer": renderer._renderer_name,
         "vendor": renderer._vendor, "opengl": renderer._version,
         "frames": renderer._frames, "texture_uploads": renderer._uploads,
+        "blur_frames": renderer._blur_frames,
+        "blur_backend": "rust-gaussian-opengl" if renderer._rust_gaussian is not None and renderer._rust_gaussian.frames else "skia-gaussian-opengl",
+        "rust_blur_frames": renderer._rust_gaussian.frames if renderer._rust_gaussian is not None else 0,
+        "rust_blur_error": renderer._rust_gaussian.error if renderer._rust_gaussian is not None else None,
         "texture_bytes": renderer._texture_bytes, "surface_bytes": renderer._surface_bytes,
         "last_error": renderer._last_error,
     }

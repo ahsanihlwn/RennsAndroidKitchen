@@ -10,20 +10,25 @@ _PATCHES = OrderedDict()
 
 
 class SurfacePatch:
-    def __init__(self, shape, ratio):
+    def __init__(self, shape, ratio, *, end_phase=(0, 0), center_pixels=2):
         self.shape = shape
         self.cap = math.ceil((shape.radius + max(1, shape.width) + 1)*ratio) / ratio
-        key = (shape.background.rgba(), shape.border.rgba(), shape.width, shape.radius, ratio)
+        key = (shape.background.rgba(), shape.border.rgba(), shape.width, shape.radius,
+               ratio, end_phase, center_pixels)
         cached = _PATCHES.pop(key, None)
         if cached is not None:
             self.image = cached
             _PATCHES[key] = cached
             return
-        size = self.cap*2 + 2/ratio
-        rect = QRectF(0, 0, size, size)
-        self.image = render_gpu(QSizeF(size, size), ratio, lambda canvas, bridge: shape.draw(canvas, bridge, rect))
+        # Match the final edge's subpixel position at fractional display scales.
+        # Its ceil-sized pixel buffer can then be copied on the pixel grid,
+        # without resampling the already antialiased corners.
+        width = self.cap*2 + (center_pixels + end_phase[0])/ratio
+        height = self.cap*2 + (center_pixels + end_phase[1])/ratio
+        rect = QRectF(0, 0, width, height)
+        self.image = render_gpu(QSizeF(width, height), ratio, lambda canvas, bridge: shape.draw(canvas, bridge, rect))
         if self.image is None:
-            self.image = QImage(round(size*ratio), round(size*ratio), QImage.Format_ARGB32_Premultiplied)
+            self.image = QImage(math.ceil(width*ratio), math.ceil(height*ratio), QImage.Format_ARGB32_Premultiplied)
             self.image.setDevicePixelRatio(ratio)
             self.image.fill(Qt.transparent)
             painter = QPainter(self.image)

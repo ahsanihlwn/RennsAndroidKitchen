@@ -1,0 +1,140 @@
+{
+  "cycles": 10,
+  "errors": [],
+  "warnings": [],
+  "visible_overlays": [],
+  "scene_active": false,
+  "cached_transition_active": false,
+  "window_size": [
+    1080,
+    700
+  ],
+  "settings_back_bounds": [
+    945,
+    636,
+    99,
+    32
+  ],
+  "checks": [
+    {
+      "index": 0,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 1,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 2,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 3,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 4,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 5,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 6,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 7,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 8,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 9,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 10,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 11,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 12,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 13,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 14,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 15,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 16,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 17,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 18,
+      "page": 2,
+      "updates_enabled": true,
+      "visible": true
+    },
+    {
+      "index": 19,
+      "page": 0,
+      "updates_enabled": true,
+      "visible": true
+    }
+  ]
+}

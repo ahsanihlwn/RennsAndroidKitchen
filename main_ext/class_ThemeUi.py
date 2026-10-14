@@ -400,6 +400,8 @@ class _Theme:
         self._palette = {}
         self._listeners = []          # callables → called after set()
         self._blur_enabled = True     # blur card/overlay effect — bisa dimatikan biar ringan
+        self._effect_level = "medium"
+        self._effect_level_listeners = []
         self._animations_enabled = True  # fade/slide transition — bisa dimatikan biar instan
         self._project_drive_filters = {}  # drive yang dimatikan; drive baru default aktif
         self._tree_view_mode = "tree"    # "tree" | "single_dir" — mode tampilan FileTree
@@ -416,12 +418,37 @@ class _Theme:
         return self._blur_enabled
 
     def set_blur_enabled(self, enabled: bool):
+        # Compatibility for existing integrations; the UI uses effect levels.
+        self.set_effect_level("medium" if enabled else "low")
 
-        enabled = bool(enabled)
-        if enabled == self._blur_enabled:
+    @property
+    def effect_level(self) -> str:
+        return "low" if not self._blur_enabled else ("high" if self._effect_level == "high" else "medium")
+
+    @property
+    def live_blur_enabled(self) -> bool:
+        return self.effect_level == "high"
+
+    def set_effect_level(self, level: str):
+        level = str(level).casefold()
+        if level not in ("low", "medium", "high") or level == self.effect_level:
             return
-        self._blur_enabled = enabled
+        self._effect_level = level
+        self._blur_enabled = level != "low"
         self._save_settings()
+        for callback in list(self._effect_level_listeners):
+            try:
+                callback(level)
+            except RuntimeError:
+                self.remove_effect_level_listener(callback)
+
+    def on_effect_level_change(self, callback):
+        if callback not in self._effect_level_listeners:
+            self._effect_level_listeners.append(callback)
+
+    def remove_effect_level_listener(self, callback):
+        if callback in self._effect_level_listeners:
+            self._effect_level_listeners.remove(callback)
 
     @property
     def animations_enabled(self) -> bool:
@@ -572,7 +599,11 @@ class _Theme:
         try:
             with open(_SETTINGS_FILE, "r") as f:
                 data = json.load(f)
-            self._blur_enabled = bool(data.get("blur_enabled", True))
+            level = data.get("effect_level")
+            if level not in ("low", "medium", "high"):
+                level = "medium" if data.get("blur_enabled", True) else "low"
+            self._effect_level = level
+            self._blur_enabled = level != "low"
             self._animations_enabled = bool(data.get("animations_enabled", True))
             saved_drives = data.get("project_drive_filters", {})
             self._project_drive_filters = {}
@@ -744,6 +775,7 @@ class _Theme:
             with open(_SETTINGS_FILE, "w") as f:
                 json.dump({
                     "blur_enabled": self._blur_enabled,
+                    "effect_level": self.effect_level,
                     "animations_enabled": self._animations_enabled,
                     "project_drive_filters": self._project_drive_filters,
                     "tree_view_mode": self._tree_view_mode,

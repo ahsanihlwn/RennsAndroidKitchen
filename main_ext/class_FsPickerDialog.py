@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QWidget, QScrollArea, QSizePolicy, QFrame
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtGui  import QIcon
 
 from icons.handler import icon
@@ -416,6 +416,7 @@ class FsPickerDialog(QDialog):
 
     # interaction
 
+    @Slot(str)
     def _on_card_selected(self, fs_name: str):
         # deselect previous
         if self._active_card:
@@ -429,6 +430,7 @@ class FsPickerDialog(QDialog):
         self._sel_fs = fs_name
         self._btn_ok.setEnabled(True)
 
+    @Slot()
     def _confirm(self):
         if not self._sel_fs or not self._sel_tree:
             return
@@ -457,12 +459,27 @@ class FsPickerDialog(QDialog):
     def pick(parent, main_win, callback, with_blur=True, overlay=None):
 
         from app_ext.class_BlurOverlay import BlurOverlay as _BlurOverlay, install_window_fade
-        dlg = FsPickerDialog(parent, main_win, callback)
+        delivered = False
+
+        def deliver(project_base, tree, fs_name):
+            nonlocal delivered
+            if delivered:
+                return
+            delivered = True
+            callback(project_base, tree, fs_name)
+
+        dlg = FsPickerDialog(parent, main_win, deliver)
+        dlg.finished.connect(lambda result: deliver(None, None, None)
+                             if result == QDialog.Rejected else None)
         owned_ov = _BlurOverlay(parent) if (parent and with_blur and overlay is None) else None
         _ov = overlay or owned_ov
         if _ov:
             dlg._overlay = _ov
-        install_window_fade(dlg)
-        dlg.exec()
-        if owned_ov:
-            owned_ov.close_overlay()
+        install_window_fade(dlg, close_overlay_on_finish=overlay is None,
+                            freeze_backdrop_immediately=overlay is not None)
+        try:
+            dlg.exec()
+        finally:
+            if owned_ov:
+                owned_ov.close_overlay()
+            dlg.deleteLater()

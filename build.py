@@ -109,6 +109,7 @@ def nuitka_command(output, *, private_build, debug, jobs):
         "--enable-plugin=pyside6", "--include-qt-plugins=sensible,multimedia",
         f"--report={output / 'report.xml'}", f"--jobs={jobs}",
         "--include-package-data=capstone", "--include-package-data=elftools",
+        f"--user-package-configuration-file={ROOT / 'native/rak_blur/nuitka-package.config.yml'}",
     ]
     packages = list(INCLUDE_PACKAGES)
     third_party = list(THIRD_PARTY_PACKAGES)
@@ -186,6 +187,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4, help="Parallel compiler jobs")
     parser.add_argument("--clean", action="store_true", help="Remove this edition's previous Nuitka build")
     parser.add_argument("--rebuild-rust", action="store_true", help="Force a Rust rebuild")
+    parser.add_argument("--rebuild-blur", action="store_true", help="Rebuild the Rust Gaussian GPU shader")
     args = parser.parse_args()
     if sys.platform != "win32":
         parser.error("This builder produces Windows releases.")
@@ -202,6 +204,9 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     ensure_python_dependencies(private_build=private_build)
     native_target = prepare_native(force=args.rebuild_rust)
+    if args.rebuild_blur or not (ROOT / "core/native/rak_blur.dll").is_file():
+        from tools.build_gpu_blur import main as build_blur
+        build_blur()
     command = nuitka_command(output, private_build=private_build, debug=args.debug, jobs=args.jobs)
     print("Nuitka: compiling kitchen", flush=True)
     subprocess.run(command, cwd=ROOT, env=native_environment(native_target), check=True)

@@ -2,11 +2,14 @@
 """ROM mode dots are icons; captions keep the bundled native Qt font."""
 from functools import lru_cache
 import math
-from PySide6.QtCore import QObject, QEvent, QSize, QRectF, Qt
-from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap
+from PySide6.QtCore import QObject, QEvent, QSize, QRectF, Qt, QPointF
+from PySide6.QtGui import QColor, QIcon, QPainter, QPixmap, QPalette, QFontMetricsF
+from PySide6.QtWidgets import QStyleOptionButton, QStyle
 
 from core.language_binding import bind_text
 from main_ext.class_ThemeUi import theme
+from app_ext.class_ButtonPressAnimation import PressAnimatedButton, button_press_scale
+from core.skia_button import render_button
 
 
 @lru_cache(maxsize=64)
@@ -34,6 +37,7 @@ class _Marker(QObject):
         self.button, self.count, self.active = button, count, active
         button.installEventFilter(self)
         button._refresh_rom_marker = self.refresh
+        button._qt_button_caption = self.draw_caption
         self.refresh()
 
     def refresh(self):
@@ -51,6 +55,46 @@ class _Marker(QObject):
         if event.type() in (QEvent.StyleChange, QEvent.PaletteChange, QEvent.DevicePixelRatioChange):
             self.refresh()
         return False
+
+    def draw_caption(self, painter, option, rect):
+        """Center the dots and shaped Qt caption together with a fixed 6px gap."""
+        metrics = QFontMetricsF(self.button.font())
+        icon_width = self.button.iconSize().width()
+        text = metrics.elidedText(self.button.text(), Qt.ElideRight,
+                                  max(0, rect.width() - icon_width - 12))
+        width = icon_width + 6 + metrics.horizontalAdvance(text)
+        left = rect.center().x() - width / 2
+        mode = (QIcon.Disabled if not option.state & QStyle.State_Enabled else
+                QIcon.Active if option.state & QStyle.State_MouseOver else QIcon.Normal)
+        icon = self.button.icon().pixmap(self.button.iconSize(),
+                                        self.button.devicePixelRatioF(), mode)
+        painter.drawPixmap(QPointF(left, rect.center().y() - 5.5), icon)
+        painter.setFont(self.button.font())
+        painter.setPen(option.palette.color(QPalette.ButtonText))
+        painter.drawText(QRectF(left + icon_width + 6, rect.y(),
+                               metrics.horizontalAdvance(text) + 1, rect.height()),
+                         Qt.AlignLeft | Qt.AlignVCenter, text)
+
+
+class RomModeButton(PressAnimatedButton):
+    def paintEvent(self, event):
+        scale = button_press_scale(self)
+        image = render_button(self, scale)
+        painter = QPainter(self)
+        if image is not None:
+            painter.drawImage(0, 0, image)
+        else:
+            option = QStyleOptionButton()
+            self.initStyleOption(option)
+            rect = QRectF(self.rect())
+            painter.setRenderHints(QPainter.Antialiasing | QPainter.TextAntialiasing)
+            painter.translate(rect.center())
+            painter.scale(scale, scale)
+            painter.translate(-rect.center())
+            self.style().drawControl(QStyle.CE_PushButtonBevel, option, painter, self)
+            contents = self.style().subElementRect(QStyle.SE_PushButtonContents, option, self)
+            self._qt_button_caption(painter, option, QRectF(contents))
+        painter.end()
 
 
 def bind_rom_mode_button(button, count, active, translate=None):

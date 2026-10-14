@@ -1,0 +1,10 @@
+- module-name: 'core'
+  dlls:
+    - from_filenames:
+        relative_path: 'native'
+        prefixes:
+          - 'rak_blur'
+        suffixes:
+          - 'dll'
+      dest_path: 'core/native'
+      when: 'win32'

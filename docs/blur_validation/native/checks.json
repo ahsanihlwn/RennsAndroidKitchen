@@ -1,0 +1,96 @@
+{
+  "gpu_initialization_ms": 312.88080001831986,
+  "first_gpu_blur_ms": 98.1679999968037,
+  "gpu_gaussian": {
+    "samples": 30,
+    "median_ms": 3.471999996691011,
+    "p95_ms": 4.333199991378933,
+    "max_ms": 4.457700008060783
+  },
+  "qt_cpu_fallback": {
+    "samples": 30,
+    "median_ms": 7.17024999903515,
+    "p95_ms": 14.342099981149659,
+    "max_ms": 18.85359999141656
+  },
+  "levels": {
+    "low": {
+      "show_and_settle_ms": 597.8554000030272,
+      "live": false,
+      "dispatch": {
+        "samples": 120,
+        "median_ms": 15.98194999678526,
+        "p95_ms": 43.06090000318363,
+        "max_ms": 57.99870000919327
+      },
+      "move_handler": {
+        "samples": 120,
+        "median_ms": 5.125850002514198,
+        "p95_ms": 42.8507000033278,
+        "max_ms": 57.80790001153946
+      },
+      "live_shader_updates": 0,
+      "idle_shader_updates": 0,
+      "transparent_outer_corner": true,
+      "native_font_family": "Consolas"
+    },
+    "medium": {
+      "show_and_settle_ms": 146.47449998301454,
+      "live": false,
+      "dispatch": {
+        "samples": 120,
+        "median_ms": 16.05855001253076,
+        "p95_ms": 36.805500014452264,
+        "max_ms": 53.738699993118644
+      },
+      "move_handler": {
+        "samples": 120,
+        "median_ms": 5.541549980989657,
+        "p95_ms": 37.79130001203157,
+        "max_ms": 53.22980001801625
+      },
+      "live_shader_updates": 0,
+      "idle_shader_updates": 0,
+      "transparent_outer_corner": true,
+      "native_font_family": "Consolas"
+    },
+    "high": {
+      "show_and_settle_ms": 191.07980001717806,
+      "live": true,
+      "dispatch": {
+        "samples": 120,
+        "median_ms": 18.267749997903593,
+        "p95_ms": 53.318000020226464,
+        "max_ms": 68.97419999586418
+      },
+      "move_handler": {
+        "samples": 120,
+        "median_ms": 10.549350001383573,
+        "p95_ms": 51.372600020840764,
+        "max_ms": 64.18629997642711
+      },
+      "live_shader_updates": 4,
+      "idle_shader_updates": 0,
+      "transparent_outer_corner": true,
+      "native_font_family": "Consolas",
+      "last_backdrop_timings": {
+        "capture_work_ms": 40.37679999601096,
+        "capture_elapsed_ms": 42.92929999064654,
+        "filter_ms": 0.5609999934677035
+      }
+    }
+  },
+  "backend": {
+    "backend": "skia-gpu",
+    "renderer": "Radeon RX 560 Series",
+    "vendor": "ATI Technologies Inc.",
+    "opengl": "3.3",
+    "frames": 161,
+    "texture_uploads": 18,
+    "blur_frames": 38,
+    "blur_backend": "skia-gaussian-opengl",
+    "texture_bytes": 33442288,
+    "surface_bytes": 6144736,
+    "last_error": null
+  }
+}
