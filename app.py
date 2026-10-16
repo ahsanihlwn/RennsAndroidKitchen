@@ -46,6 +46,58 @@ try:
 except Exception:
     logging.exception("Could not initialize native crash logging")
 
+# Concurrent first imports have crashed CPython 3.14/PySide6 6.10.1 during GC
+# (0xC0000005). Serialize imports and defer GC during startup; see
+# core/import_gate.py.
+try:
+    from core.import_gate import (
+        install as _install_import_gate,
+        release as _release_import_gate,
+    )
+    _install_import_gate()
+except Exception:
+    _release_import_gate = None
+    logging.exception("Could not install the startup import gate")
+
+import gc as _gc
+
+_startup_gc_hold = [False]
+try:
+    if _gc.isenabled():
+        _gc.disable()
+        _startup_gc_hold[0] = True
+except Exception:
+    logging.exception("Could not pause the garbage collector for startup")
+
+
+def _end_startup_import_window():
+    """Resume the GC and restore the stock __import__ once startup is done.
+
+    Idempotent: safe to call from the reveal signal and from the fallback
+    timer, whichever fires first.
+    """
+    if _startup_gc_hold[0]:
+        _startup_gc_hold[0] = False
+        try:
+            _gc.enable()
+        except Exception:
+            logging.exception("Could not resume the garbage collector")
+    if _release_import_gate is not None:
+        try:
+            _release_import_gate()
+        except Exception:
+            logging.exception("Could not release the startup import gate")
+
+
+# Fallback for spawn children and startup paths that never emit startup_revealed.
+try:
+    _gate_watchdog = _threading.Timer(15.0, _end_startup_import_window)
+    _gate_watchdog.daemon = True
+    _gate_watchdog.start()
+except Exception:
+    logging.exception("Could not arm the startup import-window watchdog")
+
+
 def _queue_crash_dialog(text):
     try:
         from core.error_reporting import report_fatal
@@ -5058,6 +5110,8 @@ if __name__ == "__main__":
         _maybe_reveal_startup()
 
     def _on_startup_revealed():
+        # Startup imports are complete; resume GC and restore the original hook.
+        _end_startup_import_window()
         w._restore_account_startup()
 
     w.startup_built.connect(_on_startup_built)
