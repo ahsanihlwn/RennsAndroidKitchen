@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
 import sys
-import subprocess
+from core import kitchen_process as subprocess
 from core.app_paths import BIN_DIR
+from core.command_context import OperationError
 print("[CORE STAGE] EXT4 REPACK")
 
 
@@ -131,9 +132,9 @@ def auto_detect_partition_name(config_dir: str) -> str:
 
     candidates = [fn for fn in os.listdir(config_dir) if fn.endswith("_info")]
     if not candidates:
-        raise RuntimeError("Gak nemu *_info di folder config, kasih partition_name di argumen dong.")
+        raise OperationError("Gak nemu *_info di folder config, kasih partition_name di argumen dong.")
     if len(candidates) > 1:
-        raise RuntimeError("Ada banyak *_info di config, tolong kasih partition_name di argumen.")
+        raise OperationError("Ada banyak *_info di config, tolong kasih partition_name di argumen.")
 
     name = os.path.splitext(candidates[0])[0]
     # "product_info" -> "product"

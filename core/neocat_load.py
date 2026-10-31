@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
 import shutil
-import subprocess
+from core import kitchen_process as subprocess
 
 from core.proc_util import CREATE_NO_WINDOW
 from core.app_paths import APP_ROOT, NEOCAT_DATA_DIR, NEOCAT_LEARNING_DIR, migrate_legacy_dir

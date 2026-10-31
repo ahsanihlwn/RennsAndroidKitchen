@@ -181,7 +181,8 @@ def cmd_stat(args: List[str], cwd: str) -> Tuple[bool, str]:
 
     internal_path = pos[1].strip("/").replace("\\", "/")
     try:
-        _, node = imgfs.read_path(img_path, internal_path)
+        reader, node = imgfs.resolve_node(img_path, internal_path)
+        imgfs._close(reader)
     except FileNotFoundError:
         return False, f"Path not found in image: '{internal_path}'"
     except Exception as e:
@@ -620,10 +621,13 @@ def cmd_mounted(main_ref=None) -> Tuple[bool, str]:
             pass
 
     tree = getattr(main_ref, "active_tree", None) if main_ref else None
-    if not tree or not hasattr(tree, "_mounts"):
+    if not tree:
         return False, "RAK Kitchen GUI is not currently running. No active virtual mounts in GUI."
-
-    mounts = list(tree._mounts.keys())
+    coordinator=getattr(tree,'mounts',None)
+    if coordinator is not None:
+        mounts=[image for image,base in coordinator._image_base.items() if base==tree.base]
+    elif hasattr(tree,'_mounts'):mounts=list(tree._mounts.keys())
+    else:return False, "RAK Kitchen GUI is not currently running. No active virtual mounts in GUI."
     if not mounts:
         return True, "No images are currently mounted in the Kitchen GUI."
 

@@ -23,7 +23,7 @@ import platform
 import re
 import shlex
 import shutil
-import subprocess
+from core import kitchen_process as subprocess
 import sys
 import tempfile
 import threading

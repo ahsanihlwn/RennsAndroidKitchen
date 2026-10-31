@@ -21,6 +21,7 @@ from queue import Queue
 from typing import IO, List
 
 import requests
+from core.command_context import OperationError
 
 # Support package imports and direct execution.
 try:
@@ -30,7 +31,7 @@ except ImportError:
 
 print("[CORE STAGE] PAYLOAD EXTRACT")
 
-class BadPayload(Exception):
+class BadPayload(OperationError):
     def __init__(self, *args):
         super().__init__("Invalid payload:", *args)
 
@@ -144,7 +145,9 @@ class OrderedFileWriter(object):
 
 
 def init_payload_info(reader: IO[bytes]) -> update_metadata_pb2.DeltaArchiveManifest:
-    hdr = PayloadHdr(reader.read(struct.calcsize(PayloadHdr._fmtstr)))
+    from google.protobuf.message import DecodeError
+    try:hdr = PayloadHdr(reader.read(struct.calcsize(PayloadHdr._fmtstr)))
+    except struct.error as error:raise BadPayload('truncated header') from error
 
     if hdr.magic != PAYLOAD_MAGIC:
         raise BadPayload("invalid magic")
@@ -155,9 +158,11 @@ def init_payload_info(reader: IO[bytes]) -> update_metadata_pb2.DeltaArchiveMani
     if hdr.manifest_sig_len == 0:
         raise BadPayload("manifest signature length is zero")
 
-    manifest = update_metadata_pb2.DeltaArchiveManifest.FromString(
-        reader.read(hdr.manifest_len)
-    )
+    try:
+        data=reader.read(hdr.manifest_len)
+        if len(data)!=hdr.manifest_len:raise BadPayload('truncated manifest')
+        manifest = update_metadata_pb2.DeltaArchiveManifest.FromString(data)
+    except DecodeError as error:raise BadPayload('invalid manifest') from error
     if manifest.minor_version not in [0, 8]:
         print(f"[!] Delta payload detected (minor_version={manifest.minor_version})")
 

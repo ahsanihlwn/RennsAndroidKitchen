@@ -29,8 +29,11 @@ def scan_tree_directory(spec):
         physical = spec["branch"]
     try:
         rows = directory_entries(physical, base)
-    except (FileNotFoundError, NotADirectoryError):
-        if spec.get("folder_symlink"):
+    except OSError:
+        # Rust's directory API reports missing paths as a plain OSError.
+        # A missing or stale folder link is an empty view, not a startup/modal
+        # error. Keep real listing failures (e.g. access denied) visible.
+        if spec.get("folder_symlink") and not os.path.isdir(physical):
             rows = []
         else:
             raise
@@ -39,29 +42,49 @@ def scan_tree_directory(spec):
         entry["branch"] = entry["path"] if branch_only else None
 
     nb = NeoBranchManager(base)
+    has_branches = os.path.isdir(os.path.join(base, NB_STORE_DIR))
+    has_apk_mirrors = os.path.isdir(os.path.join(base, apktool_tool.APKTOOL_DEC_DIR))
     is_root = os.path.normcase(os.path.normpath(logical)) == os.path.normcase(os.path.normpath(base))
     colors = {}
     if not branch_only:
         if is_root:
             store = os.path.join(base, NB_STORE_DIR)
             try:
-                roots = os.listdir(store)
+                roots = {
+                    root for root in os.listdir(store)
+                    if os.path.isdir(os.path.join(store, root))
+                }
             except OSError:
-                roots = []
-            for root in roots:
+                roots = set()
+            # A physical checkout remains visible at project/<partition>.
+            # Include it in root color metadata even without a sparse overlay.
+            try:
+                roots.update(
+                    name for name in os.listdir(base)
+                    if os.path.isdir(os.path.join(base, name))
+                )
+            except OSError:
+                pass
+            for root in sorted(roots):
                 active = nb.get_active_branch(root)
                 colors[root] = active.get("color", "blue") if active else None
                 source = os.path.join(base, root)
-                if active and not os.path.lexists(source):
+                physical_checkout = bool(
+                    active and getattr(nb, "is_physical_checkout", lambda _root: False)(root)
+                )
+                if active and not physical_checkout and not os.path.lexists(source):
                     branch = nb._branch_fs_dir(root, active["name"])
                     if os.path.isdir(branch):
                         rows.append(dict(name=root, path=branch, source=source, branch=branch,
                                          is_dir=True, size=0, mtime_ns=0, symlink=None, magic=""))
-        else:
+        elif has_branches:
             rel = os.path.relpath(logical, base).replace("\\", "/")
             root, _, inside = rel.partition("/")
             active = nb.get_active_branch(root)
-            if active:
+            physical_checkout = bool(
+                active and getattr(nb, "is_physical_checkout", lambda _root: False)(root)
+            )
+            if active and not physical_checkout:
                 branch_dir = os.path.join(nb._branch_fs_dir(root, active["name"]), inside.replace("/", os.sep))
                 deleted = nb.deleted_set_for_branch(root, active["name"])
                 def is_deleted(entry):
@@ -84,7 +107,8 @@ def scan_tree_directory(spec):
     dropped = set(spec.get("dropped_badge_paths", ()))
     for entry in rows:
         name, is_dir, source = entry["name"], entry["is_dir"], entry["source"]
-        if name.startswith(".rak_") or name.casefold() in {"agents.md", "claude.md", "codex.md"}:
+        legacy_extract_temp = not is_dir and name.startswith(".rak-extract-") and name.endswith(".part")
+        if name.startswith((".rak_", ".rak-agent-docs-")) or legacy_extract_temp or name.casefold() in {"agents.md", "claude.md", "codex.md", "gemini.md"}:
             continue
         if is_root and (name == NB_STORE_DIR or (
                 is_dir and name.casefold() == apktool_tool.APKTOOL_DEC_DIR.casefold()
@@ -93,7 +117,7 @@ def scan_tree_directory(spec):
         entry["fs_type"] = detect_fs_root(base, name) if is_dir and is_root else ""
         entry["collapse"] = _collapse_target(entry["path"]) if is_dir else None
         entry["apk_mirror"] = apktool_tool.mirror_dir_for(base, source) if (
-            source.lower().endswith(".apk") and apktool_tool.is_decompiled(base, source)) else None
+            has_apk_mirrors and source.lower().endswith(".apk") and apktool_tool.is_decompiled(base, source)) else None
         low = name.lower()
         badge = entry["magic"] if low.endswith(".img") or (
             low.endswith(".bin") and entry["magic"] == "PAYLOAD") else ""

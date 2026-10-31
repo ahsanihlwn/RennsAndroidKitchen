@@ -10,6 +10,15 @@ _LEGACY_USER_DIR = os.path.join(APP_ROOT, "user")
 
 _SETTINGS_FILE = os.path.join(_USER_DIR, "settings.json")
 
+BLUR_RADIUS_DEFAULT = 6
+BLUR_RADIUS_MAXIMUM = 26
+
+
+def blur_radius_value(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= BLUR_RADIUS_MAXIMUM:
+        return None
+    return round(value)
+
 
 def _migrate_legacy_user_state():
 
@@ -401,6 +410,7 @@ class _Theme:
         self._listeners = []          # callables → called after set()
         self._blur_enabled = True     # blur card/overlay effect — bisa dimatikan biar ringan
         self._effect_level = "medium"
+        self._blur_radius = BLUR_RADIUS_DEFAULT
         self._effect_level_listeners = []
         self._animations_enabled = True  # fade/slide transition — bisa dimatikan biar instan
         self._project_drive_filters = {}  # drive yang dimatikan; drive baru default aktif
@@ -422,12 +432,24 @@ class _Theme:
         self.set_effect_level("medium" if enabled else "low")
 
     @property
+    def blur_radius(self) -> int:
+        return self._blur_radius
+
+    def set_blur_radius(self, radius):
+        radius = blur_radius_value(radius)
+        if radius is None or radius == self._blur_radius:
+            return
+        self._blur_radius = radius
+        self._save_settings()
+
+    @property
     def effect_level(self) -> str:
         return "low" if not self._blur_enabled else ("high" if self._effect_level == "high" else "medium")
 
     @property
     def live_blur_enabled(self) -> bool:
-        return self.effect_level == "high"
+        # Compatibility for integrations; all cards now use frozen blur.
+        return False
 
     def set_effect_level(self, level: str):
         level = str(level).casefold()
@@ -604,6 +626,8 @@ class _Theme:
                 level = "medium" if data.get("blur_enabled", True) else "low"
             self._effect_level = level
             self._blur_enabled = level != "low"
+            radius = blur_radius_value(data.get("blur_radius", BLUR_RADIUS_DEFAULT))
+            self._blur_radius = radius if radius is not None else BLUR_RADIUS_DEFAULT
             self._animations_enabled = bool(data.get("animations_enabled", True))
             saved_drives = data.get("project_drive_filters", {})
             self._project_drive_filters = {}
@@ -640,6 +664,13 @@ class _Theme:
     def border_color(self, a: float) -> str:
         r, g, b = self._palette["_border_rgb"]
         return f"rgba({r},{g},{b},{a})"
+
+    def panel_border_color(self) -> str:
+        """Keep foreground dialog outlines subtle over High's frozen backdrop."""
+        if self.effect_level == "high":
+            channel = 0 if self.is_light else 255
+            return f"rgba({channel},{channel},{channel},0.06)"
+        return self.border_color(0.22)
 
     # fixed-color helpers (always same RGB, alpha varies)
     def blue(self, a: float)    -> str: return f"rgba(77,142,240,{a})"
@@ -776,6 +807,7 @@ class _Theme:
                 json.dump({
                     "blur_enabled": self._blur_enabled,
                     "effect_level": self.effect_level,
+                    "blur_radius": self._blur_radius,
                     "animations_enabled": self._animations_enabled,
                     "project_drive_filters": self._project_drive_filters,
                     "tree_view_mode": self._tree_view_mode,

@@ -8,7 +8,7 @@ import os
 import re
 import shutil
 import struct
-import subprocess
+from core import kitchen_process as subprocess
 from pathlib import Path
 from typing import Any
 
@@ -220,7 +220,7 @@ def unpack_vendor_boot_v4(
         if dec_bytes:
             e_cpio_path.write_bytes(dec_bytes)
         else:
-            mbt.run([magiskboot, "decompress", e_comp_path.name, e_cpio_path.name], meta_dir)
+            mbt.decompress_ramdisk_component(e_comp_path, e_cpio_path, magiskboot)
         shutil.copyfile(e_cpio_path, e_pristine_path)
 
         # Extract to index files
@@ -334,7 +334,7 @@ def prepare_v4_meta_from_source(
             if dec_bytes:
                 e_cpio_path.write_bytes(dec_bytes)
             else:
-                mbt.run([magiskboot, "decompress", e_comp_path.name, e_cpio_path.name], meta_dir)
+                mbt.decompress_ramdisk_component(e_comp_path, e_cpio_path, magiskboot)
             shutil.copyfile(e_cpio_path, e_pristine_path)
 
         with tempfile.TemporaryDirectory(prefix="v4_index_") as tmp_ext:
@@ -475,6 +475,17 @@ def repack_vendor_boot_v4(
                 elif original_bytes.startswith((b"070701", b"070702")):
                     comp_bytes = dec.read_bytes()
                     compression = "raw"
+                elif original_bytes.startswith(b"\x28\xb5\x2f\xfd"):
+                    # The bundled magiskboot does not support Zstandard. Edited
+                    # v4 fragments need the same native codec as initial unpack.
+                    try:
+                        from compression import zstd
+                        comp_bytes = zstd.compress(dec.read_bytes())
+                    except Exception as exc:
+                        import logging
+                        logging.exception("Repack Boot: Zstandard fragment encode failed: %s", idx)
+                        raise mbt.ToolError(f"Zstandard fragment {idx} encode failed: {exc}") from exc
+                    compression = "zstd"
                 else:
                     detected = mbt.run(
                         [magiskboot, "decompress", original_comp, "original.dec"],

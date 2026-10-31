@@ -2,7 +2,7 @@
 import os
 import io
 import re
-import subprocess
+from core import kitchen_process as subprocess
 import shlex
 
 from core.proc_util import CREATE_NO_WINDOW
@@ -63,7 +63,8 @@ def read_file(path, max_bytes=MAX_READ_BYTES, start_line=None, end_line=None):
         return {"ok": False, "error": err}
     try:
         from core.rak_neobranch_view import ActiveProjectView
-        physical, origin = ActiveProjectView(workspace_root()).resolve(full)
+        view=ActiveProjectView(workspace_root())
+        physical, origin = view.resolve_following(full)
     except (OSError, ValueError) as exc:
         return {"ok": False, "error": str(exc)}
     if not physical or not os.path.isfile(physical):
@@ -85,7 +86,10 @@ def read_file(path, max_bytes=MAX_READ_BYTES, start_line=None, end_line=None):
             content = "\n".join(sel)
         else:
             content = text
-        return {"ok": True, "path": full, "origin": origin, "size": size,
+        from core import rak_cli
+        if getattr(getattr(rak_cli._main_ref,'session',rak_cli._main_ref),'_agent',None):
+            rak_cli._ensure_bridge().invoke('_agent_touch',full,'read')
+        return {"ok": True, "path": full, "resolved_path":view.canonical(full),"symlinks":view.link_chain(full),"origin": origin, "size": size,
                 "lines": total_lines, "truncated": truncated,
                 "content": content}
     except Exception as e:
@@ -126,7 +130,7 @@ def grep_search(pattern, path=None, *, ignore_case=True, glob=None, max_matches=
             if glob_rx and not glob_rx.match(os.path.basename(logical)):
                 continue
             try:
-                fp, _ = view.resolve(logical)
+                fp, _ = view.resolve_following(logical)
                 if not fp or os.path.getsize(fp) > MAX_GREP_FILE_BYTES:
                     continue
                 with open(fp, "r", encoding="utf-8", errors="replace") as f:
@@ -226,7 +230,8 @@ def run_command(command, *, timeout=60, cwd=None):
     if not root:
         return {"ok": False, "error": "tidak ada workspace aktif"}
     from core.rak_neobranch_view import ActiveProjectView
-    if ActiveProjectView(root).active_branches():
+    view=ActiveProjectView(root)
+    if any(not view.manager.is_physical_checkout(partition) for partition in view.active_branches()):
         return {"ok": False, "error": (
             "agent shell dinonaktifkan saat NeoBranch aktif; "
             "gunakan perintah RAK terstruktur agar file branch terbaca dengan benar"

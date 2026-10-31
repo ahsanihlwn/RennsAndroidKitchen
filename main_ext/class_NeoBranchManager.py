@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 import os, json, shutil, datetime, sys, tempfile, threading, stat, time
+import errno
+import traceback
+from contextlib import contextmanager
 from functools import wraps
 from core.app_paths import (
     neocat_cache_dir,
@@ -34,8 +37,76 @@ BRANCH_COLORS = {
     "green": "#4db860", "orange": "#f08030", "purple": "#9060d0", "pink": "#e070a0",
 }
 
-CONFIG_SUFFIXES = ("_file_contexts", "_fs_config", "_fs_options", "_info")
+CONFIG_SUFFIXES = ("_file_contexts", "_fs_config", "_fs_options", "_info", "_bootconf")
 _metadata_lock = threading.RLock()
+_source_locks = {}
+_source_locks_guard = threading.Lock()
+_held_source_locks = threading.local()
+
+
+class SourceRecoveryCancelled(RuntimeError):
+    pass
+
+
+class SourceRestoreError(RuntimeError):
+    def __init__(self, root, step, path, cause):
+        super().__init__(f"NEOBRANCH_RESTORE_FAILED: {root}\nStep: {step}\nPath: {path}\nCause: {cause}")
+        self.root, self.step, self.path, self.cause = root, step, path, cause
+
+
+@contextmanager
+def _source_transaction(path, progress=None, cancelled=None):
+    key = os.path.normcase(os.path.realpath(path))
+    with _source_locks_guard:
+        lock = _source_locks.setdefault(key, threading.RLock())
+    last_notice = 0
+    def waiting():
+        nonlocal last_notice
+        if cancelled and cancelled():raise SourceRecoveryCancelled('Source recovery cancelled')
+        if progress and time.monotonic()-last_notice >= 1:
+            last_notice = time.monotonic()
+            progress('Waiting for Source operation: '+os.path.basename(os.path.dirname(path)))
+    while not lock.acquire(timeout=.1):waiting()
+    held = getattr(_held_source_locks, 'paths', None)
+    if held is None:held = _held_source_locks.paths = set()
+    stream = None
+    acquired = False
+    nested = key in held
+    try:
+        if not nested:
+            os.makedirs(path, exist_ok=True)
+            stream = open(os.path.join(path, '.rak_repack.lock'), 'a+b')
+            if stream.tell() == 0:stream.write(b'0');stream.flush()
+            while True:
+                if cancelled and cancelled():raise SourceRecoveryCancelled('Source recovery cancelled')
+                try:
+                    stream.seek(0)
+                    if sys.platform == 'win32':
+                        import msvcrt
+                        msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(stream.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True;held.add(key);break
+                except OSError as error:
+                    if error.errno not in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):raise
+                    waiting();time.sleep(.1)
+        yield
+    finally:
+        try:
+            if acquired:
+                held.discard(key)
+                stream.seek(0)
+                if sys.platform == 'win32':
+                    import msvcrt
+                    msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+        finally:
+            try:
+                if stream is not None:stream.close()
+            finally:lock.release()
 
 
 def _locked_metadata(fn):
@@ -131,6 +202,30 @@ class NeoBranchManager:
     def _branch_neocat_config_dir(self, fs_root, b): return neocat_cache_dir(self.tree_base, fs_root, b)
     def _branch_json_path(self, fs_root, b):  return os.path.join(self._branch_dir(fs_root, b), "branch.json")
 
+    def is_physical_checkout(self, fs_root):
+        return self._read_state(fs_root).get('workspace_mode') == 'checkout'
+
+    def checkout_branch(self, fs_root, branch_name, *, progress=None, cancelled=None):
+        from core.neobranch_checkout import switch
+        return switch(self, fs_root, branch_name, progress=progress, cancelled=cancelled)
+
+    def create_checkout_branch(self, fs_root, name, color, *, progress=None):
+        from core.neobranch_checkout import create
+        return create(self, fs_root, name, color, progress=progress)
+
+    def checkpoint_checkout(self, fs_root, *, progress=None):
+        from core.neobranch_checkout import checkpoint
+        return checkpoint(self, fs_root, progress=progress)
+
+    def _assert_checkout_branch(self, fs_root, branch_name):
+        from core.command_context import OperationError
+        active = self.get_active_branch(fs_root)
+        if (active['name'] if active else None) != branch_name:
+            raise OperationError('Active NeoBranch changed; reopen the file and retry')
+        journal = os.path.join(self._nb_root(fs_root), 'checkout', 'journal.json')
+        if os.path.exists(journal):
+            raise OperationError('NeoBranch checkout needs recovery before editing')
+
     # create branch
 
     def create_branch(self, fs_root: str, branch_name: str, color: str) -> dict:
@@ -140,7 +235,7 @@ class NeoBranchManager:
         if os.path.exists(branch_dir):
             raise ValueError(f"Branch '{branch_name}' already exists for '{fs_root}'.")
 
-        self._ensure_source_snapshot(fs_root)
+        if not self.is_physical_checkout(fs_root):self._ensure_source_snapshot(fs_root)
         _hide_dir(self._neobranch_root)
 
         os.makedirs(self._branch_fs_dir(fs_root, branch_name), exist_ok=True)
@@ -219,6 +314,8 @@ class NeoBranchManager:
 
     @_locked_metadata
     def set_active_branch(self, fs_root: str, branch_name):
+        if self.is_physical_checkout(fs_root):
+            return self.checkout_branch(fs_root, branch_name)
         state = self._read_state(fs_root)
         state["active_branch"] = branch_name
         self._write_state(fs_root, state)
@@ -227,12 +324,18 @@ class NeoBranchManager:
 
     def get_live_config_dir(self, fs_root: str) -> str:
 
+        if self.is_physical_checkout(fs_root):
+            return os.path.join(self.tree_base, 'config')
         active = self.get_active_branch(fs_root)
         if active:
             return self._branch_config_dir(fs_root, active["name"])
         return os.path.join(self.tree_base, "config")
 
     def get_branch_config_path(self, fs_root: str, branch_name: str, config_fname: str):
+        if self.is_physical_checkout(fs_root):
+            self._assert_checkout_branch(fs_root, branch_name)
+            p = os.path.join(self.tree_base, 'config', config_fname)
+            return p if os.path.isfile(p) else None
         p = os.path.join(self._branch_config_dir(fs_root, branch_name), config_fname)
         return p if os.path.isfile(p) else None
 
@@ -342,6 +445,11 @@ class NeoBranchManager:
     @_locked_metadata
     def record_edit(self, fs_root: str, branch_name: str, abs_source_path: str) -> str:
 
+        if self.is_physical_checkout(fs_root):
+            self._assert_checkout_branch(fs_root, branch_name)
+            rel = self._normalize_branch_rel(fs_root, branch_name, abs_source_path)
+            if not rel:raise ValueError('Invalid partition edit path')
+            return os.path.join(self.tree_base, rel)
         rel = self._normalize_branch_rel(fs_root, branch_name, abs_source_path)
         if not rel:
             return abs_source_path
@@ -396,6 +504,9 @@ class NeoBranchManager:
     @_locked_metadata
     def record_tree_edit(self, fs_root: str, branch_name: str, logical_path: str, physical_path: str):
 
+        if self.is_physical_checkout(fs_root):
+            self._assert_checkout_branch(fs_root, branch_name)
+            return
         rel_root = self._normalize_branch_rel(fs_root, branch_name, logical_path)
         physical_path = os.path.normpath(physical_path)
         if not rel_root:
@@ -458,6 +569,8 @@ class NeoBranchManager:
         self._write_branch_json(jp, info)
 
     def get_branch_file_path(self, fs_root: str, branch_name: str, abs_source_path: str) -> str:
+        if self.is_physical_checkout(fs_root):
+            return self.record_edit(fs_root, branch_name, abs_source_path)
 
         rel = self._normalize_branch_rel(fs_root, branch_name, abs_source_path)
         if not rel:
@@ -476,6 +589,9 @@ class NeoBranchManager:
     @_locked_metadata
     def record_delete(self, fs_root: str, branch_name: str, rel_path: str, prune_overlay: bool = True):
 
+        if self.is_physical_checkout(fs_root):
+            self._assert_checkout_branch(fs_root, branch_name)
+            return
         norm = self._normalize_branch_rel(fs_root, branch_name, rel_path)
         if not norm:
             return
@@ -507,12 +623,13 @@ class NeoBranchManager:
             d = self._normalize_branch_rel(fs_root, branch_name, d)
             if not d:
                 continue
-            if norm == d or norm.startswith(d + "/"):
+            if self.is_deleted_in_set(norm,(d,)):
                 return True
         return False
 
     def deleted_set_for_branch(self, fs_root: str, branch_name: str) -> frozenset:
 
+        if self.is_physical_checkout(fs_root):return frozenset()
         jp = self._branch_json_path(fs_root, branch_name)
         raw = self._read_branch_json(jp).get("deleted_paths", [])
         out = set()
@@ -527,7 +644,9 @@ class NeoBranchManager:
 
         if not norm_rel or not deleted_set:
             return False
+        if os.name=='nt':norm_rel=os.path.normcase(norm_rel).replace('\\','/')
         for d in deleted_set:
+            if os.name=='nt':d=os.path.normcase(d).replace('\\','/')
             if norm_rel == d or norm_rel.startswith(d + "/"):
                 return True
         return False
@@ -541,13 +660,23 @@ class NeoBranchManager:
             return
         info["deleted_paths"] = [
             d for d in info.get("deleted_paths", [])
-            if d != norm and not d.startswith(norm + "/")
+            if not self.is_deleted_in_set(d,(norm,))
         ]
         self._write_branch_json(jp, info)
 
     # repack integration
 
+    def repack_transaction(self, fs_root, *, progress=None, cancelled=None):
+        return _source_transaction(self._source_dir(fs_root), progress, cancelled)
+
     def prepare_for_repack(self, fs_root: str, branch_name: str):
+        if self.is_physical_checkout(fs_root):
+            self._assert_checkout_branch(fs_root, branch_name)
+            return self.checkpoint_checkout(fs_root)
+        with self.repack_transaction(fs_root):
+            return self._prepare_for_repack(fs_root, branch_name)
+
+    def _prepare_for_repack(self, fs_root: str, branch_name: str):
 
         source_fs  = self._source_fs_dir(fs_root)
         real_fs    = os.path.join(self.tree_base, fs_root)
@@ -557,9 +686,7 @@ class NeoBranchManager:
         source_neocat = self._source_neocat_config_dir(fs_root)
         manifest_path = os.path.join(self._source_dir(fs_root), "repack_manifest.json")
         if os.path.isfile(manifest_path):
-            raise RuntimeError(
-                f"Interrupted NeoBranch repack for {fs_root}; restore the source before retrying"
-            )
+            self.restore_after_repack(fs_root)
 
         # Complete the backup before touching the previous snapshot or real tree.
         pending_fs = source_fs + ".pending"
@@ -730,8 +857,13 @@ class NeoBranchManager:
         with open(dst, "w", encoding="utf-8", errors="ignore") as f:
             f.write("\n".join(f"{k} {entries[k]}" for k in sorted(entries)) + ("\n" if entries else ""))
 
-    def restore_after_repack(self, fs_root: str):
+    def restore_after_repack(self, fs_root: str, *, progress=None, cancelled=None):
+        if self.is_physical_checkout(fs_root) and not os.path.isfile(os.path.join(self._source_dir(fs_root),'repack_manifest.json')):
+            return self.checkpoint_checkout(fs_root,progress=progress)
+        with self.repack_transaction(fs_root, progress=progress, cancelled=cancelled):
+            return self._restore_after_repack(fs_root, progress=progress, cancelled=cancelled)
 
+    def _restore_after_repack(self, fs_root: str, *, progress=None, cancelled=None):
         source_fs  = self._source_fs_dir(fs_root)
         real_fs    = os.path.join(self.tree_base, fs_root)
         tree_cfg   = os.path.join(self.tree_base, "config")
@@ -739,64 +871,84 @@ class NeoBranchManager:
         tree_neocat = neocat_cache_dir(self.tree_base)
         source_neocat = self._source_neocat_config_dir(fs_root)
         manifest_path = os.path.join(self._source_dir(fs_root), "repack_manifest.json")
+        if not os.path.isfile(manifest_path):return False
         manifest = None
-        if os.path.isfile(manifest_path):
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                manifest = json.load(f)
-        if manifest is None:
-            return False
-
-        # Do not consume the recovery marker when its backup is incomplete.
-        # A later retry can still restore the original tree if the files return.
-        if not os.path.isdir(source_fs):
-            raise RuntimeError(f"NeoBranch source backup missing: {source_fs}")
-        if not os.path.isdir(source_cfg):
-            raise RuntimeError(f"NeoBranch config backup missing: {source_cfg}")
-        for fname in manifest.get("present_config", []):
-            if not os.path.isfile(os.path.join(source_cfg, fname)):
-                raise RuntimeError(f"NeoBranch config backup missing: {fname}")
-        if manifest.get("present_neocat") and not os.path.isfile(
-            os.path.join(source_neocat, fs_root + "_file_contexts")
-        ):
-            raise RuntimeError(f"NeoBranch NeoCat backup missing: {fs_root}")
-
-        # Copy before touching the live tree. A failed rename leaves the live
-        # tree in place; a failed install rolls the moved tree back.
-        restore_work = tempfile.mkdtemp(prefix="restore-", dir=self._source_dir(fs_root))
-        staged_fs = os.path.join(restore_work, "staged")
-        displaced_fs = os.path.join(restore_work, "previous")
-        installed = False
+        step, target = 'Read recovery journal', manifest_path
+        restore_work = None
         try:
-            shutil.copytree(source_fs, staged_fs, symlinks=True)
-            if os.path.lexists(real_fs):
-                _retry_fs_op(lambda: os.replace(real_fs, displaced_fs), real_fs)
-            try:
-                _retry_fs_op(lambda: os.replace(staged_fs, real_fs), staged_fs)
-                installed = True
-            except Exception:
-                if os.path.lexists(displaced_fs) and not os.path.lexists(real_fs):
-                    _retry_fs_op(lambda: os.replace(displaced_fs, real_fs), displaced_fs)
-                raise
-        finally:
-            if not installed and os.path.lexists(real_fs):
-                try:
-                    _remove_path(restore_work)
-                except OSError:
-                    pass
-        print(f"[NeoBranch][repack] fs tree restored: {fs_root}")
-        try:
-            _remove_path(restore_work)
-        except OSError as exc:
-            print(f"[NeoBranch][repack] old tree cleanup deferred: {exc}")
-
-        if os.path.isdir(source_cfg):
+            with open(manifest_path, 'r', encoding='utf-8') as source:manifest = json.load(source)
+            step, target = 'Check Source backup', source_fs
+            if not os.path.isdir(source_fs):raise FileNotFoundError('Source backup missing: '+source_fs)
+            if not os.path.isdir(source_cfg):raise FileNotFoundError('Config backup missing: '+source_cfg)
+            for fname in manifest.get('present_config', []):
+                if fname not in [fs_root+suffix for suffix in CONFIG_SUFFIXES]:raise ValueError('Invalid config backup name: '+fname)
+                target = os.path.join(source_cfg, fname)
+                if not os.path.isfile(target):raise FileNotFoundError('Config backup missing: '+target)
+            target = os.path.join(source_neocat, fs_root+'_file_contexts')
+            if manifest.get('present_neocat') and not os.path.isfile(target):raise FileNotFoundError('NeoCat backup missing: '+target)
+            work_name = manifest.get('restore_work')
+            if work_name:
+                if os.path.basename(work_name) != work_name or not work_name.startswith('restore-'):
+                    raise ValueError('Invalid Source recovery staging directory')
+                restore_work = os.path.join(self._source_dir(fs_root), work_name)
+                parent = os.path.normcase(os.path.realpath(self._source_dir(fs_root)))
+                actual = os.path.normcase(os.path.realpath(restore_work))
+                if os.path.commonpath((parent, actual)) != parent:raise ValueError('Source staging directory escapes recovery storage')
+            if not manifest.get('restore_fs_installed'):
+                if cancelled and cancelled():raise SourceRecoveryCancelled('Source recovery cancelled')
+                if restore_work is None:
+                    restore_work = tempfile.mkdtemp(prefix='restore-', dir=self._source_dir(fs_root))
+                    manifest['restore_work'] = os.path.basename(restore_work)
+                    _atomic_json_write(manifest_path, manifest)
+                os.makedirs(restore_work, exist_ok=True)
+                staged_fs, displaced_fs = os.path.join(restore_work, 'staged'), os.path.join(restore_work, 'previous')
+                # A completed rename may precede the journal update during a crash.
+                installed = not os.path.lexists(staged_fs) and os.path.isdir(real_fs) and os.path.isdir(displaced_fs) and manifest.get('restore_copy_complete')
+                if not installed:
+                    if not manifest.get('restore_copy_complete') or not os.path.isdir(staged_fs):
+                        step, target = 'Copy Source backup', source_fs
+                        if os.path.lexists(staged_fs):_remove_path(staged_fs)
+                        copied, last_notice = 0, 0
+                        def copy(src, dst):
+                            nonlocal copied, last_notice
+                            if cancelled and cancelled():raise SourceRecoveryCancelled('Source recovery cancelled')
+                            try:result = _copy2_with_retry(src, dst)
+                            except OSError as error:raise SourceRestoreError(fs_root,'Copy Source backup',src,error) from error
+                            copied += os.path.getsize(src)
+                            if progress and time.monotonic()-last_notice >= .2:
+                                last_notice = time.monotonic()
+                                progress(f'Recovering Source: {fs_root} ({copied//1048576} MiB copied)')
+                            return result
+                        if progress:progress('Recovering Source: '+fs_root+' — copying backup')
+                        shutil.copytree(source_fs, staged_fs, symlinks=True, copy_function=copy)
+                        manifest['restore_copy_complete'] = True
+                        _atomic_json_write(manifest_path, manifest)
+                    if cancelled and cancelled():raise SourceRecoveryCancelled('Source recovery cancelled')
+                    step, target = 'Move current tree aside', real_fs
+                    if os.path.lexists(real_fs):
+                        if os.path.lexists(displaced_fs):raise RuntimeError('Both live and displaced trees exist. Recovery data has been preserved.')
+                        _retry_fs_op(lambda: os.replace(real_fs, displaced_fs), real_fs)
+                    step, target = 'Install Source tree', real_fs
+                    try:_retry_fs_op(lambda: os.replace(staged_fs, real_fs), staged_fs)
+                    except Exception:
+                        if os.path.lexists(displaced_fs) and not os.path.lexists(real_fs):
+                            _retry_fs_op(lambda: os.replace(displaced_fs, real_fs), displaced_fs)
+                        raise
+                manifest['restore_fs_installed'] = True
+                _atomic_json_write(manifest_path, manifest)
+            elif not os.path.isdir(real_fs):
+                raise FileNotFoundError('Restored Source tree missing: '+real_fs)
+            print(f'[NeoBranch][repack] fs tree restored: {fs_root}')
+            step, target = 'Restore Source metadata', tree_cfg
+            if progress:progress('Recovering Source: '+fs_root+' — restoring metadata')
+            os.makedirs(tree_cfg, exist_ok=True)
             for fname in os.listdir(source_cfg):
                 src = os.path.join(source_cfg, fname)
                 dst = os.path.join(tree_cfg, fname)
                 if os.path.isfile(src):
+                    target = dst
                     _copy2_with_retry(src, dst)
                     print(f"[NeoBranch][repack] config restored: {fname}")
-        if manifest is not None:
             present = set(manifest.get("present_config", []))
             for suffix in CONFIG_SUFFIXES:
                 fname = fs_root + suffix
@@ -804,25 +956,34 @@ class NeoBranchManager:
                 if fname not in present and os.path.isfile(dst):
                     _remove_path(dst)
 
-        fname = fs_root + "_file_contexts"
-        src_neocat = os.path.join(source_neocat, fname)
-        dst_neocat = os.path.join(tree_neocat, fname)
-        if os.path.isfile(src_neocat):
-            os.makedirs(tree_neocat, exist_ok=True)
-            _copy2_with_retry(src_neocat, dst_neocat)
-            print(f"[NeoBranch][repack] neocat_config restored: {fname}")
-        elif os.path.isfile(dst_neocat):
-            _remove_path(dst_neocat)
-            print(f"[NeoBranch][repack] neocat_config removed: {fname}")
-            try:
-                if os.path.isdir(tree_neocat) and not os.listdir(tree_neocat):
-                    os.rmdir(tree_neocat)
-            except Exception:
-                pass
-        os.remove(manifest_path)
+            fname = fs_root + '_file_contexts'
+            src_neocat, dst_neocat = os.path.join(source_neocat, fname), os.path.join(tree_neocat, fname)
+            target = dst_neocat
+            if os.path.isfile(src_neocat):
+                os.makedirs(tree_neocat, exist_ok=True)
+                _copy2_with_retry(src_neocat, dst_neocat)
+            elif os.path.isfile(dst_neocat):_remove_path(dst_neocat)
+            step, target = 'Finish Source recovery', manifest_path
+            os.remove(manifest_path)
+        except SourceRecoveryCancelled:
+            raise
+        except Exception as error:
+            if isinstance(manifest, dict):
+                manifest['last_restore_error'] = {'step':step,'path':target,'message':str(error),
+                    'errno':getattr(error,'errno',None),'winerror':getattr(error,'winerror',None),
+                    'traceback':traceback.format_exc(),'time':datetime.datetime.now().isoformat()}
+                try:_atomic_json_write(manifest_path, manifest)
+                except OSError:pass
+            raise SourceRestoreError(fs_root, step, target, error) from error
+        if restore_work and os.path.lexists(restore_work):
+            try:_remove_path(restore_work)
+            except OSError:
+                import logging
+                logging.exception('Source recovered, but old recovery files could not be removed: %s',restore_work)
+        if progress:progress('Source recovered: '+fs_root)
         return True
 
-    def recover_interrupted_repacks(self) -> list[str]:
+    def recover_interrupted_repacks(self, *, progress=None, cancelled=None) -> list[str]:
 
         restored = []
         if not os.path.isdir(self._neobranch_root):
@@ -830,14 +991,21 @@ class NeoBranchManager:
         for fs_root in os.listdir(self._neobranch_root):
             manifest = os.path.join(self._source_dir(fs_root), "repack_manifest.json")
             if os.path.isfile(manifest):
-                self.restore_after_repack(fs_root)
-                restored.append(fs_root)
+                if self.restore_after_repack(fs_root, progress=progress, cancelled=cancelled):restored.append(fs_root)
         return restored
 
     # delete branch
 
     @_locked_metadata
     def delete_branch(self, fs_root: str, branch_name: str):
+        self._validate_branch_name(branch_name)
+        if self.is_physical_checkout(fs_root):
+            active = self.get_active_branch(fs_root)
+            if active and active['name'] == branch_name:
+                self.checkout_branch(fs_root, None)
+            state = self._read_state(fs_root)
+            state.get('checkout_snapshots', {}).pop('branch:' + branch_name, None)
+            self._write_state(fs_root, state)
         branch_dir = self._branch_dir(fs_root, branch_name)
         if os.path.isdir(branch_dir):
             _remove_path(branch_dir)
@@ -894,6 +1062,9 @@ class NeoBranchManager:
     # SELinux / perm helpers
 
     def resolve_read_path(self, fs_root: str, branch_name: str, abs_source_path: str) -> str:
+        if self.is_physical_checkout(fs_root):
+            self._assert_checkout_branch(fs_root, branch_name)
+            return abs_source_path
         rel = os.path.relpath(abs_source_path, self.tree_base).replace("\\", "/")
         branch_file = os.path.join(self._branch_dir(fs_root, branch_name), rel)
         return branch_file if os.path.isfile(branch_file) else abs_source_path
@@ -906,8 +1077,13 @@ class NeoBranchManager:
         p = self._state_path(fs_root)
         if os.path.isfile(p):
             try:
-                with open(p, "r", encoding="utf-8") as f: return json.load(f)
-            except Exception: pass
+                with open(p, "r", encoding="utf-8") as f: state=json.load(f)
+                if not isinstance(state,dict):raise ValueError('Expected an object')
+                active=state.get('active_branch')
+                if active is not None:self._validate_branch_name(active)
+                return state
+            except (ValueError,TypeError) as error:
+                raise ValueError('Invalid NeoBranch state; preserve it and recover before editing: '+p) from error
         return {}
 
     def _write_state(self, fs_root: str, state: dict):

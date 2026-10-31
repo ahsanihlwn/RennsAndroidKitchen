@@ -44,8 +44,11 @@ def main():
             painter.fillRect(0, 0, self.width()//2, self.height(), QColor("#976d35"))
             painter.end()
 
-    def run(widget, root, scene, name):
+    def run(widget, root, source, name):
         QTest.qWait(250)
+        def texture():
+            return widget._blur_pix if hasattr(widget, "_blur_pix") else widget._pix
+        original_key = texture().cacheKey()
         before = gpu_backend_status()
         begin = time.perf_counter()
         calls, gaps, texture_sizes, steps = [], [], [], []
@@ -63,7 +66,7 @@ def main():
             start = time.perf_counter()
             root.resize(930+round(230*math.sin(i/18)), 610+round(90*math.sin(i/20)))
             resized = time.perf_counter()
-            if root is scene.root:
+            if root is source:
                 # Outside the desktop, force the source paint that a visible
                 # resized window would receive from its native backing store.
                 root.repaint()
@@ -74,7 +77,7 @@ def main():
             steps.append({"step": i, "resize_ms": (resized-start)*1000,
                           "source_paint_ms": (painted-resized)*1000,
                           "blur_paint_ms": (end-painted)*1000})
-            texture_sizes.append([scene.image.width(), scene.image.height()])
+            texture_sizes.append([texture().width(), texture().height()])
             count[0] += 1
             if count[0] == 90:
                 timer.stop()
@@ -84,8 +87,8 @@ def main():
         timer.start()
         loop.exec()
         during = gpu_backend_status()
-        # Wait for final capture/handoff and check the timer is then idle.
-        QTest.qWait(700)
+        # Let the cached resize-frame timer settle.
+        QTest.qWait(200)
         widget.grab().save(str(artifacts/f"{name}.png"))
         final = gpu_backend_status()
         return {"resize_and_blur_paint": stats(calls), "dispatch": stats(gaps),
@@ -94,9 +97,9 @@ def main():
                 "blur_updates_after_drag": final["blur_frames"]-during["blur_frames"],
                 "gpu_composite_frames_during_drag": during["frames"]-before["frames"],
                 "distinct_backdrop_sizes_during_drag": len({tuple(size) for size in texture_sizes}),
-                "capture_finished": scene._capture_jobs is None,
-                "final_texture_logical_size": [scene.image.deviceIndependentSize().width(), scene.image.deviceIndependentSize().height()],
-                "final_root_size": [scene.root.width(), scene.root.height()]}
+                "frozen_texture_unchanged": texture().cacheKey() == original_key,
+                "final_texture_logical_size": [texture().deviceIndependentSize().width(), texture().deviceIndependentSize().height()],
+                "final_source_size": [source.width(), source.height()]}
 
     report = {"scope": "Qt resize/blur work in an off-desktop fixture, not presented FPS"}
     with patch.object(theme, "_effect_level", "high"), patch.object(theme, "_blur_enabled", True):
@@ -110,7 +113,7 @@ def main():
             label.setStyleSheet("background:transparent; color:white; font-size:11px;")
         root.show()
         overlay = BlurOverlay(root, animate=False, source_widget=root, backdrop="blur", sync_blur=True)
-        report["source_root"] = run(overlay, root, overlay._live_backdrop, "root_resized")
+        report["source_root"] = run(overlay, root, root, "root_resized")
         overlay._final_close()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
         root.resize(1000, 720)
@@ -126,7 +129,7 @@ def main():
         # Keep card geometry synchronized as the shell changes size.
         original_resize = shell.resizeEvent
         shell.resizeEvent = lambda event: (original_resize(event), card.setGeometry(shell.rect()))
-        report["card_only"] = run(card, shell, card._live_backdrop, "card_resized")
+        report["card_only"] = run(card, shell, root, "card_resized")
         shell.hide()
         shell.deleteLater()
         root.hide()

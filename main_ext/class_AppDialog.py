@@ -92,7 +92,7 @@ class _Dlg(QDialog):
         self._box.setStyleSheet(f"""
             QWidget#dlg_box {{
                 background: {_th.panel_rgba(_r, _g, _b, 170)};
-                border: 1px solid {_th.border_color(0.22)};
+                border: 1px solid {_th.panel_border_color()};
                 border-radius: 14px;
             }}
         """)
@@ -289,11 +289,20 @@ class AppDialog:
 
     @staticmethod
     def error(parent, title: str, message: str):
-        import logging
-
+        from core.error_reporting import report_fatal
         log_text = f"{title}\n\n{message}"
-        logging.error("APPLICATION ERROR:\n%s", log_text)
-        AppDialog.fatal_crash(parent, log_text)
+        report_fatal(log_text, owner=parent,application_error=False)
+
+    @staticmethod
+    def operation_error(parent,log_text):
+        from core.ui_lang import t
+        from html import escape
+        d=_Dlg(parent,'Operation failed',escape(log_text[:500]),width=440)
+        d._btn(t('dlg_btn_see_log'),'primary',lambda:AppDialog.error_log(d,log_text,title='Operation log'),close_on_click=False)
+        d._btn(t('dlg_btn_ok'),'neutral',QDialog.Accepted)
+        d.adjustSize()
+        try:AppDialog._run(parent,d)
+        finally:d.deleteLater()
 
     @staticmethod
     def fatal_crash(parent, log_text: str):
@@ -319,14 +328,15 @@ class AppDialog:
             d.deleteLater()
 
     @staticmethod
-    def error_log(parent, log_text: str):
+    def error_log(parent, log_text: str, *, title='Fatal Crash! — Log'):
 
         from core.ui_lang import t
 
         available = _dialog_bounds(parent)
         width = max(1, min(680, available.width() - 48))
         log_height = min(330, max(80, available.height() - 180))
-        d = _Dlg(parent, "Fatal Crash! — Log", "<b>Fatal Crash! — Log</b>", width=width)
+        from html import escape
+        d = _Dlg(parent,title,'<b>'+escape(title)+'</b>',width=width)
         log = QPlainTextEdit(d._box)
         log.setReadOnly(True)
         log.setLineWrapMode(QPlainTextEdit.NoWrap)

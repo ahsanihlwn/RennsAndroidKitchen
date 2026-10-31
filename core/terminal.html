@@ -17,11 +17,14 @@
             overflow: hidden;
             background-color: #121417;
         }
+        body {
+            padding: 4px 6px;
+        }
         #terminal-container {
             width: 100%;
             height: 100%;
             margin: 0;
-            padding: 4px 6px;
+            padding: 0;
             overflow: hidden;
             position: relative;
         }
@@ -51,22 +54,45 @@
         let term = null;
         let fitAddon = null;
         let bridge = null;
-        let debouncedResizeTimer = null;
         let requestFitTimer = null;
+        let requestFitFrame = null;
+        let displayRenderSubscription = null;
+
+        function fitTerminal() {
+            const container = document.getElementById('terminal-container');
+            if (!term || !fitAddon || !container || !container.getClientRects().length ||
+                    container.clientWidth < 20 || container.clientHeight < 20) return;
+            // FitAddon measures its parent's content box; padding belongs outside it.
+            fitAddon.fit();
+        }
 
         window.requestFit = function() {
-            if (requestFitTimer) cancelAnimationFrame(requestFitTimer);
-            requestFitTimer = requestAnimationFrame(() => {
-                const container = document.getElementById('terminal-container');
-                if (!container || container.clientWidth < 200 || container.clientHeight < 80) {
-                    return;
-                }
-                if (window.fitAddon && window.term) {
-                    try {
-                        window.fitAddon.fit();
-                        window.term.scrollToBottom();
-                    } catch (e) {}
-                }
+            clearTimeout(requestFitTimer);
+            if (requestFitFrame) cancelAnimationFrame(requestFitFrame);
+            // QML geometry, ResizeObserver and browser resize share one settle pass.
+            requestFitTimer = setTimeout(() => {
+                requestFitFrame = requestAnimationFrame(() => {
+                    requestFitFrame = null;
+                    fitTerminal();
+                });
+            }, 40);
+        };
+
+        window.prepareTerminalDisplay = function(request) {
+            document.fonts.ready.then(() => {
+                if (!term || !bridge) return;
+                clearTimeout(requestFitTimer);
+                if (requestFitFrame) cancelAnimationFrame(requestFitFrame);
+                fitTerminal();
+                if (displayRenderSubscription) displayRenderSubscription.dispose();
+                displayRenderSubscription = term.onRender(() => {
+                    displayRenderSubscription.dispose();
+                    displayRenderSubscription = null;
+                    // Let the completed canvas reach Chromium's compositor before
+                    // the native pane exposes its first frame.
+                    requestAnimationFrame(() => bridge.onTerminalRendered(request));
+                });
+                term.write('', () => term.refresh(0, term.rows - 1));
             });
         };
 
@@ -118,21 +144,13 @@
             const container = document.getElementById('terminal-container');
             term.open(container);
 
-            // Focus immediately
-            term.focus();
-
-            // ResizeObserver: only fit when dimensions are sensible
-            const resizeObserver = new ResizeObserver(entries => {
-                for (const entry of entries) {
-                    const cr = entry.contentRect;
-                    if (cr.width < 200 || cr.height < 80) return;
-                }
-                if (debouncedResizeTimer) clearTimeout(debouncedResizeTimer);
-                debouncedResizeTimer = setTimeout(() => {
-                    window.requestFit();
-                }, 40);
-            });
+            // The native host focuses the selected pane when it becomes visible.
+            const resizeObserver = new ResizeObserver(() => window.requestFit());
             resizeObserver.observe(container);
+            document.fonts.ready.then(() => window.requestFit());
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden) window.requestFit();
+            });
 
             window.addEventListener('resize', () => {
                 window.requestFit();
@@ -201,16 +219,14 @@
                 new QWebChannel(qt.webChannelTransport, channel => {
                     bridge = channel.objects.bridge;
                     window.bridge = bridge;
+                    term.options.windowsPty = bridge.ptyOptions || {};
 
                     term.onData(data => {
                         bridge.sendInput(data);
                     });
 
                     term.onResize(size => {
-                        // Strict floor: NEVER resize PTY below 80 columns
-                        const cols = Math.max(80, size.cols);
-                        const rows = Math.max(15, size.rows);
-                        bridge.resizePty(cols, rows);
+                        bridge.resizePty(size.cols, size.rows);
                     });
 
                     bridge.outputReceived.connect(chunk => {
@@ -242,14 +258,12 @@
                         term.clear();
                     });
 
-                    // Initial fit, focus, and handshake
-                    requestAnimationFrame(() => {
-                        window.requestFit();
-                        term.focus();
-                        const initialCols = Math.max(80, term.cols || 80);
-                        const initialRows = Math.max(15, term.rows || 24);
-                        bridge.onTerminalReady(initialCols, initialRows);
-                    });
+                    // A hidden Qt Quick pane can pause requestAnimationFrame.
+                    // The channel is ready now; do not hold buffered PTY output
+                    // or startup commands until the pane receives a frame.
+                    fitTerminal();
+                    bridge.onTerminalReady(term.cols, term.rows);
+                    window.requestFit();
                 });
             }
         }

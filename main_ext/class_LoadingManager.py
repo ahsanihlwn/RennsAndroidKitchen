@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: MPL-2.0
 
 
-from PySide6.QtCore import QObject, Signal, QTimer
+from PySide6.QtCore import QObject, Signal, QTimer, Qt
+from datetime import datetime
+from time import monotonic
 
 
 class _FadeWaiterThread:
@@ -21,8 +23,8 @@ class LoadingManager(QObject):
     state_clean    = Signal(list)              # (history_lines)
 
     # Delay sebelum bar fade ke clean setelah finished/failed (ms)
-    FADE_DONE_MS   = 1400
-    FADE_FAILED_MS = 2200
+    FADE_DONE_MS   = 4000
+    FADE_FAILED_MS = 4000
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -48,6 +50,7 @@ class LoadingManager(QObject):
 
 
         self._history: list = []
+        self._next_history_id = 1
         # Counter SESI utk pesan komposit "N finished, M failed".
         # Direset tiap mulai dari idle (sesi kerja baru), bukan saat clear.
         self._session_ok = 0
@@ -191,6 +194,7 @@ class LoadingManager(QObject):
             "members": [],      # nama member yg sudah ke-report (utk tooltip)
             "started": False,   # True begitu member pertama selesai/aktif
             "region":  region,  # 'heavy' | 'light'
+            "started_at": monotonic(),
         }
         self._group_order.append(bid)
         self._debug("batch_start", batch=bid, action=action, region=region, total=self._groups[bid]["total"], label=label)
@@ -210,7 +214,8 @@ class LoadingManager(QObject):
         if member_name:
             self._note_member(g, member_name)
 
-    def report_done(self, batch_id: int, ok: bool, member_name: str | None = None):
+    def report_done(self, batch_id: int, ok: bool, member_name: str | None = None,
+                    detail: str | None = None, task_id: str | None = None):
 
         g = self._groups.get(batch_id)
         if not g:
@@ -227,7 +232,7 @@ class LoadingManager(QObject):
             g["fail"] += 1
 
         # Catat ke history + counter sesi (per member)
-        self._record_history(member_name or g["label"], ok, g["label"])
+        self._record_history(member_name or g["label"], ok, g["label"], monotonic()-g["started_at"], detail, task_id)
 
         done = g["ok"] + g["fail"]
         total = g["total"]
@@ -299,9 +304,15 @@ class LoadingManager(QObject):
             self._session_ok = 0
             self._session_fail = 0
 
-    def _record_history(self, name: str, ok: bool, label: str):
+    def _record_history(self, name: str, ok: bool, label: str, elapsed: float = 0,
+                        detail: str | None = None, task_id: str | None = None):
         short = self._clean_member_name(name)
-        self._history.append({"name": short, "ok": bool(ok), "label": label})
+        entry_id = task_id or 'activity:'+str(self._next_history_id)
+        self._next_history_id += 1
+        self._history.append({"id":entry_id,"name": short, "ok": bool(ok), "label": label,
+                              "time": datetime.now().strftime("%H:%M:%S"),
+                              "elapsed": max(0.0, float(elapsed)),
+                              "detail": str(detail or "") if not ok else ""})
         if ok:
             self._session_ok += 1
         else:
@@ -319,7 +330,27 @@ class LoadingManager(QObject):
 
     def get_history(self) -> list:
 
-        return list(self._history)
+        return [dict(entry) for entry in self._history]
+
+    def get_activity(self) -> list:
+        """Structured live task rows for the in-app activity log."""
+        rows=[]
+        for batch_id in self._group_order:
+            group=self._groups.get(batch_id)
+            if not group:continue
+            done=group["ok"]+group["fail"]
+            rows.append({"batch_id":batch_id,"label":group["label"], "done":done, "total":group["total"],
+                         "progress":group.get('progress',-1),"stage":group.get('stage',''),
+                         "members":list(group["members"]), "active":bool(group["started"]),
+                         "elapsed":max(0.0,monotonic()-group["started_at"])})
+        return rows
+
+    def update_progress(self, batch_id, progress=-1, stage=''):
+        group=self._groups.get(batch_id)
+        if group is None:return
+        group['progress']=max(-1,min(99,int(progress)))
+        group['stage']=str(stage)
+        self._refresh()
 
     def clear_history(self):
 
@@ -357,6 +388,8 @@ class LoadingManager(QObject):
 
         ids = self._region_group_ids(region)
         for bid in ids:
+            if self._groups[bid]['started'] and 'progress' in self._groups[bid]:return bid
+        for bid in ids:
             if self._groups[bid]["started"]:
                 return bid
         return ids[0] if ids else None
@@ -383,7 +416,7 @@ class LoadingManager(QObject):
                 if not ids:
                     continue
                 active_id = self._active_group_id_in(region)
-                region_pending = [b for b in ids if b != active_id]
+                region_pending = [b for b in ids if b != active_id and not self._groups[b]['started']]
 
                 g = self._groups.get(active_id)
                 if g is None:
@@ -395,6 +428,9 @@ class LoadingManager(QObject):
 
                 base = (f"{label} {done}/{total} ({fail} failed)"
                         if fail > 0 else f"{label} {done}/{total}")
+                if 'progress' in g:
+                    base=label+(f" {g['progress']}%" if g['progress']>=0 else "…")
+                    if g.get('stage'):base+=' · '+g['stage']
 
                 if region_pending:
                     # grup aktif dianggap 1, total = aktif + pending region ini
@@ -402,9 +438,19 @@ class LoadingManager(QObject):
                     parts.append(f"{base} - 1/{pending_total} Service Pending")
                 else:
                     parts.append(base)
+                for parallel in ids:
+                    if parallel==active_id or not self._groups[parallel]['started']:continue
+                    other=self._groups[parallel]
+                    caption=other['label']
+                    if 'progress' in other:
+                        caption+=f" {other['progress']}%" if other['progress']>=0 else '…'
+                        if other.get('stage'):caption+=' · '+other['stage']
+                    else:caption+=f" {other['ok']+other['fail']}/{other['total']}"
+                    parts.append(caption)
 
             # tooltip ••• — daftar SEMUA grup pending lintas region
             global_active = {self._active_group_id_in(r) for r in self._REGIONS}
+            global_active.update(b for b,g in self._groups.items() if g['started'])
             for b in self._group_order:
                 if b in global_active:
                     continue
@@ -452,7 +498,7 @@ class LoadingManager(QObject):
         self._state = "finished"
         # has_fail → bar nampilin teks merah (warna doang; flow tetap finished).
         self.state_finished.emit(text, self._history_lines(), has_fail)
-        # Ada fail → kasih waktu baca lebih lama (sama dgn fade failed).
+        # Tahan hasil selama 4 detik sebelum UI mulai animasi penutup.
         self._start_fade(self.FADE_FAILED_MS if has_fail else self.FADE_DONE_MS)
 
     def _emit_failed(self, text: str):
@@ -467,6 +513,7 @@ class LoadingManager(QObject):
         gen = self._fade_generation
         self._fade_timer = QTimer(self)
         self._fade_timer.setSingleShot(True)
+        self._fade_timer.setTimerType(Qt.PreciseTimer)
         self._fade_timer.timeout.connect(lambda: self._on_fade_elapsed(gen))
         self._fade_timer.start(max(0, int(delay_ms)))
 

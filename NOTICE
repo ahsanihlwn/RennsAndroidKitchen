@@ -9,6 +9,13 @@ Third-party files retain their original licenses and copyright notices:
 - core/img2sdat/ and core/sdat2img/: see their LICENSE files and source
   headers; the AOSP files use Apache-2.0.
 - core/fspatch.py: Apache-2.0, copyright affggh.
+- ui/shaders/liquid_refraction.frag and its compiled .qsb: refraction adapted
+  from AndroidLiquidGlass-kmp (Backdrop), Copyright 2025 Kyant, Apache-2.0.
+  The AGSL lens was ported to Qt Quick GLSL with padded texture coordinates
+  and safe normals. See licenses/LICENSE-APACHE-2.0.
+- ui/controls/LiquidKnob.qml: press/drag motion adapted from Backdrop's
+  LiquidSlider, LiquidToggle and DampedDragAnimation, Copyright 2025 Kyant,
+  Apache-2.0. Ported to Qt Quick with this application's geometry and colors.
 - core/update_metadata_pb2.py: generated from AOSP update_metadata.proto;
   the upstream schema uses Apache-2.0.
 - core/qwebchannel.js: LGPL-3.0, as an available option in its source header.
@@ -18,3 +25,10 @@ Third-party files retain their original licenses and copyright notices:
 
 Copies of additional vendored license texts are in licenses/.
 Installed and bundled dependencies retain their respective licenses.
+
+Binary Lab's Rust dependencies added for binary inspection use the MIT license
+option. Original copyright and permission notices, including new transitive
+dependencies, are in licenses/BINARY-LAB-THIRD-PARTY.txt.
+Ghidra is an optional, separately installed external program. No Ghidra,
+Rizin, Cutter, or rz-ghidra implementation source or runtime is included by
+Binary Lab. See docs/binary_lab.md for the integration and distribution boundary.

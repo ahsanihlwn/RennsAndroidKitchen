@@ -5,16 +5,19 @@ import hashlib
 
 
 def _copy_view(view, logical, target):
-    source, _origin = view.resolve(logical)
+    canonical=view.canonical(logical)
+    source, _origin = view._resolve_direct(canonical)
     if not source or os.path.islink(source):
         raise RuntimeError(f"Path project view tidak dapat dimaterialisasi: {logical}")
     os.makedirs(target, exist_ok=True)
-    for entry in view.list_dir(logical):
-        source, _origin = view.resolve(entry["path"])
+    for entry in view.list_dir(logical,_with_physical=True):
+        source=entry['_physical']
         if not source or os.path.islink(source):
             raise RuntimeError(f"Symlink tidak didukung oleh project view: {entry['path']}")
         dest = os.path.join(target, entry["name"])
-        if entry["kind"] == "dir":
+        if entry.get('symlink'):
+            shutil.copy2(source,dest)
+        elif entry["kind"] == "dir":
             _copy_view(view, entry["path"], dest)
         else:
             shutil.copy2(source, dest)
@@ -45,6 +48,9 @@ def _manifest(root):
     return result
 
 def _branch_signature(manager, fs_name, branch):
+    if manager.is_physical_checkout(fs_name):
+        from core.neobranch_checkout import _live_manifest
+        return (manager._read_state(fs_name).get('active_branch'), _live_manifest(manager,fs_name))
     branch_dir = manager._branch_dir(fs_name, branch)
     with open(os.path.join(branch_dir, "branch.json"), "rb") as stream:
         metadata = hashlib.sha256(stream.read()).digest()

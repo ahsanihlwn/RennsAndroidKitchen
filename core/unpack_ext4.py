@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
-import subprocess
+from core import kitchen_process as subprocess
 from core.app_paths import BIN_DIR
 
 BIN_PATH = BIN_DIR

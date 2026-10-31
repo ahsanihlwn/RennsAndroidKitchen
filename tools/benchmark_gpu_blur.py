@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Measure native blur and actual Automation glass without executing automation."""
+"""Measure frozen Gaussian cards without running automation."""
 import argparse
 import json
 import math
@@ -93,7 +93,7 @@ def main():
     root.show()
     QTest.qWait(300)
     report["levels"] = {}
-    report["scope"] = "Qt source/Rust Gaussian dispatch cost; outside desktop, not presented FPS"
+    report["scope"] = "Qt source/card dispatch work outside desktop; not presented FPS"
     report["qt_images_include_blur"] = True
     with patch.object(blur_module, "_capture_widget_area", wraps=blur_module._capture_widget_area) as captures, \
          patch.object(theme, "_save_settings"), patch.object(theme, "_animations_enabled", False), \
@@ -110,14 +110,14 @@ def main():
                 dialog.setAttribute(Qt.WA_ShowWithoutActivating)
                 dialog._overlay = overlay
                 dialog.append_log("[INFO] UI benchmark only; no script executed")
-                dialog.append_log("[RUN] system_ext: testing live backdrop")
+                dialog.append_log("[RUN] system_ext: testing frozen backdrop")
                 dialog.mark_finished()
                 start = time.perf_counter()
                 install_window_fade(dialog, freeze_backdrop_immediately=True)
                 dialog.show()
                 QTest.qWait(80)
                 entry = {"show_and_settle_ms": (time.perf_counter() - start) * 1000,
-                         "live": overlay._surface_card._live_backdrop is not None if hasattr(overlay, "_surface_card") else False}
+                         "backdrop": "frozen"}
                 dialog.grab().save(str(output / f"automation_{level}.png"))
                 gaps, moves = [], []
                 last = [time.perf_counter()]
@@ -155,11 +155,6 @@ def main():
                 entry["gpu_blur_updates"] = gpu_backend_status()["blur_frames"] - before
                 entry["qt_backdrop_captures"] = captures.call_count-captures_before
                 entry["root_paints"] = root.paints-paints_before
-                scene = getattr(overlay, "_live_backdrop_scene", None)
-                if scene is not None:
-                    entry["last_backdrop_timings"] = scene._last_timings
-                    entry["label_cache_hits"] = scene._label_hits
-                    entry["label_cache_entries"] = len(scene._labels)
                 QTest.qWait(120)
                 idle = gpu_backend_status()["blur_frames"]
                 QTest.qWait(300)

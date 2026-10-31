@@ -5,6 +5,8 @@ from functools import lru_cache
 import os
 import threading
 import json
+from pathlib import Path
+import sys
 
 _calls = Counter()
 _calls_lock = threading.Lock()
@@ -13,8 +15,17 @@ _calls_lock = threading.Lock()
 @lru_cache(maxsize=1)
 def _load_native():
     try:
+        # Development builds have a fingerprinted location so a running Windows
+        # app can keep its old DLL while the next process uses the new build.
+        runtime = Path(__file__).resolve().parents[1] / 'build' / 'native' / 'runtime'
+        receipt = runtime / 'current.json'
+        target=os.environ.get('RAK_NATIVE_RUNTIME')
+        if target or receipt.is_file():
+            if not target:target = json.loads(receipt.read_text(encoding='utf-8')).get('path')
+            if target and target!='None' and Path(target).resolve().is_relative_to(runtime.resolve()):
+                sys.path.insert(0,str(Path(target).resolve()))
         import rak_native
-    except (ImportError, OSError) as error:
+    except (ImportError, OSError, ValueError) as error:
         return None, str(error)
     if getattr(rak_native, "API_VERSION", None) != 3:
         return None, "rak_native API version does not match this application"
@@ -141,9 +152,23 @@ def resolve_symlinks(paths, root):
     return {path: check_symlink(path, root, target_cache=cache) for path in paths}
 
 
-def directory_entries(path, root):
+def create_path_index(roots):
+    module = _get_native()
+    if module is not None and hasattr(module,'PathIndex'):
+        _record('path_index')
+        return module.PathIndex([os.path.abspath(os.fspath(root)) for root in roots])
+    if os.environ.get('RAK_NATIVE_BACKEND','auto').lower()=='rust':
+        raise RuntimeError('Rust path index unavailable. Run python tools/build_native.py --dev')
+    return None
+
+
+def directory_entries(path, root, *, path_index=None, refresh=False):
 
     path, root = os.path.normpath(os.fspath(path)), os.path.normpath(os.fspath(root))
+    if path_index is not None:
+        result=json.loads(path_index.entries_json(path,root,refresh))
+        _record('indexed_directory_entries')
+        return result
     module = _get_native()
     if module is not None:
         result = json.loads(module.directory_entries_json(path, root))

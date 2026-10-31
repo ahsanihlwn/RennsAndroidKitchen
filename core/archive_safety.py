@@ -6,9 +6,10 @@ import stat
 import zipfile
 from pathlib import PureWindowsPath
 from typing import Iterable
+from core.command_context import OperationError
 
 
-class UnsafeArchiveError(ValueError):
+class UnsafeArchiveError(ValueError, OperationError):
     pass
 
 
@@ -56,12 +57,13 @@ def safe_extract_zip(
     *,
     max_members: int | None = None,
     max_uncompressed_bytes: int | None = None,
+    members: set[str] | None = None,
 ) -> list[str]:
 
     close_when_done = not isinstance(source, zipfile.ZipFile)
     archive = zipfile.ZipFile(source, "r") if close_when_done else source
     try:
-        infos = archive.infolist()
+        infos = [info for info in archive.infolist() if members is None or info.filename in members]
         if max_members is not None and len(infos) > max_members:
             raise UnsafeArchiveError(
                 f"archive has too many members ({len(infos)} > {max_members})"

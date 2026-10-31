@@ -2,7 +2,7 @@
 import os
 import hashlib
 import shutil
-import subprocess
+from core import kitchen_process as subprocess
 
 from core.app_paths import MOUNT_RUNTIME_DIR
 from core.proc_util import CREATE_NO_WINDOW

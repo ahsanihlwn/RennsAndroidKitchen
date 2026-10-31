@@ -125,7 +125,7 @@ class CreateProjectDialog(QDialog):
         bind_style(box, lambda: f"""
             QWidget#cp_box {{
                 background: {panel_background(120)};
-                border: 1px solid {_th.border_color(0.22)};
+                border: 1px solid {_th.panel_border_color()};
                 border-radius: 14px;
             }}
         """)

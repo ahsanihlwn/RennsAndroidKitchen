@@ -7,9 +7,14 @@ import posixpath
 import json
 import re
 import shutil
-import subprocess
+from core import kitchen_process as subprocess
 import sys
 import tempfile
+import logging
+from contextlib import nullcontext
+
+
+_log = logging.getLogger(__name__)
 
 # Hide the console window the child process would otherwise flash on Windows.
 _CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
@@ -35,24 +40,31 @@ def _decode_output(data: bytes) -> str:
     return data.decode(encoding, errors="replace").strip()
 
 
-def _run(args: list[str], timeout: int = 20) -> tuple[int | None, str]:
+def _run(args: list[str], timeout: int = 20, *, probe: bool = False) -> tuple[int | None, str]:
 
     exe = _wsl_path()
     if not exe:
         return None, "wsl.exe not found"
     try:
-        p = subprocess.run(
-            [exe, *args],
-            capture_output=True,
-            creationflags=_CREATE_NO_WINDOW,
-            timeout=timeout,
-        )
-    except subprocess.TimeoutExpired:
+        # Discovery/storage refreshes run during project loading and polling.
+        # They must not create, select or reopen the user's Kitchen terminal.
+        # An explicitly requested installation still uses the tool console.
+        with subprocess.background_probe() if probe else nullcontext():
+            p = subprocess.run(
+                [exe, *args],
+                capture_output=True,
+                creationflags=_CREATE_NO_WINDOW,
+                timeout=timeout,
+            )
+    except subprocess.TimeoutExpired as exc:
+        _log.debug('WSL %s timed out: %r\nstdout=%r\nstderr=%r', 'probe' if probe else 'operation', [exe, *args], exc.stdout, exc.stderr)
         return None, "timed out"
     except Exception as exc:  # pragma: no cover - defensive
+        _log.debug('WSL %s failed: %r', 'probe' if probe else 'operation', [exe, *args], exc_info=True)
         return None, str(exc)
     out = _decode_output(p.stdout)
     err = _decode_output(p.stderr)
+    _log.debug('WSL %s: %r\nexit=%s\nstdout=%s\nstderr=%s', 'probe' if probe else 'operation', [exe, *args], p.returncode, out, err)
     return p.returncode, out or err
 
 
@@ -64,7 +76,7 @@ def _parse_version(text: str) -> str:
 
 def list_distros() -> list[str]:
 
-    rc, out = _run(["-l", "-q"])
+    rc, out = _run(["-l", "-q"], probe=True)
     if rc is None or rc != 0 or not out:
         return []
     distros = []
@@ -111,7 +123,7 @@ def terminal_is_ready() -> bool:
     status = detect()
     if not status["installed"] or not status["has_distro"]:
         return False
-    rc, _ = _run(["--exec", "/bin/sh", "-c", "exit 0"], timeout=8)
+    rc, _ = _run(["--exec", "/bin/sh", "-c", "exit 0"], timeout=8, probe=True)
     return rc == 0
 
 
@@ -146,7 +158,7 @@ def list_disk_usage() -> list[dict]:
 
     result = []
     for distro in dict.fromkeys(list_distros()):
-        rc, output = _run(["--distribution", distro, "--exec", "df", "-P", "-k", "/"], timeout=15)
+        rc, output = _run(["--distribution", distro, "--exec", "df", "-P", "-k", "/"], timeout=15, probe=True)
         usage = _parse_disk_usage(output) if rc == 0 else None
         if usage is not None:
             result.append({"distro": distro, "key": f"WSL:{distro}", **usage})
@@ -210,10 +222,10 @@ def detect() -> dict:
 
     # `wsl --version` is the cleanest signal on modern (Store) WSL. On old
     # inbox-only WSL it fails; fall back to `--status`.
-    rc_v, out_v = _run(["--version"])
+    rc_v, out_v = _run(["--version"], probe=True)
     version = _parse_version(out_v) if rc_v == 0 else ""
 
-    rc_s, out_s = _run(["--status"])
+    rc_s, out_s = _run(["--status"], probe=True)
     status_ok = rc_s == 0 and bool(out_s)
 
     # Either a clean --version or a clean --status means WSL is usable.

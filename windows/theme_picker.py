@@ -181,7 +181,7 @@ class ThemePickerDialog(QDialog):
         bind_style(box, lambda: f"""
             QWidget#tp_box {{
                 background: {_th.BG2};
-                border: 1px solid {_th.border_color(0.22)};
+                border: 1px solid {_th.panel_border_color()};
                 border-radius: 14px;
             }}
             QLabel {{ background: transparent; border: none; }}

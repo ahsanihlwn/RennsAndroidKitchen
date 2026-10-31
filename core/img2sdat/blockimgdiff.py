@@ -24,7 +24,7 @@ import itertools
 import multiprocessing
 import os
 import re
-import subprocess
+from core import kitchen_process as subprocess
 import threading
 import time
 import tempfile

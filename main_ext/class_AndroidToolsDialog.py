@@ -220,7 +220,7 @@ def _card_qss():
     return f"""
         QWidget#at_card {{
             background: {_th.panel_rgba(_r, _g, _b, 170)};
-            border: 1px solid {_th.border_color(0.22)};
+            border: 1px solid {_th.panel_border_color()};
             border-radius: 12px;
         }}
         QWidget#at_card QWidget {{

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
-//! Read-only native operations. No Qt objects, Python callbacks, or thread pools.
+//! Read-only native operations. No Qt objects or Python callbacks.
+//! The path map owns bounded foreground/background Rust workers.
 //! Each entry point detaches Python while doing disk I/O and parsing.
 
 use indexmap::IndexMap;
@@ -14,8 +15,10 @@ use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 mod assets;
+mod binary;
 mod config_insert;
 mod directory;
+mod path_index;
 
 // Match Python's UTF-8 errors="ignore", including an incomplete final sequence.
 fn decode_utf8_ignore(mut bytes: &[u8]) -> String {
@@ -366,16 +369,20 @@ fn rak_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
             "BUILD_FINGERPRINT",
             "parse_metadata",
             "prescan_json",
+            "PathIndex",
             "directory_entries_json",
             "directory_snapshots_json",
             "symlink_batch_json",
             "asset_index_json",
             "config_insert_lines",
             "config_insert_text",
+            "binary_analyze_json",
         ],
     )?;
     module.add_function(wrap_pyfunction!(parse_metadata, module)?)?;
+    module.add_function(wrap_pyfunction!(binary::binary_analyze_json, module)?)?;
     module.add_function(wrap_pyfunction!(prescan_json, module)?)?;
+    module.add_class::<path_index::PathIndex>()?;
     module.add_function(wrap_pyfunction!(directory::directory_entries_json, module)?)?;
     module.add_function(wrap_pyfunction!(
         directory::directory_snapshots_json,

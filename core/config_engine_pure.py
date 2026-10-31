@@ -20,6 +20,11 @@ def _load_metadata_directory(cfgdir, suffix, kind, *, ignore_errors=False):
     return parse_metadata_files(paths, kind, ignore_errors=ignore_errors)
 
 
+def _is_physical_checkout(manager, fs_root):
+    check = getattr(manager, "is_physical_checkout", None)
+    return bool(check and check(fs_root))
+
+
 def load_file_context(basepath):
 
     cfgdir = os.path.join(basepath, "config")
@@ -145,8 +150,14 @@ def load_neocat_ctx(base):
     neocat = _load_dir(neocat_dir)
 
     nb_root = os.path.join(base, "neobranch")
+    from main_ext.class_NeoBranchManager import NeoBranchManager
+    manager = NeoBranchManager(base)
     if os.path.isdir(nb_root):
         for fs_root_name in os.listdir(nb_root):
+            if _is_physical_checkout(manager, fs_root_name):
+                # Physical checkout metadata lives in project/config. The old
+                # per-branch cache is not an overlay for that live tree.
+                continue
             fs_root_dir = os.path.join(nb_root, fs_root_name)
             state_path = os.path.join(fs_root_dir, "neobranch_state.json")
             if not os.path.isfile(state_path):
@@ -179,7 +190,13 @@ def nb_overlay(base, ctx, fs):
     nb_root = os.path.join(base, "neobranch")
     if not os.path.isdir(nb_root):
         return ctx, fs
+    from main_ext.class_NeoBranchManager import NeoBranchManager
+    manager = NeoBranchManager(base)
     for fs_root_name in os.listdir(nb_root):
+        if _is_physical_checkout(manager, fs_root_name):
+            # The physical checkout's project/config files are already the
+            # selected branch configuration; never merge sparse branch files.
+            continue
         fs_root_dir = os.path.join(nb_root, fs_root_name)
         if not os.path.isdir(fs_root_dir):
             continue

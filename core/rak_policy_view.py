@@ -81,6 +81,7 @@ def run_policy_in_view(project_path, fs_root, *, apply=False, json_path=""):
                     if os.path.isfile(source):
                         shutil.copy2(source, os.path.join(staged_cfg, name))
             for fs, branch in branches.items():
+                if manager.is_physical_checkout(fs):continue
                 branch_cfg = manager._branch_config_dir(fs, branch)
                 if os.path.isdir(branch_cfg):
                     for name in os.listdir(branch_cfg):
@@ -100,6 +101,7 @@ def run_policy_in_view(project_path, fs_root, *, apply=False, json_path=""):
             cache_dir = neocat_cache_dir(root, fs_root, target_branch,
                                          migrate_legacy=False) if target_branch else \
                         neocat_cache_dir(root, migrate_legacy=False)
+            if manager.is_physical_checkout(fs_root):cache_dir=neocat_cache_dir(root,migrate_legacy=False)
             planner = DeviceSelinuxPatchEngine(
                 root, target_base=staged, cache_dir=cache_dir,
                 partition_overrides=overrides,

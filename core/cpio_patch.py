@@ -8,7 +8,7 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
+from core import kitchen_process as subprocess
 from pathlib import Path
 
 try:

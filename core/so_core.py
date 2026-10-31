@@ -1,18 +1,16 @@
 # SPDX-License-Identifier: MPL-2.0
+from __future__ import annotations
+
 import io
 import lzma
 import os
 import re
 import shutil
-import subprocess
+from core import kitchen_process as subprocess
 import sys
 from dataclasses import dataclass, field
+from functools import lru_cache
 from typing import Optional
-
-from elftools.elf.elffile import ELFFile
-from elftools.elf.sections import SymbolTableSection
-from elftools.elf.dynamic import DynamicSection
-
 
 PRINTABLE_RE = re.compile(rb"[\x20-\x7e]{4,}")
 
@@ -76,15 +74,21 @@ def is_path_like(s: str) -> bool:
     return False
 
 
-_CXXFILT_BIN = shutil.which("c++filt")
+@lru_cache(maxsize=1)
+def _cxxfilt_bin():
+    # PATH can contain disconnected volumes. Discover this optional ELF tool
+    # inside analysis work, never while importing the launcher/workspace.
+    return shutil.which("c++filt")
 
 
 def demangle(name: str) -> str:
 
-    if not name.startswith("_Z") or _CXXFILT_BIN is None:
+    if not name.startswith("_Z"):
         return name
+    tool = _cxxfilt_bin()
+    if tool is None:return name
     try:
-        r = subprocess.run([_CXXFILT_BIN, name], capture_output=True, text=True, timeout=5)
+        r = subprocess.run([tool, name], capture_output=True, text=True, timeout=5)
         out = r.stdout.strip()
         return out if out else name
     except Exception:
@@ -93,18 +97,21 @@ def demangle(name: str) -> str:
 
 def demangle_batch(names: list[str]) -> dict[str, str]:
 
-    if _CXXFILT_BIN is None or not names:
-        return {n: n for n in names}
+    result = {n: n for n in names}
+    mangled = [n for n in names if n.startswith("_Z")]
+    if not mangled:return result
+    tool = _cxxfilt_bin()
+    if tool is None:return result
     try:
         r = subprocess.run(
-            [_CXXFILT_BIN], input="\n".join(names), capture_output=True, text=True, timeout=15
+            [tool], input="\n".join(mangled), capture_output=True, text=True, timeout=15
         )
         results = r.stdout.splitlines()
-        if len(results) != len(names):
-            return {n: n for n in names}
-        return dict(zip(names, results))
+        if len(results) != len(mangled):return result
+        result.update(zip(mangled, results))
+        return result
     except Exception:
-        return {n: n for n in names}
+        return result
 
 
 @dataclass
@@ -176,6 +183,7 @@ def analyze_segments(elf: ELFFile) -> list[dict]:
 
 
 def analyze_symbols(elf: ELFFile) -> dict:
+    from elftools.elf.sections import SymbolTableSection
     exported, imported, local, all_syms = [], [], [], []
     names_to_demangle = []
     for sec in elf.iter_sections():
@@ -207,6 +215,7 @@ def analyze_symbols(elf: ELFFile) -> dict:
 
 
 def analyze_dynamic(elf: ELFFile) -> dict:
+    from elftools.elf.dynamic import DynamicSection
     needed, soname, rpath = [], None, []
     for sec in elf.iter_sections():
         if not isinstance(sec, DynamicSection):
@@ -340,6 +349,7 @@ def _find_gzip_end(data: bytes, start: int):
 
 
 def _find_nested_elf_end(data: bytes, start: int):
+    from elftools.elf.elffile import ELFFile
     try:
         inner = ELFFile(io.BytesIO(data[start:]))
         max_end = 0
@@ -419,6 +429,7 @@ def analyze_security(elf: ELFFile, dynamic: dict, symbols: dict) -> dict:
 
 
 def get_section_bytes(filepath: str, section_name: str) -> Optional[bytes]:
+    from elftools.elf.elffile import ELFFile
     with open(filepath, "rb") as f:
         elf = ELFFile(f)
         sec = elf.get_section_by_name(section_name)
@@ -649,6 +660,7 @@ def executable_section_names(elf: ELFFile) -> list[str]:
 
 
 def analyze_file(filepath: str, min_str_len: int = 4) -> dict:
+    from elftools.elf.elffile import ELFFile
     with open(filepath, "rb") as f:
         elf = ELFFile(f)
         result = {"filepath": filepath}

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
-import subprocess
+from core import kitchen_process as subprocess
 import json
 from core.app_paths import BIN_DIR, PROJECT_DATA_DIR
 print("[CORE STAGE] SUPER SPARSE LOGIC CORE")

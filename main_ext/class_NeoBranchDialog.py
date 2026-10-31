@@ -106,7 +106,7 @@ def _make_shell(parent=None) -> tuple:
     box.setStyleSheet(f"""
         QWidget#nb_box {{
             background: {_th.panel_rgba(_r, _g, _b, 170)};
-            border: 1px solid {_th.border_color(0.22)};
+            border: 1px solid {_th.panel_border_color()};
             border-radius: 14px;
         }}
         QWidget#nb_box QLabel {{

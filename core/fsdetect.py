@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
-import subprocess
+from core import kitchen_process as subprocess
 import time
 print("[CORE STAGE] FILESYSTEM DETECT")
 # Magic identifiers

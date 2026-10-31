@@ -101,24 +101,20 @@ except Exception:
 def _queue_crash_dialog(text):
     try:
         from core.error_reporting import report_fatal
-        report_fatal(text)
+        report_fatal(text,application_error=True)
     except Exception:
         logging.exception("Could not queue the crash dialog")
 
 
 def _global_excepthook(exc_type, exc_value, exc_tb):
     text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-    logging.critical("UNCAUGHT EXCEPTION:\n%s", text)
-    print(f"[FATAL] {text}", flush=True)
     # Let the failing Qt callback unwind before constructing any error widgets.
-    _queue_crash_dialog(text)
+    _queue_crash_dialog('UNCAUGHT EXCEPTION:\n'+text)
 
 sys.excepthook = _global_excepthook
 
 def _thread_excepthook(args):
     text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
-    logging.critical("UNCAUGHT THREAD EXCEPTION (%s):\n%s", args.thread, text)
-    print(f"[FATAL-THREAD] {text}", flush=True)
     _queue_crash_dialog(f"Thread: {getattr(args.thread, 'name', 'unknown')}\n\n{text}")
 
 _threading.excepthook = _thread_excepthook
@@ -127,8 +123,6 @@ _threading.excepthook = _thread_excepthook
 def _unraisable_excepthook(args):
     text = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback))
     text = f"{args.err_msg or 'Unhandled cleanup exception'}\n\n{text}"
-    logging.critical("UNRAISABLE EXCEPTION:\n%s", text)
-    print(f"[FATAL] {text}", flush=True)
     _queue_crash_dialog(text)
 
 
@@ -147,6 +141,8 @@ configure_text_rendering_env()
 
 _EARLY_APP = None
 if __name__ == "__main__":
+    from ui.runtime import initialize_quick_runtime
+    initialize_quick_runtime(webengine=True)
     from PySide6.QtWidgets import QApplication as _EarlyQApplication
     _EARLY_APP = _EarlyQApplication(sys.argv)
     _EARLY_APP.setQuitOnLastWindowClosed(False)
@@ -246,25 +242,6 @@ class ProjectTrashWorker(QThread):
             self.done.emit(True, self.operation(), "")
         except Exception as exc:
             self.done.emit(False, None, str(exc))
-
-
-class ProjectSizeScannerWorker(QThread):
-
-    size_calculated = Signal(str, str)  # (project_path, formatted_size)
-
-    def __init__(self, paths: list):
-        super().__init__()
-        self.paths = paths
-
-    def run(self):
-        for path in self.paths:
-            if self.isInterruptionRequested():
-                break
-            size_str = AppUI._get_folder_size_str(path, check_interrupted=self.isInterruptionRequested)
-            if self.isInterruptionRequested():
-                break
-            if size_str is not None:
-                self.size_calculated.emit(path, size_str)
 
 
 def ensure_dirs():
@@ -856,8 +833,6 @@ class AppUI(AppFeatures, QWidget):
         from core.skia_widgets import install_widget_gpu_rendering
         install_widget_gpu_rendering(QApplication.instance())
         self._all_projects = []
-        self._size_scanner = None
-        self._size_scanners = set()
         self._project_delete_active = False
         self._project_delete_indicator = None
         self._project_cards_transition = None
@@ -1226,7 +1201,6 @@ class AppUI(AppFeatures, QWidget):
         self._disk_poll_timer.stop()
         self._clear_page_content_reveal()
         self._clear_theme_snapshot_overlay()
-        self._stop_project_size_scanners()
 
 
         if not getattr(self, "_offscreen_mode", False):
@@ -2669,41 +2643,6 @@ class AppUI(AppFeatures, QWidget):
         else:
             return f"{total_bytes / (1024 * 1024 * 1024):.2f} GB"
 
-    @staticmethod
-    def _get_folder_size_str(path: str, check_interrupted=None) -> str:
-        if not path or not os.path.exists(path):
-            return "0 B"
-        total = 0
-        try:
-            if os.path.isfile(path):
-                total = os.path.getsize(path)
-            else:
-                stack = [path]
-                while stack:
-                    if check_interrupted and check_interrupted():
-                        return None
-                    current_dir = stack.pop()
-                    try:
-                        with os.scandir(current_dir) as it:
-                            for index, entry in enumerate(it):
-                                if index % 128 == 0 and check_interrupted and check_interrupted():
-                                    return None
-                                try:
-                                    if entry.is_symlink():
-                                        continue
-                                    if entry.is_dir(follow_symlinks=False):
-                                        stack.append(entry.path)
-                                    elif entry.is_file(follow_symlinks=False):
-                                        total += entry.stat(follow_symlinks=False).st_size
-                                except OSError:
-                                    pass
-                    except OSError:
-                        pass
-        except Exception:
-            pass
-
-        return AppUI._format_size(total)
-
     def build_project_item_widget(self, proj, item):
         from main_ext.class_ThemeUi import theme as _th
         trashed = bool(proj.get("_trash_id"))
@@ -2807,14 +2746,9 @@ class AppUI(AppFeatures, QWidget):
         path_row.addStretch()
         right_col.addLayout(path_row)
 
-        lbl_size = bind_text(QLabel(), lambda proj=proj: f"{t('lbl_size')}{proj.get('cached_size', 'Calculating...')}")
+        lbl_size = bind_text(QLabel(), lambda proj=proj: f"{t('lbl_size')}{proj['cached_size']}" if proj.get('cached_size') else "")
         bind_style(lbl_size, lambda: f"font-size: 10px; color: {_th.FG_MUTED};")
         right_col.addWidget(lbl_size)
-
-        if not hasattr(self, "_project_size_labels"):
-            self._project_size_labels = {}
-        if not trashed:
-            self._project_size_labels[proj.get("path", "")] = lbl_size
 
         right_side.addWidget(metadata)
 
@@ -3384,8 +3318,6 @@ class AppUI(AppFeatures, QWidget):
             close_label=t("dlg_btn_delete"), cancel_label=t("dlg_btn_cancel")):
             return
 
-        self._stop_project_size_scanners()
-
         if not hasattr(self, "_delete_workers"):
             self._delete_workers = []
 
@@ -3489,8 +3421,6 @@ class AppUI(AppFeatures, QWidget):
                 if row_now >= 0:
                     removed = project_list.takeItem(row_now)
                     del removed
-            if not trashed:
-                self._project_size_labels.pop(deleted_path, None)
             self._project_delete_active = False
             self._project_hover_effect.setEnabled(True)
             project_list.setAttribute(Qt.WA_TransparentForMouseEvents, False)
@@ -4436,7 +4366,7 @@ class AppUI(AppFeatures, QWidget):
         drive = project_storage_key(proj.get("path", ""))
         return _th.project_drive_enabled(drive)
 
-    def load_projects(self, rescan_path: str = None):
+    def load_projects(self):
         from app_ext.nonclass_VerifyDir import verify_and_clean_projects
         data = verify_and_clean_projects(PROJECT_JSON)
         data.sort(key=lambda p: (0 if p.get("pinned") else 1))
@@ -4448,75 +4378,6 @@ class AppUI(AppFeatures, QWidget):
                 self.search_input.clear()
         self._refresh_trash_state(render=False)
         self._render_projects(data)
-
-        # Request stop, tapi tahan referensinya sampai signal finished datang.
-        # Menimpa satu-satunya referensi QThread saat masih running membuat Qt abort.
-        if self._size_scanner is not None:
-            try:
-                self._size_scanner.size_calculated.disconnect(self._on_project_size_calculated)
-            except Exception:
-                pass
-            self._size_scanner.requestInterruption()
-            self._size_scanner = None
-
-        # Only scan projects that DO NOT have cached_size yet, or the specific project that was just modified
-        norm_rescan = os.path.normcase(os.path.abspath(rescan_path)) if rescan_path else None
-        paths_to_scan = [
-            p.get("path") for p in data
-            if p.get("path") and (
-                not p.get("cached_size")
-                or (norm_rescan and os.path.normcase(os.path.abspath(p.get("path", ""))) == norm_rescan)
-            ) and self._storage_available(project_storage_key(p.get("path", "")))
-        ]
-        if paths_to_scan:
-            scanner = ProjectSizeScannerWorker(paths_to_scan)
-            self._size_scanner = scanner
-            self._size_scanners.add(scanner)
-            scanner.size_calculated.connect(self._on_project_size_calculated)
-            scanner.finished.connect(self._on_size_scanner_finished)
-            scanner.start()
-
-    def _on_size_scanner_finished(self):
-        scanner = self.sender()
-        if scanner is None:
-            return
-        if scanner is self._size_scanner:
-            self._size_scanner = None
-        self._size_scanners.discard(scanner)
-        scanner.deleteLater()
-
-    def _stop_project_size_scanners(self):
-        for scanner in tuple(self._size_scanners):
-            scanner.requestInterruption()
-        for scanner in tuple(self._size_scanners):
-            if scanner.isRunning():
-                scanner.wait()
-
-    def _on_project_size_calculated(self, path, size_str):
-        if self._project_delete_active:
-            return
-        sender = self.sender()
-        if sender is not None and sender is not self._size_scanner:
-            return
-        if not hasattr(self, "_project_size_labels"):
-            return
-
-        # Update UI label
-        lbl = self._project_size_labels.get(path)
-        if lbl:
-            lbl.setText(f"{t('lbl_size')}{size_str}")
-
-        # Update in-memory array and save to JSON if changed
-        changed = False
-        for p in self._all_projects:
-            if p.get("path") == path:
-                if p.get("cached_size") != size_str:
-                    p["cached_size"] = size_str
-                    changed = True
-                break
-
-        if changed:
-            _save_projects_json(self._all_projects)
 
     def _stop_project_cards_transition(self):
         transition = self._project_cards_transition
@@ -4636,9 +4497,6 @@ class AppUI(AppFeatures, QWidget):
         if existing:
             self._project_hover_effect.reset()
         for item in existing.values():
-            project = item.data(Qt.UserRole)
-            if not project.get("_trash_id"):
-                self._project_size_labels.pop(project.get("path"), None)
             self.list_widget.takeItem(self.list_widget.row(item))
         order = [self.list_widget.item(index)._project_order for index in range(self.list_widget.count())]
         if order != sorted(order):
@@ -4647,7 +4505,6 @@ class AppUI(AppFeatures, QWidget):
     def _render_projects(self, data):
         self._stop_project_cards_transition()
         self._project_hover_effect.reset()
-        self._project_size_labels = {}
         self.list_widget._scroll_timer.stop()
         self.list_widget._anim.stop()
         self.list_widget.clear()
@@ -4668,7 +4525,6 @@ class AppUI(AppFeatures, QWidget):
 
 
     def on_return_from_editor(self):
-        closed_project = getattr(self.editor, "project", None) if self.editor else None
         # editor udah close dari dalem Main
         self.editor = None
 
@@ -4677,7 +4533,7 @@ class AppUI(AppFeatures, QWidget):
             self.loader.close()
             self.loader = None
         # 🔥 INI WAJIB
-        self.load_projects(rescan_path=closed_project)
+        self.load_projects()
         self.apply_window_state()
         # tampilkan AppUI lagi
         self.show()
@@ -5014,107 +4870,5 @@ class AppUI(AppFeatures, QWidget):
 
 # RUN
 if __name__ == "__main__":
-    app = _EARLY_APP
-
-
-    app.setQuitOnLastWindowClosed(False)
-
-    w = AppUI(startup_splash=True)
-    screen = app.primaryScreen()
-    if screen is not None:
-        w.move(screen.availableGeometry().center() - w.rect().center())
-    w.show()
-    app.processEvents(QEventLoop.ExcludeUserInputEvents)
-
-
-    from core.fonts import apply_app_font
-    apply_app_font(app)
-
-
-    def _prewarm_config_service():
-        try:
-            from services.process_manager import get_manager
-            get_manager().start_process()   # idempotent, non-blocking
-            print("[app] ConfigEngine service pre-warm started")
-        except Exception as e:
-            print(f"[app] WARN: pre-warm service gagal (akan spawn lazy nanti): {e}")
-
-
-    def _prewarm_editor_module(on_done):
-        import_ok = [False]
-
-        def _import_editor():
-            try:
-                import main  # noqa: F401
-                from icons.handler import warm_icon_catalog
-                warm_icon_catalog()
-                import_ok[0] = True
-                print("[app] editor module pre-warm ready")
-            except Exception as e:
-                print(f"[app] WARN: editor module pre-warm gagal: {e}")
-
-        worker = _threading.Thread(
-            target=_import_editor,
-            name="rak-editor-import",
-            daemon=True,
-        )
-        worker.start()
-
-
-        warm_timer = QTimer(w)
-        warm_timer.setInterval(50)
-
-        def _maybe_warm_webengine():
-            if worker.is_alive():
-                return
-            warm_timer.stop()
-            warm_timer.deleteLater()
-            if not import_ok[0] or not w.isVisible() or getattr(w, "editor", None) is not None:
-                on_done()
-                return
-            try:
-                from PySide6.QtWebEngineWidgets import QWebEngineView
-
-                view = QWebEngineView()
-                view.setHtml("<html><body></body></html>")
-                view.close()
-                view.deleteLater()
-                print("[app] WebEngine pre-warm ready")
-            except Exception as e:
-                print(f"[app] WARN: WebEngine pre-warm gagal: {e}")
-            on_done()
-
-        warm_timer.timeout.connect(_maybe_warm_webengine)
-        warm_timer.start()
-
-    prewarm_ready = [False]
-    login_ready = [True]
-
-    def _maybe_reveal_startup():
-        # Verified status is fetched in the background by _build_ui(). A slow
-        # or stalled network request must not keep the launcher behind splash.
-        if prewarm_ready[0] and login_ready[0]:
-            w.reveal_startup()
-
-    def _on_prewarms_done():
-        prewarm_ready[0] = True
-        _maybe_reveal_startup()
-
-    def _on_startup_built():
-        QTimer.singleShot(0, _prewarm_config_service)
-        QTimer.singleShot(0, lambda: _prewarm_editor_module(_on_prewarms_done))
-        def _on_login_ready():
-            login_ready[0] = True
-            _maybe_reveal_startup()
-        login_ready[0] = not w._prepare_account_startup(_on_login_ready)
-        _maybe_reveal_startup()
-
-    def _on_startup_revealed():
-        # Startup imports are complete; resume GC and restore the original hook.
-        _end_startup_import_window()
-        w._restore_account_startup()
-
-    w.startup_built.connect(_on_startup_built)
-    w.startup_revealed.connect(_on_startup_revealed)
-
-    sys.exit(app.exec())
+    from ui.application import run_launcher
+    sys.exit(run_launcher(_EARLY_APP, on_ready=_end_startup_import_window))

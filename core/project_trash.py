@@ -202,14 +202,15 @@ class ProjectTrash:
             self._forget(identifier)
             return entry["project"]
 
-    def maintain(self):
+    def maintain(self, *, drive_available=None):
 
         errors = []
+        available = self._drive_available if drive_available is None else drive_available
         with self._operation_lock:
             for entry in self.entries():
                 try:
                     path = entry["project"]["path"]
-                    if not self._drive_available(path):
+                    if not available(path):
                         continue
                     handle = entry.get("handle")
                     if not handle:

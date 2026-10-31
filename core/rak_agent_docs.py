@@ -4,6 +4,9 @@
 import os
 import sys
 import re
+import stat
+import subprocess
+import tempfile
 from typing import Optional, List, Tuple
 
 # Ensure project root is in sys.path
@@ -12,15 +15,12 @@ _proj_root = os.path.dirname(_this_dir)
 if _proj_root not in sys.path:
     sys.path.insert(0, _proj_root)
 
-try:
-    from core.header_magic import check_magic
-except ImportError:
-    def check_magic(path: str) -> str:
-        return ""
-
 # Canonical Delimiters
 START_MARKER = "<!-- RAK_CLI_AUTO_GENERATED: START. DO NOT REMOVE THIS OR EDIT INSTRUCT -->"
 END_MARKER = "<!-- RAK_CLI_AUTO_GENERATED: END -->"
+
+AGENT_FILES = ("AGENTS.md", "CLAUDE.md", "CODEX.md", "GEMINI.md")
+DOCS_FORMAT_VERSION = 2
 
 # Known partition directory names in Android ROMs
 KNOWN_PARTITIONS = {
@@ -30,15 +30,18 @@ KNOWN_PARTITIONS = {
 
 
 def is_start_delimiter(line: str) -> bool:
-
-    u = line.strip().upper()
-    return "RAK_CLI_AUTO_GENERATED" in u and ("DONT REMOVE" in u or "START" in u)
+    payload=_delimiter_payload(line)
+    return bool(payload is not None and (re.search(r'\bSTART\b',payload) or 'DONT REMOVE' in payload))
 
 
 def is_end_delimiter(line: str) -> bool:
+    payload=_delimiter_payload(line)
+    return bool(payload is not None and re.search(r'\bEND\b',payload))
 
-    u = line.strip().upper()
-    return "RAK_CLI_AUTO_GENERATED" in u and "END" in u
+
+def _delimiter_payload(line):
+    match=re.fullmatch(r'[ \t]{0,3}<!--[ \t]*RAK_CLI_AUTO_GENERATED\b([^<>]*?)-->[ \t]*',line.rstrip('\r\n'),re.IGNORECASE)
+    return match.group(1).upper() if match else None
 
 
 def _format_bytes(size_bytes: int) -> str:
@@ -54,125 +57,40 @@ def _format_bytes(size_bytes: int) -> str:
 
 
 def scan_project_partitions(cwd: str) -> List[dict]:
-
-    results = []
-    if not cwd or not os.path.isdir(cwd):
-        return results
-
-    try:
-        from core.rak_neobranch_view import ActiveProjectView, project_root
-        view = ActiveProjectView(project_root(cwd))
-        entries = [item["name"] for item in view.list_dir(cwd)]
-    except ValueError:
-        view = None
+    """Snapshot relevant inputs; live inspect remains the operation authority."""
+    if not cwd or not os.path.isdir(cwd):return []
+    from core.rak_neobranch_view import project_root
+    from core.workspace_files import WorkspaceFiles
+    from core.file_detection import identify
+    try:base=project_root(cwd)
+    except ValueError:base=cwd
+    files=WorkspaceFiles(base)
+    try:entries=files.view.list_dir(cwd)
+    except (OSError,ValueError):return []
+    results=[]
+    formats={'EROFS','EXT2','EXT3','EXT4','SUPER','SPARSE','PAYLOAD','BOOT','VNDRBOOT'}
+    for entry in entries:
+        name=entry['name'];logical=entry['path']
+        if name.startswith(('.', '__')) or name in AGENT_FILES:continue
         try:
-            entries = sorted(os.listdir(cwd))
-        except OSError:
-            return results
-    except OSError:
-        return results
-
-    def visible_path(path):
-        return view.resolve(path)[0] if view else path
-
-    def visible_exists(path):
-        physical = visible_path(path)
-        return bool(physical and os.path.exists(physical))
-
-    # 1. Detect Images (.img, .bin)
-    for name in entries:
-        full_path = visible_path(os.path.join(cwd, name))
-        if not full_path or not os.path.isfile(full_path):
-            continue
-
-        lower = name.lower()
-        if lower.endswith((".img", ".bin")):
-            try:
-                magic = check_magic(full_path)
-            except Exception:
-                magic = ""
-
-            try:
-                size_str = _format_bytes(os.path.getsize(full_path))
-            except Exception:
-                size_str = "unknown size"
-
-            if magic == "EROFS":
-                results.append({
-                    "name": name,
-                    "kind": "image",
-                    "format": "EROFS",
-                    "desc": f"EROFS Partition Image ({size_str})",
-                    "action": f"rak unpack {name}",
-                })
-            elif magic in ("EXT4", "EXT3", "EXT2"):
-                results.append({
-                    "name": name,
-                    "kind": "image",
-                    "format": magic,
-                    "desc": f"{magic} Partition Image ({size_str})",
-                    "action": f"rak unpack {name}",
-                })
-            elif magic == "SUPER":
-                results.append({
-                    "name": name,
-                    "kind": "image",
-                    "format": "SUPER",
-                    "desc": f"Android Dynamic Super Partition ({size_str})",
-                    "action": f"rak unpack {name}",
-                })
-            elif magic == "SPARSE":
-                results.append({
-                    "name": name,
-                    "kind": "image",
-                    "format": "SPARSE",
-                    "desc": f"Android Sparse Image ({size_str})",
-                    "action": f"rak unpack {name}",
-                })
-            elif magic == "PAYLOAD":
-                results.append({
-                    "name": name,
-                    "kind": "image",
-                    "format": "PAYLOAD",
-                    "desc": f"Android OTA CrAU Payload ({size_str})",
-                    "action": f"rak unpack {name}",
-                })
-            elif magic in ("BOOT", "VNDRBOOT"):
-                results.append({
-                    "name": name,
-                    "kind": "image",
-                    "format": magic,
-                    "desc": f"Android {magic} Image ({size_str})",
-                    "action": f"rak unpack {name}",
-                })
-
-    # 2. Detect Unpacked Partition Directories
-    for name in entries:
-        if name.startswith((".", "__")) or name.lower() in ("node_modules", "venv", "env", "dist", "build", "core", "bin", "tests"):
-            continue
-
-        logical_path = os.path.join(cwd, name)
-        full_path = visible_path(logical_path)
-        if not full_path or not os.path.isdir(full_path):
-            continue
-
-        lower = name.lower()
-        is_known = lower in KNOWN_PARTITIONS
-        has_android_fs = (
-            visible_exists(os.path.join(logical_path, "build.prop")) or
-            visible_exists(os.path.join(logical_path, "default.prop")) or
-            visible_exists(os.path.join(logical_path, "config"))
-        )
-
-        if is_known or has_android_fs:
-            results.append({
-                "name": name + "/",
-                "kind": "dir",
-                "format": "FOLDER",
-                "desc": f"Unpacked Partition Directory",
-                "action": f"rak repack {name}",
-            })
-
+            identity=identify(files,logical);kind=identity['kind']
+            physical,_=files.view.resolve(logical)
+            folder=kind!='SYMLINK' and bool(physical and os.path.isdir(physical))
+            if folder:
+                android=any(files.view.resolve(os.path.join(logical,child))[0] for child in ('build.prop','default.prop'))
+                if kind=='directory' and name.lower() not in KNOWN_PARTITIONS and not android and not os.path.isfile(os.path.join(physical,'apktool.yml')):continue
+                category='dir';description='Filesystem directory' if kind in formats else 'Directory; inspect before choosing a rebuild format'
+            elif kind=='SYMLINK':
+                category='symlink';link=identity['symlink']
+                behavior='directory' if link['is_dir'] else 'file' if link['is_file'] else 'unavailable'
+                description=f"Symlink -> {link['target']} (behaves_as={behavior}, status={link['status']})"
+            elif kind in formats or kind in ('archive','APK','BR','DAT','DAT.BR'):
+                category='image' if kind in formats else 'file'
+                description=f"{kind} ({_format_bytes(identity['size'])}; detected_by={identity['detected_by']})"
+            else:continue
+        except (OSError,ValueError):continue
+        results.append({'name':name+'/' if folder else name,'kind':category,'format':kind,'desc':description,
+                        'action':subprocess.list2cmdline(['rak','inspect',name,'--json'])})
     return results
 
 
@@ -270,7 +188,7 @@ def get_all_workspace_dirs(cwd: Optional[str] = None) -> List[str]:
         _add(cwd)
 
     # 3. If cwd was inside a tree directory, inspect parent for sibling trees
-    if cwd and os.path.isdir(cwd):
+    if cwd and os.path.isdir(cwd) and os.path.basename(os.path.normpath(cwd)).lower() in ('port','port1','port2','base','stock','rom1','rom2'):
         parent = os.path.dirname(os.path.normpath(cwd))
         if parent and os.path.isdir(parent):
             try:
@@ -291,12 +209,84 @@ def get_all_workspace_dirs(cwd: Optional[str] = None) -> List[str]:
 def generate_dynamic_instructions(cwd: str) -> str:
     norm_cwd = os.path.normpath(cwd) if cwd else os.getcwd()
     t1_base, t2_base = detect_dual_trees(norm_cwd)
+    physical_checkouts = []
+    try:
+        from core.rak_neobranch_view import project_root
+        from main_ext.class_NeoBranchManager import NeoBranchManager
+        base = project_root(norm_cwd)
+        manager = NeoBranchManager(base)
+        store=os.path.join(base,'neobranch')
+        for entry in os.scandir(store) if os.path.isdir(store) else ():
+            if entry.is_dir(follow_symlinks=False):
+                # NeoBranchManager APIs are keyed by the partition basename.
+                if manager.is_physical_checkout(entry.name):
+                    active = manager.get_active_branch(entry.name)
+                    physical_checkouts.append((entry.name, (active or {}).get("name")))
+    except (ImportError, OSError, ValueError, AttributeError, TypeError):
+        physical_checkouts = []
+    physical_mode = bool(physical_checkouts)
+    legacy_sparse = False
+    try:
+        from main_ext.class_NeoBranchManager import NeoBranchManager
+        base = project_root(norm_cwd)
+        manager = NeoBranchManager(base)
+        store=os.path.join(base,'neobranch')
+        for entry in os.scandir(store) if os.path.isdir(store) else ():
+            if entry.is_dir(follow_symlinks=False):
+                if manager.get_active_branch(entry.name) and not manager.is_physical_checkout(entry.name):
+                    legacy_sparse = True
+                    break
+    except (ImportError, OSError, ValueError, AttributeError, TypeError, NameError):
+        legacy_sparse = False
+
+    # Native agent filesystem tools are the normal path. Keep the large legacy
+    # command catalog only when an active sparse branch requires its logical view.
+    if not legacy_sparse:
+        compact = [
+            START_MARKER,
+            "# Renns Android Kitchen (RAK) — Workspace Guide",
+            "",
+            f"Instruction format: RAK CLI contract v{DOCS_FORMAT_VERSION}; shared by {', '.join(AGENT_FILES)}.",
+            "Agent memory: keep notes, learned facts, and user rules outside this managed block.",
+            "Use native Windows agent tools (Read, Write, Edit, shell, and Python) for ordinary project files. Do not route normal file work through RAK or WSL.",
+            "Use `rak` for Kitchen operations: inspect, unpack/repack, archive and payload extraction, BR/DAT conversion, APK tools, virtual mounts, branch create/switch, and Android mode/UID/GID/SELinux metadata.",
+            "",
+            f"- Workspace: `{norm_cwd}`",
+        ]
+        if t1_base: compact.append(f"- Tree 1: `{t1_base}`")
+        if t2_base: compact.append(f"- Tree 2: `{t2_base}`")
+        for partition, branch in physical_checkouts:
+            compact.append(f"- Physical NeoBranch: `{partition}` on `{branch or 'Source'}`; the live partition folder and project config are authoritative.")
+        compact.extend([
+            "",
+            "Use `rak doctor --json` and `rak capabilities --json` to check available Kitchen tools and live-only UI/mount functions. Use `rak inspect PATH --json` and follow the returned operation argv exactly before handling unfamiliar ROM inputs.",
+            "For a physical NeoBranch checkout, ordinary edits apply directly to its live folder. Use `rak branch current <partition>` and `rak branch switch <partition> <name>` to inspect or change the selected branch. Source checkouts without a physical branch use ordinary native file tools as well.",
+            "Avoid concurrent external writes while switching branches because checkout changes the live partition contents. Android `!<symlink>` placeholders are regular files on Windows: use `rak inspect`/`rak readlink` to identify and resolve them; native `cd` does not traverse them.",
+            "Branch commands wait for their actual task result by default. In a live session, `rak branch switch <partition> <name> --no-wait` returns a task_id; inspect that exact task with `rak activity show <task_id> --json` until it completes. `--timeout SECONDS` sets an explicit wait limit; a timeout does not cancel work.",
+            "Mounted images are virtual; use `rak img` for image contents and `rak mount`/`rak unmount` for Kitchen mounts. Run `rak repack <partition> -o output.img` to build a partition image.",
+            "Android metadata: `rak stat PATH --json` inspects labels/modes; `rak fs context PATH u:object_r:vendor_file:s0` changes one exact label; `rak fs permission PATH 0644` changes its Android mode. These are separate from Windows ACLs. Ordinary native copies do not infer donor labels: copy the matching config rules or set the required metadata explicitly. Kitchen metadata parsers currently reject whitespace in paths.",
+            "Inspect header_magic before selecting tools. BR/DAT/payload are not mountable filesystems: decode/extract a supported partition IMG first. Repack a filesystem folder to IMG; use an explicit .zip/.7z destination only for an archive. Keep original transfer.list/patch.dat with DAT outputs.",
+            "For an open unsaved Monaco buffer, use `rak ui read` then revision-checked `rak ui edit` with Monaco acknowledgment, or save/close the buffer before an external disk edit. Native tools read on-disk bytes. Tool completion comes from actual task results/events, not elapsed time.",
+            "Keep agent notes outside this managed block. `rak doc` refreshes the managed instructions in AGENTS.md, CLAUDE.md, CODEX.md, and GEMINI.md.",
+            END_MARKER,
+        ])
+        return "\n".join(compact)
+    file_work_rule = (
+        "2. **Use native agent file tools for ordinary work** (Read, Write, Edit, shell, or Python). In a physical NeoBranch checkout, the live partition folder and project config are authoritative; there is no sparse overlay or tombstone layer."
+        if physical_mode else
+        "2. **Use the unified `rak` CLI for Kitchen operations and files in legacy sparse NeoBranch views.** For ordinary files outside those views, use native agent file tools."
+    )
+    view_intro = ("For physical checkouts, the live partition folder and project config are authoritative; use the active branch shown above. For legacy sparse views, use the logical partition path shown by RAK." if physical_mode else "For files inside an unpacked ROM project, use the logical partition path shown by RAK. The active NeoBranch may contain files absent from the source folder.")
+    native_view_rule = ("- Use native agent Read/Write/Edit and shell/Python tools for ordinary file inspection and edits in physical checkouts. Use `rak` for Kitchen tools, branch switching, mount operations, and Android filesystem metadata. Legacy sparse NeoBranch paths still require RAK's logical file commands." if physical_mode else "- Do not use host file tools for files in legacy sparse NeoBranch views; they bypass branch additions and deletions. Use the RAK logical file commands below.")
+    mutation_rule = ("Ordinary file mutations in physical checkouts use native agent file tools against the live checkout. Use managed `rak` commands for Kitchen operations, branch switching, mounts, and Android metadata; legacy sparse views require managed RAK mutations." if physical_mode else "All project-tree file mutations in legacy sparse NeoBranch views must use managed `rak` commands (Unix-style cp/mv/rm/mkdir/touch/ln/chmod/sed or compatible `rak fs` actions). They validate logical paths, use the GUI task pipeline, and preserve NeoBranch and filesystem metadata.")
 
     lines = [
         START_MARKER,
         "# 🤖 Renns Android Kitchen (RAK) — Environment & Command Router",
         "",
         "You are operating in an Android ROM / partition project managed by **Renns Android Kitchen (RAK)**.",
+        f"- **Instruction format:** RAK CLI contract v{DOCS_FORMAT_VERSION}; shared by {', '.join(AGENT_FILES)}.",
+        "- **Agent memory:** Keep notes, learned facts and user rules outside the RAK_CLI_AUTO_GENERATED START/END block. RAK refreshes only its managed block.",
         f"- **Current Workspace:** `{norm_cwd}`",
     ]
 
@@ -304,18 +294,60 @@ def generate_dynamic_instructions(cwd: str) -> str:
         lines.append(f"- **Tree 1 (Port ROM / Active Build):** `{t1_base}`")
     if t2_base:
         lines.append(f"- **Tree 2 (Base ROM / Reference Donor):** `{t2_base}`")
+    for partition, branch in physical_checkouts:
+        lines.append(f"- **Physical NeoBranch:** `{partition}` is checked out on `{branch or 'unknown'}`; its live folder and project config are authoritative.")
 
     lines.extend([
-        "- **Kitchen IPC:** Live synchronized (all `rak` commands route to the Kitchen GUI).",
+        "- **Kitchen IPC:** Commands use the matching live Kitchen session when available; supported standalone commands run headlessly. UI context, events and virtual mount require a live session.",
         "",
         "## ⚠️ CRITICAL RULES FOR AI AGENTS",
         "1. **DO NOT invoke raw binaries directly** (never execute `extract.erofs.exe`, `make_ext4fs.exe`, `lpunpack.exe`, `simg2img.exe` manually).",
-        "2. **ALWAYS use the unified `rak` CLI** available in your PATH / terminal.",
-        "   - Smart Auto-Detect: Use `rak unpack <file>` directly without guessing the filesystem. RAK detects EROFS, EXT4, SUPER, SPARSE, BOOT, PAYLOAD, and archives automatically via header magic.",
-        "   - Smart Auto-Repack: Use `rak repack <folder>` to repack partition directories back to images.",
+        file_work_rule,
+        "   - RAK's primary workflow is filesystem IMG -> unpacked folder plus config metadata -> edit -> repacked IMG. Default `rak repack system` produces system_new.img using the original EXT/EROFS engine, never ZIP.",
+        "   - `.img.br` decodes to IMG; `.new.dat` and `.new.dat.br` convert to IMG using the matching transfer.list; payload.bin and SUPER extract partition IMG files. These containers are not filesystem mount targets.",
+        "   - Mount only a supported EXT/EROFS IMG (including a supported sparse filesystem image read-only). For BR/DAT/payload/SUPER, first obtain a partition IMG and inspect its actual type. Default sparse unpack converts to raw in place; inspect again before the next operation.",
+        "   - Filesystem outputs: use `rak repack system -o rebuilt.img`; other supported destination suffixes are .img.br, .new.dat and .new.dat.br. DAT export retains its matching transfer.list and patch.dat. Boot/vendor_boot folders use the boot/CPIO rebuild engine and output IMG.",
+        "   - Prefer familiar Unix operands: `rak ls -la system`, `rak grep -Rni ro.build system`, `rak cat system/build.prop`.",
+        "   - Run `rak doctor --json` to see actual installed tools, active branches, and functions that require a live session. Standalone capabilities report their actual scope; they do not invent GUI buffers or activity.",
+        "   - Verify your work with `rak stat PATH --json` (Android mode/UID/GID and exact SELinux entry or candidate rules), `rak sha256sum FILE`, `rak cmp FILE1 FILE2`, and `rak diff -ur DIR1 DIR2`. cmp/diff status 1 means differences; it is not a crash. Status 2 means a read/usage/tool failure. Hashes and comparisons read the current on-disk branch, not unsaved editor text.",
+        "   - `rak find PATH -name GLOB -type f -maxdepth N`, `rak head -n N FILE`, `rak tail -n N FILE`, and `rak wc -lwcm FILE` inspect large projects. `rak cat` does not silently truncate text. For large filename sets, use `rak find PATH -type f -print0 | rak wc -l --files0-from=-` in a native terminal, or store a NUL-separated UTF-8 list and use `wc --files0-from LIST`. Filenames in lists still resolve through the active branch.",
+        "   - Use `rak cp [-r|-a] <source> <destination>`, `rak mv <source> <destination>`, `rak rm [-rf] <path>`, `rak mkdir -p <path>`, `rak touch <path>`, `rak ln -s <target> <link>`, and `rak chmod 0644 <path>`.",
+        "   - GNU sed is the text engine, including line addresses, multiple commands and hold-space scripts. Script filesystem I/O and shell execution are disabled so writes stay in the managed editor service. Edit text with `rak sed -i 's/old/new/g' <logical-path>` (or -E for extended regex). This reads the current revision and uses the same guarded editor/background edit service. Open buffers wait for Monaco acknowledgment and autosave; unopened files preserve BOM/encoding/EOL and write into the active branch.",
+        "   - sed handles unopened text files above the UI read limit through a local revision-checked transaction. Open editor buffers retain their Monaco checks; a newly opened buffer or changed disk revision aborts a background save.",
+        "   - For arbitrary text rewrites, use `rak ui read <logical-path>` and `rak ui edit --from request.json` with path, revision, content. Wait for applied and saved=true. Revision identity includes the active branch, even when both branches still read identical Source bytes.",
+        "   - Smart Auto-Detect: `rak inspect PATH --json` reads the existing header_magic detector live for Android images. ZIP/APK use ZIP structure; BR/DAT and other archive suffixes can be filename hints, explicitly labeled detected_by=filename_hint. Do not treat an extension hint as proven binary format.",
+        "   - Smart Auto-Repack: Use `rak repack <folder>` for partition images or managed APK mirrors; `rak repack <folder> -o output.zip` builds an archive (extension selects ZIP/7z/TAR).",
         "   - `rak` routes directly to the Kitchen engine & GUI task queue via local IPC.",
         "   - GUI state, loading bars, and the FileTree will refresh automatically.",
-        "3. Run `rak list` to see all supported actions.",
+        "3. Run `rak inspect <logical-path> --json` for a file or folder you do not recognize. Use operations[].argv exactly; do not guess engine action names. `rak list` shows the canonical commands; `rak list --all` is the compatibility/advanced catalog.",
+        "   Android !<symlink> placeholders and native symlinks retain kind=SYMLINK plus target, representation, resolved_path, status and behaves_as. `rak readlink LINK` reads the stored target; `rak readlink -e LINK` resolves its existing logical target. `rak inspect -L LINK --json` inspects that target. Folder links accept `rak ls LINK` and child paths; listings explicitly mark symlink:directory and report the traversed link. They follow the target's active NeoBranch. Raw host cd cannot traverse a regular Android placeholder. Copy/archive preserve placeholder bytes, and rm LINK removes the link itself.",
+        "   Choose `unpack` to extract/decompile, `mount` to browse an image virtually, and `repack` to rebuild. Automatic detection chooses the format engine. Ordinary file work uses the Unix commands above.",
+        "   `rak archive list ROM.zip --json`; `rak archive extract ROM.7z --to extracted --path system.img`; `rak archive pack folder --to output.zip`.",
+        "   `rak payload list OTA.zip --json`; `rak payload extract payload.bin --to images --partition system --partition vendor --json` (or `--all`). Super uses the same list/extract syntax.",
+        "   `rak unpack payload.bin` extracts all partitions without opening a viewer. `rak unpack app.apk` decompiles; `rak repack app.apk` rebuilds its managed apktool mirror.",
+        "   `rak apk decompile|build|build-sign|build-keeporig|sign|unsign app.apk`; `rak br compress|decompress file`; `rak dat to-image|to-folder system.new.dat.br`.",
+        "   Extraction and archive packing refuse existing output files. Choose another destination or explicitly remove intended outputs with `rak rm` before retrying. Extract outside active partitions. Archive packing reads the merged logical NeoBranch view.",
+        "   For long-running tools in a live Kitchen session, append `--no-wait --json`, retain task_id, and inspect `rak activity show <task_id> --json` plus events until that exact task finishes. A dispatched or timed-out request is not completion; do not automatically retry it. `--timeout <seconds>` changes synchronous waiting.",
+        "   Start with `rak capabilities --json` and `rak context --content --json` to discover live UI state and APIs.",
+        "   `context.project` is the Kitchen container, not a new-file destination. Use `context.workspace.default_output_directory` and tree_roots for project work; never create files beside the opened tree by default.",
+        "   Use `rak ui read <logical-path>` for the current Monaco buffer and its revision, including unsaved changes.",
+        "   Read `rak ui settings` first. Only open/reveal editors or control project UI when agent.ui_triggers is enabled by the user.",
+        "   Use `rak ui controls` to discover registered controls, `ui trigger <id>` to activate and `ui scroll <id>` to reveal/highlight one.",
+        "   Never change project Settings or their JSON. Ask the user and use `rak ui guide agent.ui_triggers` (or agent.autosave/agent.highlight) to point to its switch.",
+        "   Submit `rak ui ask --from request.json` to ask the user in Kitchen; wait for that request ID with `rak ui wait <id> --wait 30`.",
+        "   `rak ui edit --from request.json` applies a revision-checked undoable buffer edit. `ui review` shows a diff for user review. Successful edits autosave when enabled in project settings.",
+        "   `ui read/edit` also support unopened text files without opening an editor: preserve their disk revision and wait for the background edit's actual result.",
+        "   File edits do not require UI access. Preferred: write replacement UTF-8 text to workspace.scratch_directory, then run `rak ui edit <path> --revision <revision> --content-file <replacement.txt> --wait 30`.",
+        "   Never embed file contents in shell commands. `--from` expects a JSON FILE PATH, never inline JSON. Claude Write requires file_path and content; missing arguments are tool validation errors, not UI permission failures.",
+        "   Ask/notify payload: {title,message,choices?}. Edit/review payload: {path,revision,content,title?}. Write UTF-8 JSON; preserve the revision returned by ui read.",
+        "   Wait for events with `rak events --since <cursor> --wait 30 --json`, or stream with `rak events --stream`. Track session_id and refresh context after an event gap/session change.",
+        "   Request states pending/applying are not completion. Read ui response/wait until answered/applied/cancelled/conflict, then act on that actual result.",
+        "   Receive UI requests with `rak inbox next --agent <your-name> --wait 30`. This atomically claims one message. If serving the inbox and no message is available, wait again.",
+        "   Read fresh `rak context --json` after claiming: the attached selection/buffer is a frozen user snapshot. Keep the returned message.id and private claim token.",
+        "   Report work with `rak inbox start <id> --agent <your-name> --claim <token>` and `inbox progress ... --from status.json` (JSON message field).",
+        "   Return actual results with `rak inbox reply|fail <id> --agent <your-name> --claim <token> --from result.json` (JSON answer field and optional paths array). Do not report a failed or merely enqueued job as completed.",
+        "   Check `rak inbox get <id>` before more operations. When cancel_requested is true, stop safely and use `rak inbox ack-cancel <id> --agent <your-name> --claim <token>`. Never force-kill or automatically retry a flash.",
+        "   Only a cooperating inbox consumer receives UI work while waiting; the API does not inject prompts into an arbitrary idle/busy agent terminal.",
         "4. Run `rak badge <path>` to check filesystem format of partition images.",
         "5. Run `rak refresh` to force the GUI FileTree to synchronize with disk.",
         "6. **VIRTUAL MOUNT vs PHYSICAL UNPACK**:",
@@ -350,28 +382,22 @@ def generate_dynamic_instructions(cwd: str) -> str:
         "- `rak branch current <partition_folder>` : Check the currently active branch (alias: `status`).",
         "- `rak branch delete <partition_folder> <branch_name> --yes` : Permanently delete a branch overlay.",
         "",
-        "## Reading the Active Project View (`rak fs`)",
-        "For files inside an unpacked ROM project, use the logical partition path shown by RAK. The active NeoBranch may contain files absent from the source folder.",
-        "- `rak ls [folder]` (alias: `rak fs ls`) : List the merged active view (source files plus branch additions and replacements, minus branch deletions). The `[branch]` or `[source]` tag shows where each visible entry comes from.",
+        "## Unix File Commands on the Active Project View",
+        view_intro,
+        "- `rak ls [folder]` (alias: `rak fs ls`) : List the merged active view (source files plus branch additions and replacements, minus branch deletions). The logical view includes branch additions and excludes branch deletions.",
         "- `rak fs ls <folder> --branch-only` : Show only entries physically present in the active branch overlay.",
         "- `rak cat <file>` (alias: `rak fs cat`) : Read the active version of a text file, including branch-only files.",
-        "- `rak grep <regex> [path]` (alias: `rak fs grep`) : Search visible files in the active view.",
+        "- `rak grep [-RniEF] <regex> <path>` : Search visible files in the active view.",
         "- In the built-in AI tools, use `list_dir`, `inspect`, `read_file`, and `grep_search`; these use the same active NeoBranch view.",
-        "- Do not use PowerShell `Get-ChildItem`/`Get-Content`, `dir`, `type`, raw Python file reads, or direct `neobranch/` storage paths to inspect ROM project files. They bypass the logical branch view and can report the wrong content or miss branch-only files.",
-        "- The built-in agent shell tool is disabled while any NeoBranch is active; use structured RAK file commands.",
+        native_view_rule,
         "- Check `rak branch current <partition_folder>` before work when the intended branch is unclear.",
         "",
-        "## Safe Project-Tree Mutations (`rak fs`)",
-        "All project-tree file mutations must use `rak fs`; it validates managed paths, uses the GUI task pipeline, and preserves NeoBranch and filesystem metadata.",
-        "- `rak fs copy <source> <destination-folder>` : Copy through the managed clipboard pipeline.",
-        "- `rak fs move <source> <destination-folder>` : Move through the managed clipboard pipeline.",
-        "- To duplicate a file or folder in the same parent, use `rak fs copy <source> <parent-folder>`; the clipboard pipeline chooses a numbered name.",
-        "- `rak fs delete <path> --yes` : Delete through the managed task queue; explicit acknowledgement is required.",
-        "- `rak fs mkdir <parent-folder> <name>` / `rak fs touch <parent-folder> <name>` : Create a folder or empty file.",
-        "- `rak fs rename <path> <new-name> [--force]` : Rename with filesystem metadata remapping; --force retries a lock held by Kitchen child tools.",
-        "- `rak fs write <logical-file> --from <utf8-input-file>` : Write text through the active NeoBranch. The input can be a temporary file outside the ROM tree.",
-        "- `rak fs replace <logical-file> <old-text> <new-text> [--all]` : Replace text through the active NeoBranch.",
-        "- `rak fs symlink <parent-folder> <name> <android-target>` : Create an Android symlink with metadata handling.",
+        "## Managed File Changes",
+        "- `rak cp [-r|-a] SOURCE DEST` copies files or merges directory trees. `-n` skips existing files, including inside a merged directory. `cp -a source/. destination` copies directory contents.",
+        "- `rak mv SOURCE DEST`, `rak rm [-rf] PATH`, `rak mkdir -p PATH`, `rak touch PATH`, `rak ln -s TARGET LINK`, `rak chmod OCTAL PATH` use conventional operands and the active branch.",
+        "- Use a second destination name for a backup: `rak cp system/build.prop system/build.prop.bak`. Use `rak sed -i SCRIPT FILE` or revision-checked `rak ui edit` for text.",
+        "Before starting another operation, read `rak activity status --json` for live running/queued jobs, Source recovery state, and Android flash progress. `rak activity --json --failed` lists failed UI/CLI jobs; `rak activity show <id> --json` preserves full output. `rak activity clear --yes` clears completed history without stopping active work. Activity requires a live Kitchen session and never invents an empty standalone session.",
+        mutation_rule,
         "- `rak fs make-filesystem <partition-folder> --type <erofs|ext4> [--mount-point /path] --yes` : Initialize a new partition filesystem.",
         "- Mounted images are not project-tree folders: use `rak img` for their contents.",
         "- Boot/vendor_boot ramdisks are CPIO: mode/UID/GID live in CPIO entries, but CPIO has no per-file SELinux label. RAK currently reapplies mode overrides from `config/<boot>_fs_config`; edited UID/GID fields are not reapplied. Never create `config/<boot>_file_contexts` to label a boot ramdisk; RAK rejects that ineffective metadata at repack. Find the policy actually loaded in this boot mode: recovery may carry `*_file_contexts` and `sepolicy` in the ramdisk root, while normal boot may use mounted system/vendor policy. On vendor_boot v4, RAK edits an existing policy file in its original fragment but rejects new or duplicate-fragment policy paths whose target cannot be inferred from the merged tree. For a file that survives until SELinux loads, inspect the applicable `restorecon` path before claiming it has a label.",
@@ -436,31 +462,37 @@ def generate_dynamic_instructions(cwd: str) -> str:
                     lines.append(f"- `{p['name']}` ({p['desc']})")
         else:
             lines.append("- *(No raw partition images or unpacked partition folders detected in root)*")
-            lines.append("- Place `.img` files here or specify relative/absolute paths with `rak`.")
+            lines.append("- Use `rak inspect PATH --json` for IMG, archives, APK, BR/DAT, payloads, directories or symlinks, including files with unfamiliar names.")
+
+    from core.cli_contract import PRIMARY
+    lines.extend(['', '## Canonical commands (shared with rak list and capabilities)', '```text'])
+    for commands in PRIMARY.values():
+        lines.extend('rak '+command for command in commands)
+    lines.extend(['```', 'Detected entries above are a snapshot. Refresh live type, branch and supported operations with inspect before acting.'])
 
     lines.extend([
         "",
         "## 🛠️ Unified `rak` Command Quick Reference",
-        "- `rak unpack <file>` : Smart auto-unpack partition image or archive (EROFS, EXT4, SUPER, SPARSE, BOOT, PAYLOAD, etc.).",
+        "- `rak capabilities --json` / `rak context --content --json` : Discover live Kitchen capabilities, selected files/text, unsaved editor buffers, branches, mounts and devices.",
+        "- `rak ui --help` : Open/reveal/read UI documents, ask the user, notify, apply or review revision-checked editor changes, and read request responses.",
+        "- `rak inbox --help` : Receive user work from UI, claim it once, report progress/results, and acknowledge stop requests. History and queued work persist per project.",
+        "- `rak events --since <cursor> --wait 30 --json` / `rak events --stream` : Receive condition-driven events for documents, selections, branches, devices and tasks.",
+        "- `rak activity [--json] [--failed] [--limit N]` : Read the same activity log as the Kitchen UI, including live flash progress.",
+        "- `rak activity status --json` / `rak activity show <id> --json` : Inspect live tasks or full output for one task.",
+        "- `rak activity clear --yes` : Clear completed history in the UI; active tasks keep running.",
+        "- `rak unpack <file>` : Auto-detect and unpack partition image, APK, payload or archive (EROFS, EXT4, SUPER, SPARSE, BOOT, PAYLOAD, etc.).",
         "- `rak repack <folder>` : Smart auto-repack directory to partition image.",
         "- `rak img ls <file.img> [subpath]` : List files, permissions & SELinux inside image without unpack.",
         "- `rak img cat <file.img> <path>` : Read file content directly from image to stdout.",
         "- `rak img write <file.img> <path> <file>` : Write/edit file directly into image in-place.",
         "- `rak img extract <file.img> <path> [dest]` : Extract single file or subtree from image.",
-        "- `rak fs ls [folder]` / `rak fs cat <file>` / `rak fs grep <regex> [path]` : Read active NeoBranch project files.",
-        "- `rak fs copy <source> <destination-folder>` : Safe project-tree copy (NeoBranch-aware).",
-        "- `rak fs move <source> <destination-folder>` : Safe project-tree move (NeoBranch-aware).",
-        "- `rak fs delete <path> --yes` : Safe queued project-tree delete.",
-        "- `rak fs mkdir <parent-folder> <name>` / `rak fs touch <parent-folder> <name>` : Create folder/file safely.",
-        "- `rak fs rename <path> <new-name> [--force]` : Project-tree rename with filesystem metadata remapping.",
-        "- `rak fs write <file> --from <input>` / `rak fs replace <file> <old> <new>` : Write or edit text through NeoBranch.",
-        "- `rak fs symlink <parent-folder> <name> <android-target>` : Create Android symlink safely.",
+        "- `rak ls [-ladR] [folder]` / `rak cat <file>` / `rak grep -Rn <regex> <path>` : Read active NeoBranch project files. Directory symlinks are marked explicitly, including when traversed.",
         "- `rak fs make-filesystem <partition-folder> --type <erofs|ext4> --yes` : Create partition filesystem.",
         "- `rak mount <file.img>` : Mount image virtually into Kitchen GUI FileTree.",
         "- `rak unmount <file.img>` : Unmount virtual image from GUI.",
         "- `rak compare <dir_a> <dir_b>` : Compare the active NeoBranch view of each partition (gated by developer server).",
         "- `rak automation <file.renxec> [fs]` : Execute automation on the selected partition's active NeoBranch or source (gated by developer server). Specify [fs] when the project has multiple partitions.",
-        "- `rak list` : View all available Kitchen actions.",
+        "- `rak inspect [-L] PATH --json` : Return live header_magic/filename evidence, symlink identity/status, branch/origin and exact valid operation argv. `-L` inspects a link target. `rak readlink [-f|-e] LINK` reads or resolves its target. `rak list` lists primary commands; `rak list --all` lists compatibility actions.",
         "- `rak refresh` : Synchronize Kitchen GUI with filesystem.",
         "- `rak badge <path>` : Inspect live filesystem type badge.",
         "- `rak batch unpack <path1> | <path2>` : Run batch auto-unpack on multiple files.",
@@ -472,75 +504,73 @@ def generate_dynamic_instructions(cwd: str) -> str:
     return "\n".join(lines)
 
 
-def update_agent_file(target_file_path: str, cwd: str) -> bool:
-
-    new_block = generate_dynamic_instructions(cwd)
-
-    if not os.path.exists(target_file_path):
-        # File does not exist: create it cleanly with the block
-        try:
-            with open(target_file_path, "w", encoding="utf-8") as f:
-                f.write(new_block + "\n")
-            return True
-        except Exception as e:
-            print(f"[RAK Agent Docs] Error creating {target_file_path}: {e}")
-            return False
-
-    # File exists: search line by line for delimiters
+def update_agent_file(target_file_path: str, cwd: str, *, block=None) -> bool:
+    """Replace managed sections atomically, preserving all text outside them."""
+    new_block=generate_dynamic_instructions(cwd) if block is None else block
+    temporary=None
     try:
-        with open(target_file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-    except Exception as e:
-        print(f"[RAK Agent Docs] Error reading {target_file_path}: {e}")
-        return False
-
-    # Determine newline format (\r\n or \n)
-    newline = "\r\n" if "\r\n" in content else "\n"
-    lines = content.splitlines(keepends=True)
-
-    start_idx = None
-    end_idx = None
-
-    for idx, line in enumerate(lines):
-        if is_start_delimiter(line) and start_idx is None:
-            start_idx = idx
-        elif is_end_delimiter(line) and start_idx is not None:
-            end_idx = idx
-            break
-
-    if start_idx is not None and end_idx is not None:
-        # Delimiters found: replace ONLY the block from start_idx to end_idx
-        block_lines = [line + newline for line in new_block.splitlines()]
-        new_lines = lines[:start_idx] + block_lines + lines[end_idx + 1:]
-        final_content = "".join(new_lines)
-    elif start_idx is not None and end_idx is None:
-        # Start marker found but end marker missing: replace from start_idx to EOF
-        block_lines = [line + newline for line in new_block.splitlines()]
-        new_lines = lines[:start_idx] + block_lines + [newline]
-        final_content = "".join(new_lines)
-    else:
-        # Delimiters not present: prepend the managed block to preserve user content
-        final_content = new_block + newline + newline + content
-
-    try:
-        with open(target_file_path, "w", encoding="utf-8") as f:
-            f.write(final_content)
+        content='';mode=None;original_bytes=None
+        if os.path.lexists(target_file_path):
+            if os.path.islink(target_file_path):raise ValueError('Instruction file is a symlink; refusing to replace its link or write outside the workspace')
+            with open(target_file_path,'rb') as stream:original_bytes=stream.read()
+            content=original_bytes.decode('utf-8')
+            mode=stat.S_IMODE(os.stat(target_file_path).st_mode)
+        bom='\ufeff' if content.startswith('\ufeff') else ''
+        content=content[len(bom):]
+        newline='\r\n' if '\r\n' in content else '\n'
+        replacement=newline.join(new_block.splitlines())+newline
+        output=[];inside=False;inserted=False;fence=None
+        for line in content.splitlines(keepends=True):
+            if not inside:
+                fenced=re.match(r'^[ \t]{0,3}(`{3,}|~{3,})(.*)$',line.rstrip('\r\n'))
+                if fenced:
+                    token,tail=fenced.groups()
+                    if fence is None:fence=token
+                    elif token[0]==fence[0] and len(token)>=len(fence) and not tail.strip():fence=None
+                    output.append(line);continue
+                if fence is not None:output.append(line);continue
+            if is_start_delimiter(line):
+                if inside:raise ValueError('Nested managed instruction markers; file left unchanged')
+                inside=True
+                if not inserted:output.append(replacement);inserted=True
+            elif is_end_delimiter(line):
+                if not inside:raise ValueError('Unmatched managed instruction end marker; file left unchanged')
+                inside=False
+            elif not inside:output.append(line)
+        if inside:raise ValueError('Managed instruction end marker is missing; file left unchanged')
+        final=bom+(''.join(output) if inserted else replacement+(newline+content if content else ''))
+        original=bom+content
+        if os.path.exists(target_file_path) and final==original:return True
+        descriptor,temporary=tempfile.mkstemp(prefix='.rak-agent-docs-',dir=os.path.dirname(os.path.abspath(target_file_path)))
+        with os.fdopen(descriptor,'w',encoding='utf-8',newline='') as stream:
+            stream.write(final);stream.flush();os.fsync(stream.fileno())
+        if mode is not None:os.chmod(temporary,mode)
+        current_bytes=None
+        if os.path.lexists(target_file_path):
+            if os.path.islink(target_file_path):raise ValueError('Instruction file became a symlink; retry synchronization')
+            with open(target_file_path,'rb') as stream:current_bytes=stream.read()
+        if current_bytes!=original_bytes:raise ValueError('Instruction file changed during synchronization; retry to preserve the latest agent notes')
+        os.replace(temporary,target_file_path);temporary=None
         return True
-    except Exception as e:
-        print(f"[RAK Agent Docs] Error writing {target_file_path}: {e}")
+    except (OSError,UnicodeError,ValueError) as error:
+        print(f"[RAK Agent Docs] Error updating {target_file_path}: {error}")
         return False
+    finally:
+        if temporary and os.path.exists(temporary):os.remove(temporary)
 
 
 def update_all_agent_files(cwd: Optional[str] = None) -> List[str]:
-
-    all_dirs = get_all_workspace_dirs(cwd)
-    updated = []
-
-    for d in all_dirs:
-        for filename in ("CLAUDE.md", "AGENTS.md"):
-            path = os.path.join(d, filename)
-            if update_agent_file(path, d):
-                updated.append(os.path.normpath(path))
+    updated=[];failed=[]
+    for directory in get_all_workspace_dirs(cwd):
+        block=generate_dynamic_instructions(directory)
+        for filename in AGENT_FILES:
+            path=os.path.join(directory,filename)
+            if update_agent_file(path,directory,block=block):updated.append(os.path.normpath(path))
+            else:failed.append(path)
+    if failed:
+        from core.command_context import OperationError
+        raise OperationError('Agent instructions could not be synchronized: '+', '.join(failed)+
+                             '. Successfully synchronized: '+(', '.join(updated) or '(none)'))
     return updated
 
 
@@ -557,31 +587,7 @@ def handle_terminal_input(line: str, cwd: Optional[str] = None, extra_line: str 
     if not candidates:
         return
 
-    targets = set()
-    for text in candidates:
-        m = _AGENT_REGEX.search(text)
-        if m:
-            trigger = m.group(1).lower()
-            if trigger in ("claude", "claude-code"):
-                targets.update(["CLAUDE.md", "AGENTS.md"])
-            elif trigger == "gemini":
-                targets.update(["GEMINI.md", "AGENTS.md", "CLAUDE.md"])
-            elif trigger == "codex":
-                targets.update(["CODEX.md", "AGENTS.md", "CLAUDE.md"])
-            else:
-                targets.update(["AGENTS.md", "CLAUDE.md"])
-
-    if not targets:
-        return
-
-    all_dirs = get_all_workspace_dirs(cwd)
-    updated_paths = []
-    for d in all_dirs:
-        for target in targets:
-            target_path = os.path.join(d, target)
-            if update_agent_file(target_path, d):
-                updated_paths.append(target_path)
-
+    if not any(_AGENT_REGEX.search(text) for text in candidates):return
+    updated_paths=update_all_agent_files(cwd)
     if updated_paths:
-        dirs_str = ", ".join(all_dirs)
-        print(f"[RAK Terminal] Synchronized {' & '.join(sorted(targets))} in {dirs_str}", flush=True)
+        print(f"[RAK Terminal] Synchronized {' & '.join(AGENT_FILES)} in {', '.join(dict.fromkeys(os.path.dirname(path) for path in updated_paths))}",flush=True)

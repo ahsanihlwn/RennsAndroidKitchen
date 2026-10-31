@@ -11,7 +11,6 @@ import math
 from shiboken6 import isValid
 from main_ext.class_ThemeUi import theme as _th
 from core.skia_gpu import render_gpu, blur_gpu, skia
-from core.live_backdrop import LiveBackdrop as _LiveBackdrop
 from core.skia_patch import SurfacePatch
 
 
@@ -115,6 +114,14 @@ def _flat_color() -> QColor:
     return QColor(_th.BG_MODAL)
 
 
+def _card_border_color(widget):
+    if not widget._flat and getattr(_th, "effect_level", "medium") == "high":
+        border = QColor(0, 0, 0) if _th.is_light else QColor(255, 255, 255)
+        border.setAlpha(min(widget._border.alpha(), 12))
+        return border
+    return widget._border
+
+
 class _BlurFrameShape:
     def __init__(self, background, border, width, radius):
         self.background, self.border, self.width, self.radius = background, border, width, radius
@@ -167,18 +174,19 @@ def _blur_card_resize_frame(widget, layers):
     """Resample frozen blur with cached Skia AA corners, without GPU readback."""
     ratio = widget.devicePixelRatioF()
     color = _flat_color() if widget._flat else widget._tint
+    border_color = _card_border_color(widget)
     physical_width, physical_height = widget.width()*ratio, widget.height()*ratio
     end_phase = (round(physical_width % 1, 6), round(physical_height % 1, 6))
-    style = (ratio, widget._corner, widget._border.rgba(), end_phase)
+    style = (ratio, widget._corner, border_color.rgba(), end_phase)
     cached_patches = getattr(widget, "_blur_resize_patches", None)
     if cached_patches is None or cached_patches[0] != style:
         # Keep the corners separated enough for Skia's analytic AA path,
         # including a half-pixel right/bottom edge at 150% display scale.
         mask = SurfacePatch(_BlurFrameShape(QColor(255, 255, 255), QColor(0, 0, 0, 0), 0, widget._corner), ratio,
                             end_phase=end_phase, center_pixels=32)
-        border = (SurfacePatch(_BlurFrameShape(QColor(0, 0, 0, 0), widget._border, 1, widget._corner), ratio,
+        border = (SurfacePatch(_BlurFrameShape(QColor(0, 0, 0, 0), border_color, 1, widget._corner), ratio,
                                end_phase=end_phase, center_pixels=32)
-                  if widget._border.alpha() else None)
+                  if border_color.alpha() else None)
         widget._blur_resize_patches = style, mask, border
     else:
         _, mask, border = cached_patches
@@ -225,8 +233,9 @@ def _blur_card_resize_frame(widget, layers):
 def _gpu_card_frame(widget, backdrop, origin, layers=None):
     ratio = widget.devicePixelRatioF()
     color = _flat_color() if widget._flat else widget._tint
+    border = _card_border_color(widget)
     key = (widget.width(), widget.height(), ratio, widget._corner,
-           widget._flat, color.rgba(), widget._border.rgba(),
+           widget._flat, color.rgba(), border.rgba(),
            backdrop.cacheKey(), origin.x(), origin.y(),
            tuple((image.cacheKey(), rect.x(), rect.y(), rect.width(), rect.height(), alpha)
                  for image, rect, alpha in layers) if layers is not None else None)
@@ -240,16 +249,15 @@ def _gpu_card_frame(widget, backdrop, origin, layers=None):
         canvas.save()
         canvas.clipRRect(rounded, True)
         if not widget._flat and not backdrop.isNull():
-            if layers is None:
-                destination = QRectF(origin.toPointF(), backdrop.deviceIndependentSize())
-                bridge.draw_image(canvas, backdrop, _blur_layer_destination(widget, destination, ratio))
-            else:
-                for image, destination, alpha in layers:
-                    bridge.draw_image(canvas, image, _blur_layer_destination(widget, destination, ratio), alpha)
+            backdrop_layers = ([(backdrop, QRectF(origin.toPointF(), backdrop.deviceIndependentSize()), 1.0)]
+                               if layers is None else layers)
+            for image, destination, alpha in backdrop_layers:
+                destination = _blur_layer_destination(widget, destination, ratio)
+                bridge.draw_image(canvas, image, destination, alpha)
         canvas.drawColor(bridge.color(color))
         canvas.restore()
         inset = skia.Rect.MakeXYWH(.5, .5, widget.width() - 1, widget.height() - 1)
-        paint = skia.Paint(Color4f=bridge.color(widget._border), AntiAlias=True,
+        paint = skia.Paint(Color4f=bridge.color(border), AntiAlias=True,
                            Style=skia.Paint.kStroke_Style, StrokeWidth=1)
         canvas.drawRRect(skia.RRect.MakeRectXY(inset, widget._corner, widget._corner), paint)
 
@@ -349,7 +357,6 @@ class BlurOverlay(QWidget):
         self._cover_screen = cover_screen
         self._capture_without_backdrop = capture_without_backdrop
         self._opacity = 1.0  # default solid; fade-in di-set 0.0 kalau animate
-        self._live_backdrop = None
         self._embedded_parent = parent if not cover_screen else None
 
 
@@ -370,7 +377,7 @@ class BlurOverlay(QWidget):
         if source_widget is not None:
             # ── RENDER path: jepret widget langsung (login overlay) ──
             self.setGeometry(parent.rect())
-            if not self._flat and not getattr(_th, "live_blur_enabled", False):
+            if not self._flat:
 
 
                 padded = _capture_widget_area(source_widget,
@@ -387,7 +394,7 @@ class BlurOverlay(QWidget):
                 padded = screen.grabWindow(0, pg_x, pg_y, pw, ph)
         else:
             self.setGeometry(parent.rect())
-            if not self._flat and not getattr(_th, "live_blur_enabled", False):
+            if not self._flat:
                 pw, ph = parent.width() + pad * 2, parent.height() + pad * 2
                 pg = parent.mapToGlobal(parent.rect().topLeft())
                 pg_x = pg.x() - pad
@@ -445,19 +452,7 @@ class BlurOverlay(QWidget):
     @Slot()
     def _finish_blur(self):
         source, self._pending_blur = self._pending_blur, None
-        if getattr(self, "_closing", False):
-            return
-        if getattr(_th, "live_blur_enabled", False) and not self._cover_screen:
-            scene = getattr(self, "_live_backdrop_scene", None)
-            if scene is None:
-                scene = _LiveBackdrop(self._explicit_root, self, self, self._radius)
-                self._live_backdrop_scene = scene
-            scene.attach(self)
-            scene.resume()
-            self._ready = True
-            self.update()
-            return
-        if source is None or source.isNull():
+        if getattr(self, "_closing", False) or source is None or source.isNull():
             return
         blurred = make_blur_pixmap(source, self._radius)
         painter = QPainter(blurred)
@@ -478,21 +473,17 @@ class BlurOverlay(QWidget):
     def _effect_changed(self, level):
         if not isValid(self) or getattr(self, "_closing", False):
             return
-        scene = getattr(self, "_live_backdrop", None)
-        if scene is not None and isValid(scene) and level != "high":
-            scene.detach(self)
         self._flat = level == "low"
         if self._flat:
             self._pix = QPixmap()
         else:
-            if level != "high":
-                self._backdrop_capture_depth = True
-                try:
-                    self._pending_blur = _capture_widget_area(self._explicit_root,
-                        _widget_global_pos(self), self.width(), self.height(), self._pad,
-                        exclude_widgets=(self, *getattr(self, "_backdrop_exclusions", ())))
-                finally:
-                    self._backdrop_capture_depth = False
+            self._backdrop_capture_depth = True
+            try:
+                self._pending_blur = _capture_widget_area(self._explicit_root,
+                    _widget_global_pos(self), self.width(), self.height(), self._pad,
+                    exclude_widgets=(self, *getattr(self, "_backdrop_exclusions", ())))
+            finally:
+                self._backdrop_capture_depth = False
             self._finish_blur()
         self._ready = True
         self.update()
@@ -580,17 +571,8 @@ class BlurOverlay(QWidget):
             else:
                 p.drawTiledPixmap(self.rect(), self._texture)
         else:
-            scene = getattr(self, "_live_backdrop", None)
-            if scene is not None and isValid(scene) and self in scene.cards:
-                p.setRenderHint(QPainter.SmoothPixmapTransform)
-                for image, destination, alpha in scene.layers_for(self):
-                    p.setOpacity(self._opacity*alpha)
-                    p.drawPixmap(destination, image, QRectF(image.rect()))
-                p.setOpacity(self._opacity)
-                p.fillRect(self.rect(), QColor(0, 0, 0, round(self._darken * 255)))
-            else:
-                p.setRenderHint(QPainter.SmoothPixmapTransform)
-                p.drawPixmap(QRectF(self.rect()), self._pix, QRectF(self._pix.rect()))
+            p.setRenderHint(QPainter.SmoothPixmapTransform)
+            p.drawPixmap(QRectF(self.rect()), self._pix, QRectF(self._pix.rect()))
 
         p.end()
 
@@ -621,8 +603,7 @@ class BlurOverlay(QWidget):
                         card._backdrop_exclusion = host
                     # A glass dialog needs the app pixels before this dark
                     # backdrop is painted; otherwise its blur becomes black.
-                    hide_backdrop = (not getattr(_th, "live_blur_enabled", False) and
-                                     self._capture_without_backdrop and self.isVisible())
+                    hide_backdrop = self._capture_without_backdrop and self.isVisible()
                     if hide_backdrop:
                         self.hide()
                     try:
@@ -745,9 +726,6 @@ class BlurOverlay(QWidget):
         if getattr(self, "_destroyed", False):
             return
         self._destroyed = True
-        scene = getattr(self, "_live_backdrop_scene", None)
-        if scene is not None and isValid(scene):
-            scene.stop()
         self._blur_timer.stop()
         self._pending_blur = None
         self.hide()
@@ -770,7 +748,6 @@ class BlurCard(QWidget):
         self._flat     = not _th.blur_enabled
         self._backdrop_root = None
         self._source_overlay = None
-        self._live_backdrop = None
         self._resize_pending = False
         self._resize_frame_timer = QTimer(self)
         self._resize_frame_timer.setSingleShot(True)
@@ -783,32 +760,14 @@ class BlurCard(QWidget):
             callback, bound_theme = self._effect_listener, _th
             self.destroyed.connect(lambda: bound_theme.remove_effect_level_listener(callback))
 
-    def _attach_live(self, root):
-        overlay = self._source_overlay
-        owner = overlay if overlay is not None and isValid(overlay) else self
-        field = "_live_backdrop_scene" if owner is overlay else "_owned_live_backdrop"
-        scene = getattr(owner, field, None)
-        if scene is None or not isValid(scene) or scene.root is not root:
-            if scene is not None and isValid(scene):
-                scene.stop()
-                scene.deleteLater()
-            scene = _LiveBackdrop(root, owner, overlay, self._radius)
-            setattr(owner, field, scene)
-        needs_refresh = not scene.image.isNull()
-        scene.attach(self)
-        scene.resume()
-        if needs_refresh:
-            scene.refresh()
-        return True
+
+
 
     def _effect_changed(self, level):
         if not isValid(self):
             return
         self._flat = level == "low"
         self._effect_pending = not self.isVisible()
-        scene = self._live_backdrop
-        if scene is not None and isValid(scene) and level != "high":
-            scene.detach(self)
         if self._flat:
             self._blur_pix = QPixmap()
         elif self.isVisible() and self._backdrop_root is not None and isValid(self._backdrop_root):
@@ -840,8 +799,6 @@ class BlurCard(QWidget):
 
     def freeze(self, root_widget: QWidget, global_pos):
         self._backdrop_root = root_widget
-        if getattr(_th, "live_blur_enabled", False) and self._attach_live(root_widget):
-            return
         if self._flat:
             # Blur dimatikan — skip capture layar + QGraphicsBlurEffect sama sekali.
             self._blur_pix = QPixmap()
@@ -876,14 +833,13 @@ class BlurCard(QWidget):
             self.freeze(self.window(), global_pos)
             return
 
-        if getattr(_th, "live_blur_enabled", False) and self._attach_live(root_widget):
-            return
 
         w, h = self.width(), self.height()
         pad = int(self._radius) + 4
 
         try:
-            source = _capture_widget_area(root_widget, global_pos, w, h, pad)
+            source = _capture_widget_area(root_widget, global_pos, w, h, pad,
+                                          exclude_widgets=(self,))
             blurred = make_blur_pixmap(source, self._radius)
             self._blur_pix = _crop_logical(blurred, pad, pad, w, h)
             self._frozen_size = QSize(w, h)
@@ -893,18 +849,13 @@ class BlurCard(QWidget):
             self.freeze(root_widget, global_pos)
 
     def paintEvent(self, _ev):
-        scene = getattr(self, "_live_backdrop", None)
-        origin = (scene.origin_for(self) if scene is not None and isValid(scene) else
-                  self.mapFromGlobal(self._backdrop_origin)
+        origin = (self.mapFromGlobal(self._backdrop_origin)
                   if self._backdrop_origin is not None else QPoint())
-        layers = (scene.layers_for(self) if scene is not None and isValid(scene) else
-                  [(self._blur_pix, QRectF(origin.toPointF(),
+        layers = ([(self._blur_pix, QRectF(origin.toPointF(),
                      self.size().toSizeF() if self._backdrop_origin is None and not self._frozen_size.isEmpty()
                      else self._blur_pix.deviceIndependentSize()), 1.0)]
                   if not self._blur_pix.isNull() else [])
-        resizing = self._resize_pending or (scene is not None and isValid(scene) and
-                                            (scene._resize_active or scene._blend_timer.isActive()))
-        image = (_blur_card_resize_frame(self, layers) if resizing else
+        image = (_blur_card_resize_frame(self, layers) if self._resize_pending else
                  _gpu_card_frame(self, self._blur_pix, origin, layers))
         if image is not None:
             painter = QPainter(self)
@@ -933,7 +884,7 @@ class BlurCard(QWidget):
             p.fillPath(path, self._tint)
         p.setClipping(False)
 
-        pen = QPen(self._border)
+        pen = QPen(_card_border_color(self))
         pen.setWidth(1)
         p.setPen(pen)
         p.setBrush(Qt.NoBrush)
@@ -941,9 +892,9 @@ class BlurCard(QWidget):
         p.end()
 
 
-# Live "frosted-glass hole" BlurCard
+# Compatibility wrapper for callers that explicitly refreeze a card
 class LiveBlurCard(BlurCard):
-    """Qt foreground with a live app backdrop filtered by the shared GPU."""
+    """Legacy name for an explicitly frozen Gaussian backdrop."""
     def __init__(self, parent=None, radius=18.0, tint=None, border=None, corner=10.0):
         super().__init__(parent, radius, tint, border, corner)
         self._win_ref = None
@@ -965,16 +916,10 @@ class LiveBlurCard(BlurCard):
         self.freeze_full(root, win)
 
     def stop_live(self):
-        scene = getattr(self, "_live_backdrop", None)
-        if scene is not None and isValid(scene):
-            scene.stop()
+        pass  # Compatibility: cards now hold only a frozen backdrop.
 
     def start_live(self):
-        if self._cleaned:
-            return
-        scene = getattr(self, "_live_backdrop", None)
-        if scene is not None and isValid(scene):
-            scene.resume()
+        pass  # Compatibility: there is no capture loop to restart.
 
     def cleanup(self):
         self.stop_live()

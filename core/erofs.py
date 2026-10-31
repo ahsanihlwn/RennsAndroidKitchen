@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
-import subprocess
+from core import kitchen_process as subprocess
 import shlex
 import re
-import subprocess
+from core import kitchen_process as subprocess
 import os
 import re
-import subprocess
+from core import kitchen_process as subprocess
 from main_ext.class_ConfigEngine import ConfigEngine
 from core.app_paths import BIN_DIR
 print("[CORE STAGE] EROFS STARTING")

@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 from collections import OrderedDict
+from contextvars import copy_context
 import weakref
 
 import shiboken6
@@ -17,13 +18,14 @@ class AsyncJobs(QObject):
         self._latest = {}
         self._stopped = False
 
-    def submit(self, key, fn, arg, callback):
+    def submit(self, key, fn, arg, callback, *, priority=False, report_operation_errors=True):
         if self._stopped:
             return None
         self._serial += 1
         serial = self._serial
         self._latest[key] = serial
-        self._pending[key] = (serial, fn, arg, callback)
+        self._pending[key] = (serial, fn, arg, callback, copy_context(), report_operation_errors)
+        if priority:self._pending.move_to_end(key,last=False)
         self._pump()
         return serial
 
@@ -32,10 +34,10 @@ class AsyncJobs(QObject):
             key = next((key for key in self._pending if key not in self._running), None)
             if key is None:
                 return
-            serial, fn, arg, callback = self._pending.pop(key)
+            serial, fn, arg, callback, context, report_operations = self._pending.pop(key)
             self._running[key] = serial
             owner_ref = weakref.ref(self)
-            def finished(token, ok, payload, key=key, serial=serial, callback=callback):
+            def finished(token, ok, payload, key=key, serial=serial, callback=callback, report_operations=report_operations):
                 owner = owner_ref()
                 if owner is None or not shiboken6.isValid(owner):
                     return
@@ -43,10 +45,17 @@ class AsyncJobs(QObject):
                 try:
                     if not owner._stopped and owner._latest.get(key) == serial:
                         owner._latest.pop(key, None)
-                        callback(ok, payload)
+                        from core.error_reporting import error_checkpoint, error_reported_since, report_fatal
+                        checkpoint = error_checkpoint()
+                        try:
+                            callback(ok, payload)
+                        finally:
+                            if not ok and (report_operations or getattr(payload,'application_error',False)) and not error_reported_since(checkpoint, payload) and str(payload) != 'Cancelled' and not str(payload).startswith('Queue halted:'):
+                                report_fatal('Background task: '+str(key)+'\n\n'+str(payload), owner=owner,
+                                             application_error=getattr(payload,'application_error',False))
                 finally:
                     owner._pump()
-            run_in_pool((key, serial), fn, arg, finished)
+            context.run(run_in_pool, (key, serial), fn, arg, finished)
 
     def reset(self):
         self._pending.clear()

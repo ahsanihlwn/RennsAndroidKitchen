@@ -10,7 +10,7 @@ import re
 import shutil
 import stat
 import struct
-import subprocess
+from core import kitchen_process as subprocess
 import sys
 from pathlib import Path
 

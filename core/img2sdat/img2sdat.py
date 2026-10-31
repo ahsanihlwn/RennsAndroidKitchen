@@ -37,9 +37,16 @@ def main(INPUT_IMAGE, OUTDIR='.', VERSION=None, PREFIX='system'):
     if VERSION is None:
         VERSION = DEFAULT_VERSION
 
-    image = sparse_img.SparseImage(INPUT_IMAGE, tempfile.mkstemp()[1], '0')
-    b = blockimgdiff.BlockImageDiff(image, None, VERSION)
-    b.Compute(OUTDIR_PREFIX)
+    with tempfile.TemporaryDirectory(prefix='rak-img2sdat-') as scratch:
+        file_map = os.path.join(scratch, 'file.map')
+        with open(file_map, 'wb'):
+            pass
+        image = sparse_img.SparseImage(INPUT_IMAGE, file_map, '0')
+        try:
+            b = blockimgdiff.BlockImageDiff(image, None, VERSION)
+            b.Compute(OUTDIR_PREFIX)
+        finally:
+            image.simg_f.close()
 
     print('Done! Output files: %s' % OUTDIR)
     return OUTDIR_PREFIX

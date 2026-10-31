@@ -113,6 +113,8 @@ class FrameExtractor(QObject):
             item = self._q.get()
             if item is None:            # sentinel: stop
                 break
+            if self._cancelled:
+                continue
             idx, img = item
             try:
                 name = f"frame_{idx:05d}.{self._fmt}"
@@ -123,7 +125,8 @@ class FrameExtractor(QObject):
                     img.save(path)
             except Exception as e:
                 self._save_err = str(e)
-            self._saved_one.emit()      # route ke main thread
+            if not self._cancelled and not self._finished:
+                self._saved_one.emit()  # owner may close while a save finishes
 
     def _on_saved_one(self):
         self._saved += 1

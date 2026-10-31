@@ -24,11 +24,9 @@ premultiplied RGBA source rows and a writable width*height*4 output buffer.
 Run/destroy must use the creating context. The caller owns all pixel buffers.
 Unsupported machines fall back to the existing Skia GPU or Qt filter.
 
-The source is still Qt pixels. High retains a scene, captures damaged regions in
-short GUI slices, and caches Qt label layers. Moving a panel reuses the scene.
-There is no claim of zero CPU source work or direct GPU texture sharing for the
-entire QWidget hierarchy. The Qt native popup requires the filtered image back
-in Qt memory. A Rust shader does not remove those two boundaries by itself.
+Medium and High use frozen Gaussian blur. Capture happens when a card opens or
+is explicitly refreshed; moving it or changing the source does not start live
+capture. Fades and resizes reuse the frozen texture. Low disables blur entirely.
 
 The DLL is bundled through Nuitka's documented
 [DLL package configuration](https://nuitka.net/user-documentation/nuitka-package-config.html#dlls).

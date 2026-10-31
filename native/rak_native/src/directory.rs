@@ -254,7 +254,7 @@ fn mtime_ns(info: &fs::Metadata) -> Option<i128> {
 }
 
 #[derive(Serialize)]
-struct Entry {
+pub(crate) struct Entry {
     name: String,
     path: String,
     is_dir: bool,
@@ -265,20 +265,24 @@ struct Entry {
 }
 
 fn entries(path: &Path, root: &Path) -> io::Result<Vec<Entry>> {
+    let paths = fs::read_dir(path)?.map(|entry| {
+        let entry = entry?;
+        Ok((entry.path(), entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false), entry.file_name().to_string_lossy().into_owned()))
+    }).collect::<io::Result<Vec<_>>>()?;
+    enrich_paths(paths, root)
+}
+
+pub(crate) fn enrich_paths(paths: impl IntoIterator<Item=(PathBuf, bool, String)>, root: &Path) -> io::Result<Vec<Entry>> {
     let mut output = Vec::new();
     let mut candidate_indices = Vec::new();
     let mut candidate_paths = Vec::new();
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let entry_path = entry.path();
-        let is_dir = entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false);
-        let info = if is_dir { None } else { entry.metadata().ok() };
+    for (entry_path, is_dir, name) in paths {
+        let info = if is_dir { None } else { fs::symlink_metadata(&entry_path).ok() };
         let size = if is_dir {
             Some(0)
         } else {
             info.as_ref().map(fs::Metadata::len)
         };
-        let name = entry.file_name().to_string_lossy().into_owned();
         let low = name.to_lowercase();
         let magic = if !is_dir && (low.ends_with(".img") || low.ends_with(".bin")) {
             read_magic(&entry_path)

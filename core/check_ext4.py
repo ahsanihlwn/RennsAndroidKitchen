@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-import subprocess
+from core import kitchen_process as subprocess
 import os
 import re
 import sys

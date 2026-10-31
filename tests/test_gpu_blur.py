@@ -14,7 +14,7 @@ if not _NATIVE:
 from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QRect, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QWidget, QDialog, QLabel, QScrollArea, QPushButton
+from PySide6.QtWidgets import QApplication, QWidget, QLabel
 from shiboken6 import isValid
 from core import skia_gpu as gpu
 from app_ext import class_BlurOverlay as blur
@@ -113,6 +113,132 @@ class BlurTests(unittest.TestCase):
             samples.append(result.pixelColor(round(72 * ratio), round(40 * ratio)).red())
         self.assertLess(max(samples) - min(samples), 9, samples)
 
+    def test_medium_and_high_keep_frozen_pixels_after_motion_source_changes_and_resize(self):
+        self.require_gpu()
+        for level in ("medium", "high"):
+            with self.subTest(level=level):
+                theme._effect_level = level
+                card = blur.BlurCard(self.root, corner=14)
+                self.windows.append(card)
+                card.setGeometry(150, 160, 240, 180)
+                card.show()
+                with patch.object(blur, "make_blur_pixmap", wraps=blur.make_blur_pixmap) as compute:
+                    card.freeze_from_widget(self.root, card.mapToGlobal(QPoint()))
+                    original = card._blur_pix.cacheKey()
+                    card.move(180, 190)
+                    self.root.flipped = not self.root.flipped
+                    self.root.update()
+                    card.resize(280, 200)
+                    QTest.qWait(180)
+                    image = card.grab().toImage()
+                    self.assertEqual(card._blur_pix.cacheKey(), original)
+                    self.assertEqual(compute.call_count, 1)
+                    self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
+                    self.assertEqual(image.pixelColor(image.width()//2, image.height()//2).alpha(), 255)
+                    self.assertFalse(hasattr(card, "_live_backdrop"))
+                    self.assertFalse(hasattr(card, "_quick_blur"))
+                card.hide()
+
+    def test_high_explicit_overlay_uses_a_frozen_backdrop(self):
+        self.require_gpu()
+        theme._effect_level = "high"
+        with patch.object(blur, "make_blur_pixmap", wraps=blur.make_blur_pixmap) as compute:
+            overlay = blur.BlurOverlay(self.root, animate=False, source_widget=self.root,
+                                       backdrop="blur", sync_blur=True)
+            self.windows.append(overlay)
+            original = overlay._pix.cacheKey()
+            self.assertTrue(overlay._ready)
+            self.assertFalse(overlay._pix.isNull())
+            self.root.flipped = True
+            self.root.update()
+            self.root.resize(1020, 740)
+            QTest.qWait(100)
+            overlay.grab()
+            self.assertEqual(overlay._pix.cacheKey(), original)
+            self.assertEqual(compute.call_count, 1)
+            self.assertFalse(hasattr(overlay, "_live_backdrop"))
+
+    def test_hot_level_switch_restores_static_blur_without_starting_capture(self):
+        self.require_gpu()
+        card = blur.BlurCard(self.root)
+        self.windows.append(card)
+        card.setGeometry(150, 160, 240, 180)
+        card.show()
+        card.freeze_from_widget(self.root, card.mapToGlobal(QPoint()))
+        with patch.object(theme, "_save_settings"):
+            theme.set_effect_level("low")
+            self.assertTrue(card._blur_pix.isNull())
+            theme.set_effect_level("high")
+            self.assertFalse(card._blur_pix.isNull())
+            self.assertFalse(theme.live_blur_enabled)
+            original = card._blur_pix.cacheKey()
+            self.root.flipped = True
+            self.root.update()
+            QTest.qWait(100)
+            self.assertEqual(card._blur_pix.cacheKey(), original)
+            theme.set_effect_level("medium")
+            self.assertFalse(card._blur_pix.isNull())
+            self.assertFalse(theme.live_blur_enabled)
+
+    def test_high_static_keeps_backdrop_geometry_colors_and_alpha_at_native_dpr(self):
+        self.require_gpu()
+        card = blur.BlurCard(self.root, corner=24, tint=QColor(0, 0, 0, 0),
+                             border=QColor(0, 0, 0, 0))
+        self.windows.append(card)
+        card.resize(160, 120)
+        for ratio in (1, 1.25, 1.5, 2):
+            source = QPixmap(round(240 * ratio), round(200 * ratio))
+            source.setDevicePixelRatio(ratio)
+            source.fill(Qt.black)
+            painter = QPainter(source)
+            for x in range(240):
+                painter.fillRect(x, 0, 1, 200, QColor(x, x // 2, 200, 128))
+            painter.end()
+            with self.subTest(ratio=ratio), patch.object(card, "devicePixelRatioF", return_value=ratio):
+                theme._effect_level = "medium"
+                plain = blur._gpu_card_frame(card, source, QPoint(-40, -40))
+                theme._effect_level = "high"
+                desktop = blur._gpu_card_frame(card, source, QPoint(-40, -40))
+                self.assertEqual(desktop, plain)
+                self.assertEqual(desktop.pixelColor(0, 0).alpha(), 0)
+
+    def test_high_static_fractional_edge_coverage_matches_plain_card(self):
+        self.require_gpu()
+        card = blur.BlurCard(self.root, corner=14, tint=QColor(0, 0, 0, 0),
+                             border=QColor(0, 0, 0, 0))
+        self.windows.append(card)
+        card.resize(137, 93)
+        source = QPixmap(100, 80)
+        source.fill(QColor("#496681"))
+        layers = [(source, QRectF(card.rect()), 1.0)]
+        for ratio in (1.25, 1.5, 1.75, 2):
+            with self.subTest(ratio=ratio), patch.object(card, "devicePixelRatioF", return_value=ratio):
+                theme._effect_level = "medium"
+                plain = blur._gpu_card_frame(card, source, QPoint(), layers)
+                theme._effect_level = "high"
+                desktop = blur._gpu_card_frame(card, source, QPoint(), layers)
+                for x, y in ((desktop.width()-1, desktop.height()//2), (desktop.width()//2, desktop.height()-1)):
+                    self.assertLessEqual(abs(desktop.pixelColor(x, y).alpha()-plain.pixelColor(x, y).alpha()), 1)
+
+    def test_high_border_stays_subtle_and_neutral_with_a_strong_caller_color(self):
+        self.require_gpu()
+        card = blur.BlurCard(self.root, corner=14, tint=QColor(0, 0, 0, 0),
+                             border=QColor(255, 0, 180))
+        self.windows.append(card)
+        card.resize(160, 120)
+        source = QPixmap(160, 120)
+        source.fill(QColor(60, 60, 60))
+        plain = blur._gpu_card_frame(card, source, QPoint()).pixelColor(80, 0)
+        self.assertGreater(plain.red() - plain.green(), 50)
+        theme._effect_level = "high"
+        for light in (False, True):
+            with self.subTest(light=light), patch.object(theme, "_palette", {"_is_light": light}):
+                rim = blur._gpu_card_frame(card, source, QPoint()).pixelColor(80, 0)
+                self.assertLessEqual(max(rim.red(), rim.green(), rim.blue()) -
+                                     min(rim.red(), rim.green(), rim.blue()), 1)
+                self.assertLess(abs(rim.red() - 60), 35)
+
+
     def test_cached_backdrop_is_reused_and_callers_cannot_modify_cache(self):
         source = self.step()
         with patch.object(blur, "blur_gpu", return_value=source.toImage()) as render:
@@ -154,26 +280,6 @@ class BlurTests(unittest.TestCase):
             self.app.processEvents()
             compute.assert_not_called()
 
-    def test_medium_and_unsupported_embedded_card_use_frozen_gpu_path_on_gui_thread(self):
-        self.require_gpu()
-        overlay = blur.BlurOverlay(self.root, animate=False, backdrop="blur",
-                                   source_widget=self.root, sync_blur=True)
-        self.windows.append(overlay)
-        self.assertTrue(overlay._ready)
-        self.assertEqual(overlay._pix.deviceIndependentSize().toSize(), self.root.size())
-        live = blur.LiveBlurCard(self.root)
-        self.windows.append(live)
-        live.setGeometry(100, 100, 120, 72)
-        live.show()
-        before = gpu.gpu_backend_status()["blur_frames"]
-        with patch.object(theme, "_effect_level", "high"):
-            live.freeze_full(self.root, self.root)
-        self.assertEqual(gpu.gpu_backend_status()["blur_frames"], before + 1)
-        self.assertFalse(live._blur_pix.isNull())
-        self.assertEqual(live.grab().deviceIndependentSize().toSize().width(), 120)
-        live.cleanup()
-        live.refreeze(self.root)
-        self.assertEqual(gpu.gpu_backend_status()["blur_frames"], before + 1)
 
     def surface_dialog(self, level):
         theme._effect_level = level
@@ -189,111 +295,6 @@ class BlurTests(unittest.TestCase):
         self.app.processEvents()
         return dialog, overlay._surface_card
 
-    @unittest.skipIf(AutomationLogWindow is None, "private Automation bundle not installed")
-    def test_high_tracks_movement_without_recapture_and_updates_only_changed_background(self):
-        self.require_gpu()
-        dialog, surface = self.surface_dialog("high")
-        scene = surface._live_backdrop
-        self.assertIsNotNone(scene)
-        self.assertFalse(surface._blur_pix.isNull())
-        origin = scene.origin_for(surface)
-        before = gpu.gpu_backend_status()["blur_frames"]
-        with patch.object(blur, "_capture_widget_area", side_effect=AssertionError("moving recaptured root")):
-            dialog.move(dialog.pos()+QPoint(13, 17))
-            self.app.processEvents()
-            self.assertEqual(scene.origin_for(surface), origin-QPoint(13, 17))
-            self.assertEqual(gpu.gpu_backend_status()["blur_frames"], before)
-        self.root.flipped = True
-        self.root.update()
-        QTest.qWait(200)
-        self.assertGreater(gpu.gpu_backend_status()["blur_frames"], before)
-        after = gpu.gpu_backend_status()["blur_frames"]
-        QTest.qWait(150)
-        self.assertEqual(gpu.gpu_backend_status()["blur_frames"], after)
-        self.assertEqual(gpu.gpu_backend_status()["blur_backend"], "rust-gaussian-opengl")
-        self.assertFalse(hasattr(surface, "_native_backdrop"))
-        self.assertFalse(dialog._overlay.isWindow())
-
-    @unittest.skipIf(AutomationLogWindow is None, "private Automation bundle not installed")
-    def test_hot_effect_switch_stops_live_capture_and_keeps_medium_frozen(self):
-        self.require_gpu()
-        dialog, surface = self.surface_dialog("medium")
-        original = surface._blur_pix.toImage()
-        dialog.move(dialog.pos()+QPoint(19, 23))
-        self.app.processEvents()
-        self.assertEqual(surface._blur_pix.toImage(), original)
-        with patch.object(theme, "_save_settings"):
-            theme.set_effect_level("high")
-            scene = surface._live_backdrop
-            self.assertIsNotNone(scene)
-            theme.set_effect_level("low")
-            self.assertIsNone(surface._live_backdrop)
-            self.assertTrue(scene._stopped)
-            self.assertTrue(surface._blur_pix.isNull())
-            theme.set_effect_level("medium")
-            self.assertFalse(surface._blur_pix.isNull())
-            theme.set_effect_level("high")
-            self.assertIs(surface._live_backdrop, scene)
-
-    def test_full_high_overlay_excludes_embedded_qt_foreground_and_keeps_parent(self):
-        self.require_gpu()
-        theme._effect_level = "high"
-        overlay = blur.BlurOverlay(self.root, animate=False, backdrop="blur",
-                                   source_widget=self.root, sync_blur=True)
-        self.windows.append(overlay)
-        foreground = QLabel("Foreground login card", self.root)
-        foreground.setGeometry(60, 70, 320, 100)
-        foreground.setStyleSheet("background:white; color:black;")
-        overlay.exclude_backdrop_widget(foreground)
-        foreground.show()
-        self.app.processEvents()
-        scene = overlay._live_backdrop
-        before = gpu.gpu_backend_status()["blur_frames"]
-        foreground.setText("Foreground changes never enter the backdrop")
-        QTest.qWait(180)
-        self.assertEqual(gpu.gpu_backend_status()["blur_frames"], before)
-        self.assertIs(foreground.parentWidget(), self.root)
-        self.assertIs(overlay.parentWidget(), self.root)
-        self.assertFalse(overlay.isWindow())
-        self.root.flipped = True
-        self.root.update()
-        QTest.qWait(200)
-        self.assertGreater(gpu.gpu_backend_status()["blur_frames"], before)
-        self.assertIs(overlay._live_backdrop, scene)
-
-    def test_staged_capture_matches_frozen_scene_with_scroll_viewport_and_qt_text(self):
-        self.require_gpu()
-        area = QScrollArea(self.root)
-        area.setGeometry(80, 70, 300, 240)
-        area.setStyleSheet("background:#222b35; border:1px solid white;")
-        content = QWidget()
-        content.resize(270, 2200)
-        for index in range(100):
-            label = QLabel(f"Visible folder {index:03}", content)
-            label.setGeometry(4, index*22, 250, 20)
-            label.setStyleSheet("background:transparent; color:white; font-size:12px;")
-        area.setWidget(content)
-        area.show()
-        area.verticalScrollBar().setValue(560)
-        self.app.processEvents()
-        theme._effect_level = "high"
-        owner = blur.BlurCard(self.root)
-        self.windows.append(owner)
-        owner.setGeometry(410, 20, 150, 90)
-        owner.show()
-        owner.freeze_from_widget(self.root, owner.mapToGlobal(QPoint()))
-        scene = owner._live_backdrop
-        original = scene._source.copy()
-        before = gpu.gpu_backend_status()["blur_frames"]
-        scene.refresh()
-        QTest.qWait(500)
-        self.assertIsNone(scene._capture_jobs)
-        self.assertGreater(scene._last_timings["capture_elapsed_ms"], 0)
-        self.assertEqual(scene._source, original)
-        self.assertEqual(gpu.gpu_backend_status()["blur_frames"], before)
-        owner.hide()
-        self.assertFalse(scene._capture_timer.isActive())
-        self.assertFalse(scene._timer.isActive())
 
     def test_rust_shader_preserves_colors_alpha_orientation_and_skia_state(self):
         self.require_gpu()
@@ -316,122 +317,6 @@ class BlurTests(unittest.TestCase):
         self.assertEqual(frame.pixelColor(20, 20), QColor("#a1c5df"))
         self.assertIsNone(gpu.gpu_backend_status()["rust_blur_error"])
 
-    def test_live_dirty_patch_skips_unaffected_widgets_and_matches_full_scene(self):
-        self.require_gpu()
-        theme._effect_level = "high"
-        left = QWidget(self.root)
-        right = QWidget(self.root)
-        left.setGeometry(20, 20, 180, 140)
-        right.setGeometry(700, 20, 180, 140)
-        left.setStyleSheet("background:#bf5930; border:none;")
-        right.setStyleSheet("background:#34649a; border:none;")
-        left.show()
-        right.show()
-        card = blur.BlurCard(self.root)
-        card.setGeometry(400, 300, 140, 90)
-        card.show()
-        self.windows.append(card)
-        card.freeze_from_widget(self.root, card.mapToGlobal(QPoint()))
-        scene = card._live_backdrop
-        from PySide6.QtGui import QRegion
-        # Simulate the actual Qt damaged region after a local source change.
-        left.setStyleSheet("background:#724391; border:none;")
-        scene._dirty = QRegion(left.geometry())
-        jobs = list(scene._jobs(self.root, QPoint(scene.pad, scene.pad),
-                                scene._dirty, scene._excluded(), True))
-        self.assertIn(left, [job[0] for job in jobs])
-        self.assertNotIn(right, [job[0] for job in jobs])
-        scene.refresh()
-        QTest.qWait(200)
-        self.assertIsNone(scene._capture_jobs)
-        reference = blur._capture_widget_area(self.root, blur._widget_global_pos(self.root),
-            self.root.width(), self.root.height(), scene.pad,
-            device_pixel_ratio=scene._capture_ratio, exclude_widgets=scene._excluded())
-        self.assertEqual(scene._source, reference.toImage())
-
-    def test_source_resize_reuses_stretched_blur_then_captures_final_size_once(self):
-        self.require_gpu()
-        theme._effect_level = "high"
-        overlay = blur.BlurOverlay(self.root, animate=False, source_widget=self.root,
-                                   backdrop="blur", sync_blur=True)
-        self.windows.append(overlay)
-        scene = overlay._live_backdrop
-        original = scene.image.cacheKey()
-        before = gpu.gpu_backend_status()["blur_frames"]
-        for width, height in ((1100, 700), (1200, 780), (840, 570), (1130, 790)):
-            self.root.resize(width, height)
-            self.root.flipped = not self.root.flipped
-            self.root.update()
-            QTest.qWait(20)
-            self.assertTrue(scene._resize_active)
-            self.assertIsNone(scene._capture_jobs)
-            self.assertEqual(scene.image.cacheKey(), original)
-            self.assertEqual(gpu.gpu_backend_status()["blur_frames"], before)
-            destination = scene.layers_for(overlay)[0][1]
-            self.assertTrue(destination.contains(overlay.rect().toRectF()))
-            image = overlay.grab().toImage()
-            # New exposed edges contain real opaque blur, rather than just
-            # the translucent dim fill at the old texture's boundary.
-            self.assertEqual(image.pixelColor(image.width()-3, image.height()//2).alpha(), 255)
-        QTest.qWait(600)
-        self.assertFalse(scene._resize_active)
-        self.assertFalse(scene._blend_timer.isActive())
-        self.assertIsNone(scene._capture_jobs)
-        self.assertEqual(scene._image_size, self.root.size())
-        self.assertEqual(gpu.gpu_backend_status()["blur_frames"], before+1)
-        self.assertNotEqual(scene.image.cacheKey(), original)
-
-    def test_resize_cancels_queued_capture_and_close_stops_handoff_timers(self):
-        self.require_gpu()
-        theme._effect_level = "high"
-        overlay = blur.BlurOverlay(self.root, animate=False, source_widget=self.root,
-                                   backdrop="blur", sync_blur=True)
-        self.windows.append(overlay)
-        scene = overlay._live_backdrop
-        scene.refresh()
-        self.assertIsNotNone(scene._capture_jobs)
-        self.root.resize(1103, 743)
-        self.assertIsNone(scene._capture_jobs)
-        scene._advance_capture()  # A late queued callback must be harmless.
-        scene._resize_timer.stop()
-        scene._settle_resize()
-        QTest.qWait(100)
-        scene.stop()
-        self.assertFalse(scene._resize_timer.isActive())
-        self.assertFalse(scene._blend_timer.isActive())
-        self.assertFalse(scene._capture_timer.isActive())
-
-    def test_resize_card_uses_cached_skia_aa_corners_without_full_gpu_frames(self):
-        self.require_gpu()
-        theme._effect_level = "high"
-        shell = QWidget(self.root, Qt.Tool | Qt.FramelessWindowHint)
-        shell.setAttribute(Qt.WA_DontShowOnScreen)
-        shell.setAttribute(Qt.WA_TranslucentBackground)
-        shell.setGeometry(180, 160, 400, 320)
-        self.windows.append(shell)
-        card = blur.BlurCard(shell, corner=14)
-        card.setGeometry(shell.rect())
-        shell.show()
-        card.show()
-        card.freeze_from_widget(self.root, card.mapToGlobal(QPoint()))
-        scene = card._live_backdrop
-        before = gpu.gpu_backend_status()
-        sizes = ((401, 321), (477, 358), (530, 392), (438, 345))
-        ratio = card.devicePixelRatioF()
-        phases = {(round(width*ratio % 1, 6), round(height*ratio % 1, 6))
-                  for width, height in sizes}
-        with patch.object(blur, "render_gpu", wraps=blur.render_gpu) as full_frame:
-            for width, height in sizes:
-                card.resize(width, height)
-                image = card.grab().toImage()
-                self.assertTrue(card._resize_pending)
-                self.assertEqual(image.pixelColor(0, 0).alpha(), 0)
-                self.assertEqual(image.pixelColor(image.width()//2, image.height()//2).alpha(), 255)
-            full_frame.assert_not_called()
-        after = gpu.gpu_backend_status()
-        self.assertEqual(after["blur_frames"], before["blur_frames"])
-        self.assertLessEqual(after["frames"]-before["frames"], 2*len(phases))
-        self.assertEqual(scene._image_size, self.root.size())
 
     def test_medium_resize_stretches_frozen_texture_and_preserves_corner_alpha(self):
         self.require_gpu()

@@ -103,7 +103,7 @@ def install_font_polish_filter(app):
     app._font_polish_filter = flt  # cegah GC
 
 
-def apply_app_font(app, point_size: int | None = None) -> str:
+def apply_app_font(app, point_size: int | None = None, *, polish_widgets: bool = True) -> str:
 
     family = load_fonts()
     if not family:
@@ -116,5 +116,7 @@ def apply_app_font(app, point_size: int | None = None) -> str:
     _apply_aa(base)
     app.setFont(base)
 
-    install_font_polish_filter(app)
+    # Quick inherits the application's antialiased font. The old QWidget
+    # polish filter otherwise crosses into Python for every scene event.
+    if polish_widgets:install_font_polish_filter(app)
     return family

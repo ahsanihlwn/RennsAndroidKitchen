@@ -61,6 +61,7 @@ def source_fingerprint():
 def native_environment(target=None):
     environment = os.environ.copy()
     if target is not None:
+        environment['RAK_NATIVE_RUNTIME']=str(target)
         entries = [str(target)]
         if environment.get("PYTHONPATH"):
             entries.append(environment["PYTHONPATH"])
@@ -178,7 +179,14 @@ def main():
     parser = argparse.ArgumentParser(description="Build or reuse the kitchen Rust extension.")
     parser.add_argument("--force", action="store_true", help="Rebuild even if source is unchanged")
     parser.add_argument("--no-install", action="store_true", help="Only prepare a release wheel")
+    parser.add_argument("--dev", action="store_true", help="Use an isolated workspace runtime without replacing a running app's DLL")
     args = parser.parse_args()
+    if args.dev:
+        target = prepare_native(force=args.force)
+        receipt = ROOT / 'build' / 'native' / 'runtime' / 'current.json'
+        receipt.parent.mkdir(parents=True,exist_ok=True)
+        receipt.write_text(json.dumps({'path':str(target) if target is not None else None}),encoding='utf-8')
+        return
     wheel = ensure_native(force=args.force, install=not args.no_install)
     if wheel is not None:
         print(f"Wheel: {wheel}")

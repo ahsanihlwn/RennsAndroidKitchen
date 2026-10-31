@@ -8,7 +8,7 @@ import subprocess
 import threading
 from typing import Optional
 
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Property, Signal, Slot
 from PySide6.QtGui import QColor
 from core.app_paths import BIN_DIR
 
@@ -56,6 +56,7 @@ class PtyProcessManager:
         self._max_buffer_chars = 100_000
         self._last_cols = -1
         self._last_rows = -1
+        self.windows_pty = {}
         self._spam_enter_enabled = threading.Event()
         self._spam_enter_stop = threading.Event()
         self._spam_enter_thread: Optional[threading.Thread] = None
@@ -141,8 +142,8 @@ class PtyProcessManager:
             appname = os.environ.get("SHELL", "/bin/bash")
             cmdline = shell_cmd or ""
 
-        cols = max(80, cols)
-        rows = max(15, rows)
+        cols = max(2, cols)
+        rows = max(1, rows)
         self._last_cols = cols
         self._last_rows = rows
 
@@ -150,8 +151,11 @@ class PtyProcessManager:
         backend = getattr(winpty_enums.Backend, "ConPTY", None) if winpty_enums else None
         try:
             self.pty = PTY(cols, rows, backend=backend)
+            if backend is not None and sys.platform == "win32":
+                self.windows_pty = {"backend": "conpty", "buildNumber": sys.getwindowsversion().build}
         except Exception:
             self.pty = PTY(cols, rows)
+            self.windows_pty = {}
 
         # Format env string as required by winpty: key=val\0key=val\0\0
         env_strs = [f"{k}={v}" for k, v in env.items()]
@@ -210,17 +214,17 @@ class PtyProcessManager:
 
     def resize(self, cols: int, rows: int):
 
-        cols = max(80, cols)
-        rows = max(15, rows)
+        cols = max(2, cols)
+        rows = max(1, rows)
         if cols == self._last_cols and rows == self._last_rows:
             return
-        self._last_cols = cols
-        self._last_rows = rows
         if self._running and self.pty:
             try:
                 self.pty.set_size(cols, rows)
             except Exception:
-                pass
+                return
+        self._last_cols = cols
+        self._last_rows = rows
 
     def get_plain_text(self) -> str:
 
@@ -248,6 +252,7 @@ class TerminalBridge(QObject):
     themeChanged = Signal(str)
     clearRequested = Signal()
     terminalReady = Signal()
+    terminalRendered = Signal(int)
     commandSubmitted = Signal(str)
 
     def __init__(self, pty_mgr: PtyProcessManager, parent: Optional[QObject] = None):
@@ -260,6 +265,10 @@ class TerminalBridge(QObject):
 
         # Connect PTY data to JS output signal
         self.pty_mgr.signals.data_ready.connect(self._on_pty_data)
+
+    @Property("QVariantMap", constant=True)
+    def ptyOptions(self):
+        return getattr(self.pty_mgr, "windows_pty", {})
 
     def _on_pty_data(self, chunk: str):
         with self._output_lock:
@@ -357,6 +366,10 @@ class TerminalBridge(QObject):
     def resizePty(self, cols: int, rows: int):
 
         self.pty_mgr.resize(cols, rows)
+
+    @Slot(int)
+    def onTerminalRendered(self, request: int):
+        self.terminalRendered.emit(request)
 
     @Slot(int, int)
     def onTerminalReady(self, cols: int, rows: int):

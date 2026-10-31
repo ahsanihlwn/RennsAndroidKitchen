@@ -71,7 +71,8 @@ def is_candidate(file_path):
         return False
 
 
-def check_symlink(file_path, project_root, *, target_cache=None):
+def read_symlink_target(file_path):
+    """Decode the existing Android/Cygwin placeholder header without resolving it."""
     try:
         with open(file_path, "rb") as f:
             raw = f.read(MAX_SIZE + 1)
@@ -107,6 +108,17 @@ def check_symlink(file_path, project_root, *, target_cache=None):
                     target = remainder.decode("utf-16le", errors="ignore")
 
         target = target.replace("\x00", "").strip()
+        if not target:
+            return None
+
+        return target
+    except (OSError, UnicodeError):
+        return None
+
+
+def check_symlink(file_path, project_root, *, target_cache=None):
+    try:
+        target = read_symlink_target(file_path)
         if not target:
             return None
 

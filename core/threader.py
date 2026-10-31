@@ -2,6 +2,7 @@
 import traceback
 import time
 import logging
+from contextvars import copy_context
 from PySide6.QtCore import (
     QCoreApplication,
     QObject,
@@ -21,6 +22,17 @@ print("[CORE STAGE] THREADER CALLED")
 
 def has_active_threads():
     return bool(_active_threads)
+
+
+def drain_background_work(app):
+    """Keep Qt alive until owned workers and their queued callbacks finish."""
+    from PySide6.QtCore import QEvent
+    while _active_threads or _active_pool_signals or _thumb_pool.activeThreadCount():
+        app.processEvents()
+        _thumb_pool.waitForDone(10)
+        for thread in tuple(_active_threads):thread.wait(10)
+        QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete)
+    app.processEvents()
 
 
 class Worker(QObject):
@@ -43,8 +55,8 @@ class Worker(QObject):
                 ok, msg = self.fn(self.arg)
             print("[THREAD] worker.run() END")
         except Exception as e:
-            tb = traceback.format_exc()
-            ok, msg = False, f"{e}\n{tb}"
+            from core.command_context import failure_from_exception
+            ok,msg=False,failure_from_exception(e)
         self.finished.emit(ok, msg)
 
 
@@ -88,13 +100,17 @@ class _ThreadRelay(QObject):
         strong_relay = self
         try:
             if self.callback and not cancelled:
-                self.callback(self._ok, self._payload)
+                from core.error_reporting import error_checkpoint, error_reported_since, report_fatal
+                checkpoint = error_checkpoint()
+                try:
+                    self.callback(self._ok, self._payload)
+                finally:
+                    if not self._ok and not error_reported_since(checkpoint, self._payload) and str(self._payload) != 'Cancelled':
+                        report_fatal('Background worker failed\n\n'+str(self._payload),application_error=getattr(self._payload,'application_error',False))
         except Exception as e:
-            logging.getLogger(__name__).exception("Worker completion callback failed")
             trace = traceback.format_exc()
-            print(f"[threader] callback error: {e}\n{trace}")
             from core.error_reporting import report_fatal
-            report_fatal(trace)
+            report_fatal('Worker completion callback failed\n\n'+trace)
         finally:
             control_thread = self._thread
             worker = self._worker
@@ -170,11 +186,9 @@ class _PoolSignals(QObject):
             if self.callback and not self.cancelled:
                 self.callback(tok, ok, payload)
         except Exception as e:
-            logging.getLogger(__name__).exception("Pool completion callback failed")
             trace = traceback.format_exc()
-            print(f"[threader] pool callback error: {e}\n{trace}")
             from core.error_reporting import report_fatal
-            report_fatal(trace)
+            report_fatal('Pool completion callback failed\n\n'+trace)
         finally:
             _active_pool_signals.discard(self)
             self.deleteLater()
@@ -197,7 +211,8 @@ class _PoolRunnable(QRunnable):
             else:
                 ok, payload = (self.fn() if self.arg is None else self.fn(self.arg))
         except Exception as e:
-            ok, payload = False, f"{e}\n{traceback.format_exc()}"
+            from core.command_context import failure_from_exception
+            ok,payload=False,failure_from_exception(e)
         self.signals.finished.emit(self.token, ok, payload)
 
 
@@ -208,13 +223,28 @@ def run_in_pool(token, fn, arg, callback):
         raise RuntimeError("QCoreApplication must be initialized before running background tasks")
     app_thread = app.thread()
 
-    signals = _PoolSignals(callback)
+    context = copy_context()
+    def scoped_callback(*args):
+        def deliver():
+            try:return callback(*args)
+            except Exception:
+                from core.error_reporting import report_fatal
+                report_fatal('Pool completion callback failed\n\n'+traceback.format_exc())
+        return context.copy().run(deliver)
+    def scoped_work():
+        def execute():
+            try:return fn() if arg is None else fn(arg)
+            except Exception as error:
+                from core.command_context import failure_from_exception
+                return False,failure_from_exception(error)
+        return context.copy().run(execute)
+    signals = _PoolSignals(scoped_callback)
     signals.moveToThread(app_thread)
     _active_pool_signals.add(signals)
 
     signals.finished.connect(signals.on_finished)
 
-    runnable = _PoolRunnable(token, fn, arg, signals)
+    runnable = _PoolRunnable(token, scoped_work, None, signals)
     runnable.setAutoDelete(True)
     _thumb_pool.start(runnable)
 

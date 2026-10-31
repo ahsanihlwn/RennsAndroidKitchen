@@ -146,7 +146,7 @@ def _scan(root, max_entries=20000):
             logical = os.path.normpath(entry["path"])
             is_dir = entry["kind"] == "dir"
             out[logical] = (is_dir, 0 if is_dir else stat.st_size, stat.st_mtime_ns)
-            if is_dir and not os.path.islink(physical):
+            if is_dir and not entry.get('symlink') and not os.path.islink(physical):
                 stack.append(logical)
             if len(out) >= max_entries:
                 break
@@ -327,6 +327,12 @@ def inspect(path):
         path = os.path.normpath(path) if path else ""
     out = {"path": path, "exists": False, "kind": None,
            "fs_badge": None, "actions": []}
+    if getattr(rak_cli._main_ref,'quick_cli',None):
+        ok,result=rak_cli._ensure_bridge().invoke('_inspect_path',path)
+        if not ok:return {**out,'error':str(result)}
+        singles,_=available_actions()
+        return {**result,'exists':True,'format':result['kind'],'fs_badge':result.get('header_magic') or result['kind'],
+                'actions':[row['action'] for row in result['operations'] if row['action'] in singles]}
     try:
         from core.rak_neobranch_view import ActiveProjectView
         physical, origin = ActiveProjectView(_active_workspace_root()).resolve(path)
@@ -410,7 +416,11 @@ def list_dir(path=None):
         return out
     try:
         from core.rak_neobranch_view import ActiveProjectView
-        entries = ActiveProjectView(_active_workspace_root()).list_dir(path)
+        view=ActiveProjectView(_active_workspace_root())
+        entries = view.list_dir(path)
+        out['resolved_path']=view.canonical(path);out['symlinks']=view.link_chain(path)
+        link=view.link_info(path)
+        if link:out.update(kind='SYMLINK',behaves_as='directory',symlink=link)
     except (OSError, ValueError) as e:
         out["error"] = str(e)
         return out

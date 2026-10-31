@@ -2,7 +2,7 @@
 import os
 import json
 from core.app_paths import BIN_DIR, PROJECT_DATA_DIR
-import subprocess
+from core import kitchen_process as subprocess
 
 print("[CORE STAGE] BROTLI TOOL")
 

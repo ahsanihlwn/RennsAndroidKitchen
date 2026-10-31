@@ -4,7 +4,7 @@ from core.app_paths import APP_ROOT, ASSET_CACHE_DIR, CACHE_DIR, ensure_app_layo
 from core.proc_util import CREATE_NO_WINDOW
 print("[CORE STAGE] CACHE INIT")
 
-CACHE_VERSION = "v169"   # refresh icon assets in the isolated asset cache
+CACHE_VERSION = "v173"   # refresh icon assets in the isolated asset cache
 CACHE_MARK = os.path.join(ASSET_CACHE_DIR, f".ready_{CACHE_VERSION}")
 
 def hide_folder(path):

@@ -14,6 +14,9 @@ import socket
 import json
 import uuid
 import atexit
+from contextvars import copy_context
+from core.command_context import (CommandContext, CommandFailure, current_command,
+                                  command_scope, failure_from_exception)
 
 from PySide6.QtCore import QObject, Signal, Slot, QThread, Qt, QMetaObject, Q_ARG
 from core.app_paths import APP_ROOT, IPC_RUNTIME_DIR, migrate_legacy_file
@@ -43,6 +46,108 @@ class _Bridge(QObject):
         super().__init__()
         self._result = (False, "no result")
         self._badge_result = None
+        self._requests = {}
+        self._request_lock = threading.Lock()
+
+    def invoke(self, method, *args, **kwargs):
+        request = {'method':method,'args':args,'kwargs':kwargs,'context':copy_context()}
+        if QThread.currentThread() == self.thread():
+            self._execute_request(request)
+        else:
+            token = uuid.uuid4().hex
+            with self._request_lock:self._requests[token] = request
+            try:
+                QMetaObject.invokeMethod(self, '_do_request', Qt.BlockingQueuedConnection, Q_ARG(str,token))
+            finally:
+                with self._request_lock:self._requests.pop(token,None)
+        return request['result']
+
+    def _execute_request(self, request):
+        def execute():
+            try:return getattr(self,request['method'])(*request['args'],**request['kwargs'])
+            except Exception as error:return False,failure_from_exception(error)
+        request['result'] = request['context'].run(execute)
+
+    @Slot(str)
+    def _do_request(self, token):
+        with self._request_lock:request = self._requests[token]
+        self._execute_request(request)
+
+    def _read_badge(self, path):
+        self._do_badge(path)
+        return self._badge_result
+
+    def _refresh(self):
+        self._do_refresh()
+        return self._result
+
+    def _run_activity(self,options):
+        from core.activity_log import collect,render
+        owner=getattr(_main_ref,'session',_main_ref)
+        return True,render(collect(owner,options),options['json'])
+
+    def _run_kitchen(self,options):
+        adapter=getattr(_main_ref,'quick_cli',None)
+        if adapter is None:return False,CommandFailure('Open a Qt Quick Kitchen project or use standalone CLI for structured Kitchen commands.')
+        if options.get('no_wait') and getattr(adapter.session,'headless',False):
+            return False,CommandFailure('--no-wait requires a live Kitchen session so the task can continue after the CLI exits.')
+        kind=options['namespace'];action=options['action']
+        if kind in ('archive','payload','super'):return adapter.kitchen(options)
+        aliases={'apk':{'decompile':'apktool_decompile','build':'apktool_build','build-sign':'apktool_build_sign',
+                        'build-keeporig':'apktool_build_keeporig','sign':'apktool_sign','unsign':'apktool_unsign'},
+                 'br':{'compress':'convert_img_to_br','decompress':'unpack_br_to_image'},
+                 'dat':{'to-image':'unpack_dat_to_image','to-folder':'unpack_dat_to_folder'}}
+        if kind=='dat' and options['path'].lower().endswith('.br'):
+            return adapter.single('unpack_dat_br_to_'+('image' if action=='to-image' else 'folder'),options['path'])
+        return adapter.single(aliases[kind][action],options['path'])
+
+    def _run_unix(self,options):
+        adapter=getattr(_main_ref,'quick_cli',None)
+        if adapter is None:return False,CommandFailure('Unix-style transactions require a Qt Quick workspace or standalone CLI.')
+        return adapter.unix(options)
+
+    def _run_android_metadata(self,path,column,value):
+        adapter=getattr(_main_ref,'quick_cli',None)
+        if adapter is None:raise ValueError('Android metadata requires a Kitchen workspace')
+        return adapter.android_metadata(path,column,value)
+
+    def _project_root(self,path):
+        return _main_ref.quick_cli.files(path)[0].base
+
+    def _inspect_path(self,path,follow=False):
+        from core.kitchen_inspect import describe
+        adapter=getattr(_main_ref,'quick_cli',None)
+        if adapter is None:return False,CommandFailure('inspect requires a Qt Quick workspace or standalone CLI')
+        return True,describe(adapter,path,follow=follow)
+
+    def _run_repack_output(self,options):
+        adapter=getattr(_main_ref,'quick_cli',None)
+        if adapter is None:return False,CommandFailure('Explicit repack output requires a Qt Quick workspace or standalone CLI')
+        return adapter.repack_output(options)
+
+    def _agent_service(self):
+        owner=getattr(_main_ref,'session',_main_ref)
+        service=getattr(owner,'_agent',None)
+        if service is None:return False,CommandFailure('Open a Qt Quick Kitchen project to use the agent UI API.')
+        return True,service
+
+    def _agent_open_document(self,path):
+        ok,service=self._agent_service()
+        return (True,bool(service._document_row(path))) if ok else (ok,service)
+
+    def _agent_transform_document(self,path):
+        ok,service=self._agent_service()
+        return (True,service.read_for_transform(path)) if ok else (ok,service)
+
+    def _run_agent(self,options,cwd):
+        ok,service=self._agent_service()
+        if not ok:return ok,service
+        return True,service.handle(options,cwd)
+
+    def _agent_touch(self,path,kind):
+        ok,service=self._agent_service()
+        if ok:service.activity.touch(path,kind)
+        return True,''
 
     # dipanggil via invokeMethod; hasil disimpan ke self._result
     @Slot(str, str)
@@ -55,6 +160,8 @@ class _Bridge(QObject):
 
     @Slot(str)
     def _do_badge(self, path):
+        if getattr(_main_ref,"quick_cli",None):
+            self._badge_result=_main_ref.quick_cli.badge(path);return
         tree, err = self._tree()
         if err:
             self._badge_result = None
@@ -69,6 +176,8 @@ class _Bridge(QObject):
 
     @Slot()
     def _do_refresh(self):
+        if getattr(_main_ref,"quick_cli",None):
+            _main_ref.active_tree.reloadMetadata();self._result=(True,"Tree refreshed");return
         main = _main_ref
         tree = getattr(main, "active_tree", None) if main is not None else None
         if tree is None:
@@ -142,6 +251,7 @@ class _Bridge(QObject):
         return tree, None
 
     def _run_single(self, action, path, name=None):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.single(action,path,name)
         tree, err = self._tree(path)
         if err:
             return False, err
@@ -153,6 +263,7 @@ class _Bridge(QObject):
             return False, f"rc_cli error: {e}"
 
     def _run_batch(self, action, paths):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.batch(action,paths)
         first_p = paths[0] if paths else None
         tree, err = self._tree(first_p)
         if err:
@@ -165,6 +276,7 @@ class _Bridge(QObject):
             return False, f"rc_cli_batch error: {e}"
 
     def _run_transfer(self, mode, source, destination):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.transfer(mode,source,destination)
 
         if mode not in ("copy", "move"):
             return False, f"unsupported fs transfer: {mode}"
@@ -258,6 +370,7 @@ class _Bridge(QObject):
                 main.fs_clipboard = old_clipboard
 
     def _run_make_filesystem(self, folder, fs_type, mount_point=None):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.make_filesystem(folder,fs_type,mount_point)
 
         fs_type = (fs_type or "").upper()
         if fs_type not in ("EROFS", "EXT4"):
@@ -311,6 +424,7 @@ class _Bridge(QObject):
         return True, f"dispatched make-filesystem {fs_type} for {os.path.basename(folder)}"
 
     def _run_create_symlink(self, folder, name, target):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.symlink(folder,name,target)
         folder = os.path.normpath(folder)
         tree, err = self._tree(folder)
         if err:
@@ -332,6 +446,7 @@ class _Bridge(QObject):
             return False, f"create symlink dispatch error: {exc}"
 
     def _run_write_text(self, path, content):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.write(path,content)
 
         import tempfile
         path = os.path.normpath(path)
@@ -395,6 +510,7 @@ class _Bridge(QObject):
             return False, f"write failed: {exc}"
 
     def _run_replace_text(self, path, old_text, new_text, replace_all=False):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.replace(path,old_text,new_text,replace_all)
         path = os.path.normpath(path)
         tree, err = self._tree(path)
         if err:
@@ -423,6 +539,7 @@ class _Bridge(QObject):
             return False, f"replace failed: {exc}"
 
     def _run_branch_create(self, folder, branch_name, color="blue", cwd=None):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.branch("create",folder,branch_name,color,cwd)
         tree, tree_base, fs_root, err = _resolve_branch_target(folder, cwd=cwd)
         if err:
             return False, err
@@ -432,8 +549,7 @@ class _Bridge(QObject):
             color = "blue"
         nb_mgr = NeoBranchManager(tree_base)
         try:
-            nb_mgr.create_branch(fs_root, branch_name, color)
-            nb_mgr.set_active_branch(fs_root, branch_name)
+            nb_mgr.create_checkout_branch(fs_root, branch_name, color)
         except Exception as exc:
             return False, f"Failed to create branch: {exc}"
 
@@ -452,6 +568,7 @@ class _Bridge(QObject):
         return True, f"NeoBranch '{branch_name}' created and activated for '{fs_root}' (color: {color})"
 
     def _run_branch_switch(self, folder, branch_name, cwd=None):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.branch("switch",folder,branch_name,cwd=cwd)
         tree, tree_base, fs_root, err = _resolve_branch_target(folder, cwd=cwd)
         if err:
             return False, err
@@ -463,7 +580,7 @@ class _Bridge(QObject):
 
         if is_source:
             try:
-                nb_mgr.set_active_branch(fs_root, None)
+                nb_mgr.checkout_branch(fs_root, None)
             except Exception as exc:
                 return False, f"Failed to switch to source: {exc}"
             if tree is not None:
@@ -485,7 +602,7 @@ class _Bridge(QObject):
             return False, f"Branch '{branch_name}' not found for '{fs_root}'. Available branches: {avail}"
 
         try:
-            nb_mgr.set_active_branch(fs_root, branch_name)
+            nb_mgr.checkout_branch(fs_root, branch_name)
         except Exception as exc:
             return False, f"Failed to switch branch: {exc}"
 
@@ -505,6 +622,7 @@ class _Bridge(QObject):
         return True, f"Switched '{fs_root}' to branch '{branch_name}'"
 
     def _run_branch_delete(self, folder, branch_name, cwd=None):
+        if getattr(_main_ref,"quick_cli",None):return _main_ref.quick_cli.branch("delete",folder,branch_name,cwd=cwd)
         tree, tree_base, fs_root, err = _resolve_branch_target(folder, cwd=cwd)
         if err:
             return False, err
@@ -578,113 +696,45 @@ def _on_qt_thread():
 
 
 def run(action, path, name=None):
-
-    bridge = _ensure_bridge()
-    if _on_qt_thread():
-        return bridge._run_single(action, path, name=name)
-    if name is not None:
-        QMetaObject.invokeMethod(
-            bridge, "_do_single_named", Qt.BlockingQueuedConnection,
-            Q_ARG(str, action), Q_ARG(str, path), Q_ARG(str, name),
-        )
-    else:
-        QMetaObject.invokeMethod(
-            bridge, "_do_single", Qt.BlockingQueuedConnection,
-            Q_ARG(str, action), Q_ARG(str, path),
-        )
-    return bridge.take_result()
+    return _ensure_bridge().invoke('_run_single',action,path,name=name)
 
 
 def run_batch(action, paths):
-
-    bridge = _ensure_bridge()
-    joined = "\x00".join(paths)
-    if _on_qt_thread():
-        return bridge._run_batch(action, paths)
-    QMetaObject.invokeMethod(
-        bridge, "_do_batch", Qt.BlockingQueuedConnection,
-        Q_ARG(str, action), Q_ARG(str, joined),
-    )
-    return bridge.take_result()
+    return _ensure_bridge().invoke('_run_batch',action,paths)
 
 
 def transfer(mode, source, destination):
-
-    bridge = _ensure_bridge()
-    if _on_qt_thread():
-        return bridge._run_transfer(mode, source, destination)
-    QMetaObject.invokeMethod(
-        bridge, "_do_transfer", Qt.BlockingQueuedConnection,
-        Q_ARG(str, mode), Q_ARG(str, source), Q_ARG(str, destination),
-    )
-    return bridge.take_result()
+    return _ensure_bridge().invoke('_run_transfer',mode,source,destination)
 
 
 def transfer_and_wait(mode, source, destination, timeout=120.0):
     ok, msg = transfer(mode, source, destination)
     if not ok:
         return ok, msg
-    if not wait_idle(timeout=timeout):
-        return False, f"{msg} (TIMEOUT setelah {timeout}s)"
-    return True, f"{msg} (selesai)"
+    return _wait_dispatched(msg, timeout)
 
 
 def make_filesystem(folder, fs_type, mount_point=None):
-
-    bridge = _ensure_bridge()
-    if _on_qt_thread():
-        return bridge._run_make_filesystem(folder, fs_type, mount_point)
-    QMetaObject.invokeMethod(
-        bridge, "_do_make_filesystem", Qt.BlockingQueuedConnection,
-        Q_ARG(str, folder), Q_ARG(str, fs_type), Q_ARG(str, mount_point or ""),
-    )
-    return bridge.take_result()
+    return _ensure_bridge().invoke('_run_make_filesystem',folder,fs_type,mount_point)
 
 
 def make_filesystem_and_wait(folder, fs_type, mount_point=None, timeout=300.0):
     ok, msg = make_filesystem(folder, fs_type, mount_point=mount_point)
     if not ok:
         return ok, msg
-    if not wait_idle(timeout=timeout):
-        return False, f"{msg} (TIMEOUT setelah {timeout}s)"
-    return True, f"{msg} (selesai)"
+    return _wait_dispatched(msg, timeout)
 
 
 def create_symlink(folder, name, target):
-
-    bridge = _ensure_bridge()
-    if _on_qt_thread():
-        return bridge._run_create_symlink(folder, name, target)
-    QMetaObject.invokeMethod(
-        bridge, "_do_create_symlink", Qt.BlockingQueuedConnection,
-        Q_ARG(str, folder), Q_ARG(str, name), Q_ARG(str, target),
-    )
-    return bridge.take_result()
+    return _ensure_bridge().invoke('_run_create_symlink',folder,name,target)
 
 
 def write_text(path, content):
-
-    bridge = _ensure_bridge()
-    if _on_qt_thread():
-        return bridge._run_write_text(path, content)
-    QMetaObject.invokeMethod(
-        bridge, "_do_write_text", Qt.BlockingQueuedConnection,
-        Q_ARG(str, path), Q_ARG(str, content if isinstance(content, str) else str(content)),
-    )
-    return bridge.take_result()
+    return _ensure_bridge().invoke('_run_write_text',path,str(content))
 
 
 def replace_text(path, old_text, new_text, replace_all=False):
-
-    bridge = _ensure_bridge()
-    if _on_qt_thread():
-        return bridge._run_replace_text(path, old_text, new_text, replace_all)
-    QMetaObject.invokeMethod(
-        bridge, "_do_replace_text", Qt.BlockingQueuedConnection,
-        Q_ARG(str, path), Q_ARG(str, old_text), Q_ARG(str, new_text),
-        Q_ARG(bool, bool(replace_all)),
-    )
-    return bridge.take_result()
+    return _ensure_bridge().invoke('_run_replace_text',path,old_text,new_text,replace_all)
 
 
 def _resolve_branch_target(target, cwd=None):
@@ -763,51 +813,15 @@ def _resolve_branch_target(target, cwd=None):
 
 
 def branch_create(folder, branch_name, color="blue", cwd=None):
-
-    if is_attached():
-        bridge = _ensure_bridge()
-        if _on_qt_thread():
-            return bridge._run_branch_create(folder, branch_name, color=color, cwd=cwd)
-        QMetaObject.invokeMethod(
-            bridge, "_do_branch_create", Qt.BlockingQueuedConnection,
-            Q_ARG(str, str(folder)), Q_ARG(str, str(branch_name)),
-            Q_ARG(str, str(color or "blue")), Q_ARG(str, str(cwd or "")),
-        )
-        return bridge.take_result()
-    bridge = _ensure_bridge()
-    return bridge._run_branch_create(folder, branch_name, color=color, cwd=cwd)
+    return _ensure_bridge().invoke('_run_branch_create',folder,branch_name,color=color,cwd=cwd)
 
 
 def branch_switch(folder, branch_name, cwd=None):
-
-    if is_attached():
-        bridge = _ensure_bridge()
-        if _on_qt_thread():
-            return bridge._run_branch_switch(folder, branch_name, cwd=cwd)
-        QMetaObject.invokeMethod(
-            bridge, "_do_branch_switch", Qt.BlockingQueuedConnection,
-            Q_ARG(str, str(folder)), Q_ARG(str, str(branch_name)),
-            Q_ARG(str, str(cwd or "")),
-        )
-        return bridge.take_result()
-    bridge = _ensure_bridge()
-    return bridge._run_branch_switch(folder, branch_name, cwd=cwd)
+    return _ensure_bridge().invoke('_run_branch_switch',folder,branch_name,cwd=cwd)
 
 
 def branch_delete(folder, branch_name, cwd=None):
-
-    if is_attached():
-        bridge = _ensure_bridge()
-        if _on_qt_thread():
-            return bridge._run_branch_delete(folder, branch_name, cwd=cwd)
-        QMetaObject.invokeMethod(
-            bridge, "_do_branch_delete", Qt.BlockingQueuedConnection,
-            Q_ARG(str, str(folder)), Q_ARG(str, str(branch_name)),
-            Q_ARG(str, str(cwd or "")),
-        )
-        return bridge.take_result()
-    bridge = _ensure_bridge()
-    return bridge._run_branch_delete(folder, branch_name, cwd=cwd)
+    return _ensure_bridge().invoke('_run_branch_delete',folder,branch_name,cwd=cwd)
 
 
 def branch_list(folder=None, cwd=None):
@@ -893,7 +907,8 @@ def branch_list(folder=None, cwd=None):
             edits = len(b.get("edited_files", []))
             deletes = len(b.get("deleted_paths", []))
             created = b.get("created_at", "")[:19].replace("T", " ")
-            lines.append(f"  {marker}{name:<14} [{color}] created: {created} | edits: {edits} | deletes: {deletes}")
+            changes='physical worktree; native disk edits checkpoint on switch/repack' if nb_mgr.is_physical_checkout(part) else f'edits: {edits} | deletes: {deletes}'
+            lines.append(f"  {marker}{name:<14} [{color}] created: {created} | {changes}")
 
     return True, "\n".join(lines)
 
@@ -912,6 +927,8 @@ def branch_current(folder, cwd=None):
         created = active.get("created_at", "")[:19].replace("T", " ")
         edits = len(active.get("edited_files", []))
         deletes = len(active.get("deleted_paths", []))
+        if nb_mgr.is_physical_checkout(fs_root):
+            return True,f"Active branch for '{fs_root}': '{name}' [{color}] (physical worktree at {os.path.join(tree_base,fs_root)}; native disk edits checkpoint on switch/repack)"
         return True, f"Active branch for '{fs_root}': '{name}' [{color}] (created: {created}, edits: {edits}, deletes: {deletes})"
     return True, f"Active branch for '{fs_root}': source (no active branch)"
 
@@ -939,10 +956,10 @@ def wait_idle(timeout=120.0, poll=0.1):
 
     if _on_qt_thread():
         raise RuntimeError("wait_idle() tidak boleh dipanggil dari Qt main thread")
-    deadline = time.time() + timeout
+    deadline = None if timeout is None else time.time() + timeout
     # beri sedikit waktu supaya dispatch sempat enqueue
     time.sleep(0.15)
-    while time.time() < deadline:
+    while deadline is None or time.time() < deadline:
         if _is_idle():
             # konfirmasi dua kali biar tidak ketipu jeda antar-task
             time.sleep(poll)
@@ -952,6 +969,45 @@ def wait_idle(timeout=120.0, poll=0.1):
     return False
 
 
+def _dispatched_result(message, queue):
+    task_ids = getattr(message, 'task_id', None)
+    if not task_ids or queue is None:return True,message
+    if isinstance(task_ids,str):task_ids = (task_ids,)
+    results = {entry[1]:entry for entry in queue.results_since(0) if entry[1] in task_ids}
+    for task_id in task_ids:
+        if task_id not in results:
+            return False,CommandFailure('Queued command finished without a recorded result: '+task_id,application_error=True)
+        _,_,ok,detail = results[task_id]
+        if not ok:
+            return False,detail if isinstance(detail,CommandFailure) else CommandFailure(detail)
+    return True,message
+
+
+def _wait_dispatched(message, timeout, *, return_output=False, as_json=False):
+    queue=getattr(_main_ref,'task_queue',None)
+    task_ids=getattr(message,'task_id',None)
+    if isinstance(task_ids,str):task_ids=(task_ids,)
+    if task_ids and queue is not None and hasattr(queue,'wait_for_tasks'):
+        if _on_qt_thread():raise RuntimeError('Cannot wait for Kitchen work on the Qt main thread')
+        finished=queue.wait_for_tasks(task_ids,timeout)
+    else:finished=wait_idle(timeout=timeout)
+    if not finished:
+        return False,CommandFailure(f'{message} (wait timed out after {timeout}s; task may still be running). '
+                                    f'Task IDs: {task_ids}. Inspect rak activity status --json; do not retry automatically.',code='timeout')
+    ok,detail = _dispatched_result(message,queue)
+    if not ok:return False,detail
+    if task_ids and queue is not None:
+        results={entry[1]:entry[3] for entry in queue.results_since(0) if entry[1] in task_ids}
+        output='\n'.join(str(results[key]) for key in task_ids)
+        if return_output:
+            if as_json:
+                try:json.loads(output)
+                except ValueError:output=json.dumps({'outputs':[str(results[key]) for key in task_ids]},ensure_ascii=False)
+            return True,output
+        return True,f'{message} (selesai)\n{output}'
+    return True,f'{message} (selesai)'
+
+
 def run_and_wait(action, path, name=None, timeout=120.0):
 
     queue = getattr(_main_ref, "task_queue", None)
@@ -959,9 +1015,13 @@ def run_and_wait(action, path, name=None, timeout=120.0):
     ok, msg = run(action, path, name=name)
     if not ok:
         return ok, msg
+    if getattr(msg,'task_id',None):return _wait_dispatched(msg,timeout)
     finished = wait_idle(timeout=timeout)
     if not finished:
-        return False, f"{msg} (TIMEOUT setelah {timeout}s)"
+        return False, CommandFailure(f"{msg} (TIMEOUT setelah {timeout}s)",code='timeout')
+    if getattr(msg,'task_id',None):
+        task_ok,detail = _dispatched_result(msg,queue)
+        return (True,f'{msg} (selesai)') if task_ok else (False,detail)
     kind = action.split("_", 1)[0]
     if kind in ("unpack", "repack"):
         if queue is None or cursor is None:
@@ -972,6 +1032,8 @@ def run_and_wait(action, path, name=None, timeout=120.0):
         results = [result for result in queue.results_since(cursor)
                    if result[1].startswith(kind)
                    and os.path.normcase(os.path.normpath(result[1].split(":", 1)[-1])) == target]
+        if getattr(_main_ref,"quick_cli",None):
+            results=[result for result in queue.results_since(cursor) if result[1]==_main_ref.quick_cli.last_task]
         if not results:
             # Some unpack actions open a container viewer rather than queue a
             # filesystem extraction. Preserve those dispatch-only actions.
@@ -985,40 +1047,12 @@ def run_and_wait(action, path, name=None, timeout=120.0):
 
 
 def badge(path):
-
-    bridge = _ensure_bridge()
-
-    def _do():
-        tree, err = bridge._tree()
-        if err:
-            return None
-        it = tree.rc_cli_resolve_item(os.path.normpath(path))
-        if it is None:
-            return None
-        return it.data(0, Qt.UserRole + 1)
-
-    if _on_qt_thread():
-        return _do()
-
-
-    QMetaObject.invokeMethod(
-        bridge, "_do_badge", Qt.BlockingQueuedConnection, Q_ARG(str, path),
-    )
-    return bridge._badge_result
+    return _ensure_bridge().invoke('_read_badge',path)
 
 
 def actions():
-
-    main = _main_ref
-    tree = getattr(main, "active_tree", None) if main else None
-    if tree is None:
-        from main_ext.FileTree_ext.RightClick import FileTreeContextMixin as _M
-        single = list(_M.RC_CLI_ACTIONS)
-        batch = list(_M.RC_CLI_BATCH_ACTIONS)
-    else:
-        single = list(tree.RC_CLI_ACTIONS)
-        batch = list(tree.RC_CLI_BATCH_ACTIONS)
-    return {"single": single, "batch": batch}
+    from core.rak_actions import RC_CLI_ACTIONS,RC_CLI_BATCH_ACTIONS
+    return {"single":list(RC_CLI_ACTIONS),"batch":list(RC_CLI_BATCH_ACTIONS)}
 
 
 def _cli_unquote(value):
@@ -1041,19 +1075,25 @@ def _cli_path(value, cwd=None):
     return os.path.normpath(value)
 
 
-def _execute_fs_command(rest, *, wait=True, timeout=120.0, cwd=None):
+def _execute_fs_command(rest, *, wait=True, timeout=120.0, cwd=None,namespace='fs'):
 
-    import shlex
+    from core.cli_arguments import tokens as argument_tokens
     try:
-        tokens = [_cli_unquote(token) for token in shlex.split(rest, posix=False)]
+        tokens = argument_tokens(namespace,rest)
     except ValueError as exc:
         return False, f"invalid fs command: {exc}"
     if not tokens:
         return False, "usage: rak fs <ls|cat|grep|write|replace|copy|move|delete|mkdir|touch|rename|make-filesystem> ..."
     op = tokens[0].lower()
 
-    if op in ("ls", "list", "cat", "read", "grep"):
+    from core.unix_verify import COMMANDS as VERIFY_COMMANDS
+    if op in ("ls", "list", "cat", "read", "grep",*VERIFY_COMMANDS):
         return _execute_fs_read_command(op, tokens[1:], cwd=cwd)
+
+    if op in ('context','permission'):
+        if len(tokens)!=3:return False,f'usage: rak fs {op} PATH '+('SELINUX_LABEL' if op=='context' else 'OCTAL_MODE')
+        ok,message=_ensure_bridge().invoke('_run_android_metadata',_cli_path(tokens[1],cwd),1 if op=='context' else 2,tokens[2])
+        return _wait_dispatched(message,timeout) if ok and wait else (ok,message)
 
     if op == "write":
         if len(tokens) != 4 or tokens[2] != "--from":
@@ -1064,7 +1104,7 @@ def _execute_fs_command(rest, *, wait=True, timeout=120.0, cwd=None):
             from core.rak_neobranch_view import project_root, ActiveProjectView
             try:
                 input_root = project_root(input_file, cwd=cwd)
-                input_physical, _ = ActiveProjectView(input_root).resolve(input_file)
+                input_physical, _ = ActiveProjectView(input_root).resolve_following(input_file)
             except ValueError:
                 input_physical = input_file
             if not input_physical or not os.path.isfile(input_physical):
@@ -1078,8 +1118,21 @@ def _execute_fs_command(rest, *, wait=True, timeout=120.0, cwd=None):
         return write_text(target, content)
 
     if op == "replace":
+        if len(tokens)==4 and tokens[2]=='--from':
+            source=_cli_path(tokens[3],cwd)
+            from core.rak_neobranch_view import project_root,ActiveProjectView
+            try:source=ActiveProjectView(project_root(source,cwd=cwd)).resolve_following(source)[0]
+            except ValueError:pass
+            if not source:raise FileNotFoundError(tokens[3])
+            if os.path.getsize(source)>8*1024*1024:raise ValueError('Replacement request exceeds 8 MiB')
+            try:
+                with open(source,encoding='utf-8-sig') as stream:request=json.load(stream)
+            except json.JSONDecodeError as error:raise ValueError('Invalid replacement JSON: '+str(error)) from error
+            if not isinstance(request,dict) or not isinstance(request.get('old_text'),str) or not isinstance(request.get('new_text'),str) or not isinstance(request.get('replace_all',False),bool):
+                raise ValueError('Replacement request requires old_text, new_text strings and optional replace_all boolean')
+            return replace_text(_cli_path(tokens[1],cwd),request['old_text'],request['new_text'],replace_all=request.get('replace_all',False))
         if len(tokens) not in (4, 5) or (len(tokens) == 5 and tokens[4] != "--all"):
-            return False, "usage: rak fs replace <logical-file> <old-text> <new-text> [--all]"
+            return False, "usage: rak fs replace <logical-file> --from <replacement.json> (old_text, new_text, replace_all); or <old-text> <new-text> [--all]"
         target = _cli_path(tokens[1], cwd)
         return replace_text(target, tokens[2], tokens[3], replace_all=len(tokens) == 5)
 
@@ -1115,7 +1168,8 @@ def _execute_fs_command(rest, *, wait=True, timeout=120.0, cwd=None):
         if len(tokens) != 4:
             return False, "usage: rak fs symlink <parent-folder> <name> <android-target>"
         parent = _cli_path(tokens[1], cwd)
-        return create_symlink(parent, tokens[2], tokens[3])
+        ok,message = create_symlink(parent, tokens[2], tokens[3])
+        return _wait_dispatched(message,timeout) if ok and wait else (ok,message)
 
     if op in ("rename", "mvname"):
         force = len(tokens) == 4 and tokens[3] == "--force"
@@ -1157,64 +1211,23 @@ def _execute_fs_command(rest, *, wait=True, timeout=120.0, cwd=None):
     return False, f"unknown fs operation: {op!r}"
 
 
-def _execute_fs_read_command(op, args, *, cwd=None):
-
-    import re
-    from core.rak_neobranch_view import ActiveProjectView, project_root
-
-    cwd = cwd or os.getcwd()
-    if op in ("ls", "list"):
-        branch_only = "--branch-only" in args
-        paths = [arg for arg in args if arg != "--branch-only"]
-        if len(paths) > 1:
-            return False, "usage: rak fs ls [folder] [--branch-only]"
-        target = _cli_path(paths[0] if paths else ".", cwd)
-    elif op in ("cat", "read"):
-        if len(args) != 1:
-            return False, "usage: rak fs cat <file>"
-        target = _cli_path(args[0], cwd)
-    else:
-        if len(args) not in (1, 2):
-            return False, "usage: rak fs grep <regex> [file-or-folder]"
-        target = _cli_path(args[1] if len(args) == 2 else ".", cwd)
-
-    try:
-        root = project_root(target, cwd=cwd)
-        view = ActiveProjectView(root)
-        if op in ("ls", "list"):
-            entries = view.list_dir(target)
-            if branch_only:
-                entries = [entry for entry in entries if entry["origin"] == "branch"]
-            return True, "\n".join(
-                f"{entry['name']}{'/' if entry['kind'] == 'dir' else ''}\t[{entry['origin']}]"
-                for entry in entries
-            ) or "(empty)"
-        if op in ("cat", "read"):
-            physical, _ = view.resolve(target)
-            if not physical or not os.path.isfile(physical):
-                return False, f"file not found in active project view: {target}"
-            limit = 256 * 1024
-            with open(physical, "rb") as handle:
-                raw = handle.read(limit + 1)
-            output = raw[:limit].decode("utf-8", errors="replace")
-            if len(raw) > limit:
-                output += "\n[truncated at 256 KiB]"
-            return True, output
-        rx = re.compile(args[0])
-        matches = []
-        for logical in view.walk_files(target):
-            physical, _ = view.resolve(logical)
-            if not physical or os.path.getsize(physical) > 4 * 1024 * 1024:
-                continue
-            with open(physical, "r", encoding="utf-8", errors="replace") as handle:
-                for line_number, line in enumerate(handle, 1):
-                    if rx.search(line):
-                        matches.append(f"{os.path.relpath(logical, root)}:{line_number}:{line.rstrip()[:300]}")
-                        if len(matches) >= 400:
-                            return True, "\n".join(matches) + "\n[truncated at 400 matches]"
-        return True, "\n".join(matches) or "(no matches)"
-    except (OSError, ValueError, re.error) as exc:
-        return False, str(exc)
+def _execute_fs_read_command(op, args, *, cwd=None,standalone_stdin=False):
+    from core.unix_read import execute
+    from core.rak_neobranch_view import project_root
+    roots={}
+    def root_for(target):
+        directory=target if os.path.isdir(target) else os.path.dirname(target)
+        key=os.path.normcase(directory)
+        if key in roots:return roots[key]
+        if getattr(_main_ref, 'quick_cli', None):
+            result=_ensure_bridge().invoke('_project_root', target)
+            if isinstance(result,tuple) and result[0] is False:raise ValueError(str(result[1]))
+        else:result=project_root(target,cwd=cwd or os.getcwd())
+        roots[key]=result
+        return result
+    from core.unix_verify import COMMANDS as VERIFY_COMMANDS,execute as verify
+    if op in VERIFY_COMMANDS:return verify(op,args,cwd or os.getcwd(),root_for,allow_stdin=standalone_stdin)
+    return execute(op,args,cwd or os.getcwd(),root_for)
 
 
 def _execute_compare_command(args, *, cwd=None, main_ref=None):
@@ -1252,10 +1265,27 @@ def _execute_compare_command(args, *, cwd=None, main_ref=None):
 def _execute_branch_command(rest, *, wait=True, timeout=120.0, cwd=None):
 
     import shlex
+    branch_timeout=None if timeout==120.0 else timeout
+    no_wait=False
+    def completed(result):
+        ok,message=result
+        if ok and no_wait:
+            return True,json.dumps({'state':'dispatched','task_id':getattr(message,'task_id',None),'operation':str(message)})
+        return _wait_dispatched(message,branch_timeout) if ok and wait and getattr(message,'task_id',None) else result
     try:
         tokens = [_cli_unquote(t) for t in shlex.split(rest, posix=False)]
     except ValueError as exc:
         return False, f"invalid branch command: {exc}"
+
+    if '--timeout' in tokens:
+        index=tokens.index('--timeout')
+        if index+1>=len(tokens):raise ValueError('usage: --timeout SECONDS')
+        branch_timeout=float(tokens[index+1])
+        if not 0<branch_timeout<float('inf'):raise ValueError('Timeout must be finite and positive')
+        del tokens[index:index+2]
+    if '--no-wait' in tokens:
+        if getattr(_main_ref,'headless',False):raise ValueError('--no-wait requires a live Kitchen session')
+        tokens.remove('--no-wait');no_wait=True;wait=False
 
     if not tokens or tokens[0].lower() in ("help", "-h", "--help"):
         return True, (
@@ -1275,14 +1305,14 @@ def _execute_branch_command(rest, *, wait=True, timeout=120.0, cwd=None):
         folder = tokens[1]
         name = tokens[2]
         color = tokens[3] if len(tokens) > 3 else "blue"
-        return branch_create(folder, name, color=color, cwd=cwd)
+        return completed(branch_create(folder, name, color=color, cwd=cwd))
 
     if op in ("switch", "checkout", "set"):
         if len(tokens) < 3:
             return False, "usage: rak branch switch <folder> <branch_name|source>"
         folder = tokens[1]
         name = tokens[2]
-        return branch_switch(folder, name, cwd=cwd)
+        return completed(branch_switch(folder, name, cwd=cwd))
 
     if op in ("list", "ls", "show"):
         folder = tokens[1] if len(tokens) > 1 else None
@@ -1299,7 +1329,7 @@ def _execute_branch_command(rest, *, wait=True, timeout=120.0, cwd=None):
             return False, "usage: rak branch delete <folder> <branch_name> --yes (permanent; deletes branch overlay)"
         folder = tokens[1]
         name = tokens[2]
-        return branch_delete(folder, name, cwd=cwd)
+        return completed(branch_delete(folder, name, cwd=cwd))
 
     # Alternate syntax: `rak branch <folder> <op> ...`
     if len(tokens) >= 2:
@@ -1308,20 +1338,34 @@ def _execute_branch_command(rest, *, wait=True, timeout=120.0, cwd=None):
         if sub_op in ("create", "new", "add") and len(tokens) >= 3:
             name = tokens[2]
             color = tokens[3] if len(tokens) > 3 else "blue"
-            return branch_create(folder, name, color=color, cwd=cwd)
+            return completed(branch_create(folder, name, color=color, cwd=cwd))
         if sub_op in ("switch", "checkout", "set") and len(tokens) >= 3:
-            return branch_switch(folder, tokens[2], cwd=cwd)
+            return completed(branch_switch(folder, tokens[2], cwd=cwd))
         if sub_op in ("list", "ls", "show"):
             return branch_list(folder, cwd=cwd)
         if sub_op in ("current", "status", "active"):
             return branch_current(folder, cwd=cwd)
         if sub_op in ("delete", "rm", "remove", "del") and len(tokens) >= 3 and "--yes" in tokens:
-            return branch_delete(folder, tokens[2], cwd=cwd)
+            return completed(branch_delete(folder, tokens[2], cwd=cwd))
 
     return False, f"unknown branch operation: {op!r} (use: create, switch, list, current, delete)"
 
 
 def execute_command(line, wait=True, timeout=120.0, cwd=None):
+    if current_command() is not None:
+        return _execute_command(line,wait=wait,timeout=timeout,cwd=cwd)
+    context = CommandContext(line)
+    with command_scope(context):
+        try:ok,message = _execute_command(line,wait=wait,timeout=timeout,cwd=cwd)
+        except Exception as error:ok,message = False,failure_from_exception(error)
+        response = _command_response(context,{'ok':ok,'msg':message})
+    if not response['ok']:
+        return False,CommandFailure(response.get('log') or response['msg'],
+            application_error=response.get('application_error',False),code=response.get('error_code','command_failed'))
+    return True,response['msg']
+
+
+def _execute_command(line, wait=True, timeout=120.0, cwd=None):
 
     line = (line or "").strip()
     if not line or line.startswith("#"):
@@ -1334,18 +1378,94 @@ def execute_command(line, wait=True, timeout=120.0, cwd=None):
     if cmd in ("help", "?"):
         return True, _help_text()
 
+    if cmd=='doctor':
+        from core.cli_arguments import tokens as argument_tokens
+        tokens=argument_tokens(cmd,rest)
+        if any(token not in ('--json','--help','-h') for token in tokens):raise ValueError('usage: rak doctor [--json]')
+        if '--help' in tokens or '-h' in tokens:return True,'rak doctor [--json]: installed tools, active branches and live-session requirements'
+        from core.cli_environment import describe,render
+        return True,render(describe(cwd or os.getcwd(),getattr(_main_ref,'session',_main_ref)),'--json' in tokens)
+
+    if cmd=='repack':
+        from core.cli_arguments import tokens as argument_tokens
+        arguments=argument_tokens(cmd,rest)
+        if '-o' in arguments or '--to' in arguments:
+            from core.kitchen_repack_cli import parse
+            try:options=parse(rest,cwd or os.getcwd())
+            except ValueError as error:return False,CommandFailure(str(error))
+            ok,message=_ensure_bridge().invoke('_run_repack_output',options)
+            if not ok or not wait:return ok,message
+            return _wait_dispatched(message,timeout,return_output=True,as_json=options.get('json',False))
+
+    if cmd=='inspect':
+        from core.cli_arguments import tokens as argument_tokens
+        tokens=argument_tokens(cmd,rest)
+        if tokens in (['--help'],['-h']):return True,'rak inspect [-L] PATH [--json]: live format, symlink status, active branch and exact usable operations[].argv'
+        paths=[token for token in tokens if token not in ('--json','-L','--dereference')]
+        if len(paths)!=1:return False,CommandFailure('inspect: expected one logical path')
+        ok,result=_ensure_bridge().invoke('_inspect_path',_cli_path(paths[0],cwd),'-L' in tokens or '--dereference' in tokens)
+        if not ok:return ok,result
+        if '--json' in tokens:return True,json.dumps(result,ensure_ascii=False)
+        link=result.get('symlink');detail=''
+        if link:detail=' -> '+link['target']+' [symlink:'+('directory' if link['is_dir'] else 'file' if link['is_file'] else 'unavailable')+'; '+link['status']+']'
+        return True,result['kind']+' '+result['path']+detail+'\n'+'\n'.join(item['command']+'  # '+item.get('description','') for item in result['operations'])
+
+    from core.unix_verify import COMMANDS as VERIFY_COMMANDS
+    if cmd in VERIFY_COMMANDS:
+        from core.cli_arguments import tokens as argument_tokens
+        return _execute_fs_read_command(cmd,argument_tokens(cmd,rest),cwd=cwd)
+
+    from core.unix_cli import COMMANDS as UNIX_COMMANDS
+    if cmd in UNIX_COMMANDS:
+        from core.unix_cli import parse,execute,HELP
+        try:options=parse(cmd,rest,cwd or os.getcwd())
+        except ValueError as error:return False,CommandFailure(str(error))
+        if options.get('help'):return True,HELP
+        return execute(_ensure_bridge(),options,wait=wait,timeout=timeout,cwd=cwd or os.getcwd(),on_qt_thread=_on_qt_thread())
+
+    from core.kitchen_cli import NAMESPACES
+    if cmd in NAMESPACES:
+        from core.kitchen_cli import parse,HELP
+        try:options=parse(cmd,rest,cwd or os.getcwd())
+        except ValueError as error:return False,CommandFailure(str(error))
+        if options.get('help'):return True,HELP
+        ok,message=_ensure_bridge().invoke('_run_kitchen',options)
+        if ok and options.get('no_wait'):
+            result={'state':'dispatched','task_id':getattr(message,'task_id',None),'operation':str(message)}
+            return True,json.dumps(result,ensure_ascii=False)
+        if not ok or not wait:return ok,message
+        return _wait_dispatched(message,options.get('timeout') or timeout,return_output=True,as_json=options.get('json',False))
+
+    if cmd in ('context','capabilities','events','ui','inbox'):
+        from core.agent_cli import parse,execute,HELP
+        options=parse(cmd,rest,cwd or os.getcwd())
+        if options.get('help'):return True,HELP
+        return execute(_ensure_bridge(),options,cwd or os.getcwd(),on_qt_thread=_on_qt_thread())
+
+    if cmd in ('activity','log','logs'):
+        from core.activity_log import parse_options,HELP
+        options=parse_options(rest)
+        if options.get('help'):return True,HELP
+        if _main_ref is None:return False,CommandFailure('No live Kitchen activity session. Open a project in Kitchen.')
+        return _ensure_bridge().invoke('_run_activity',options)
+
     if cmd in ("fs", "file", "files"):
-        return _execute_fs_command(rest, wait=wait, timeout=timeout, cwd=cwd or os.getcwd())
+        return _execute_fs_command(rest, wait=wait, timeout=timeout, cwd=cwd or os.getcwd(),namespace=cmd)
 
     if cmd in ("ls", "cat", "grep"):
-        return _execute_fs_command(f"{cmd} {rest}", wait=wait, timeout=timeout, cwd=cwd or os.getcwd())
+        from core.cli_arguments import tokens as argument_tokens
+        return _execute_fs_read_command(cmd,argument_tokens(cmd,rest),cwd=cwd or os.getcwd())
 
     if cmd in ("branch", "neobranch"):
         return _execute_branch_command(rest, wait=wait, timeout=timeout, cwd=cwd or os.getcwd())
 
-    if cmd == "list":
+    if cmd in ("list","actions"):
+        if rest.strip()!='--all':return True,_help_text()
         a = actions()
         return True, ("safe project-tree transactions (recommended):\n"
+                      "  archive|payload|super|apk|br|dat --help (non-dialog Kitchen file tools)\n"
+                      "  activity [--json] [--failed] [--limit N]\n"
+                      "  activity status|show <id>|clear --yes\n"
                       "  ls [folder] [--branch-only] (alias: fs ls)\n"
                       "  cat <file> (alias: fs cat)\n"
                       "  grep <regex> [path] (alias: fs grep)\n"
@@ -1391,12 +1511,12 @@ def execute_command(line, wait=True, timeout=120.0, cwd=None):
         paths = [_cli_path(p, cwd) for p in sub[1].split("|") if p.strip()]
         ok, msg = run_batch(baction, paths)
         if ok and wait:
-            wait_idle(timeout=timeout)
+            return _wait_dispatched(msg,timeout)
         return ok, msg
 
     if cmd in ("doc", "docs", "agent", "init-agent"):
         from core.rak_agent_docs import update_all_agent_files
-        updated = update_all_agent_files(os.getcwd())
+        updated = update_all_agent_files(cwd or os.getcwd())
         return True, f"Agent instructions synchronized ({', '.join(updated)})"
 
     if cmd in ("policy", "sepolicy", "neocat_policy"):
@@ -1449,13 +1569,15 @@ def execute_command(line, wait=True, timeout=120.0, cwd=None):
             tokens = [_cli_unquote(token) for token in shlex.split(rest, posix=False)]
         except ValueError as exc:
             return False, f"invalid image command: {exc}"
-        return run_img_cli(tokens, cwd=os.getcwd(), main_ref=_main_ref)
+        return run_img_cli(tokens, cwd=cwd or os.getcwd(), main_ref=_main_ref)
 
     if cmd in ("mounted", "mounts"):
         from core.rak_img_cli import cmd_mounted
         return cmd_mounted(main_ref=_main_ref)
 
 
+    if cmd not in actions()['single']:
+        return False,CommandFailure('Unknown command: '+cmd+'. Use rak inspect PATH --json for file operations, or rak list for primary commands.')
     action = cmd
     path = rest
     name = None
@@ -1477,57 +1599,8 @@ def execute_command(line, wait=True, timeout=120.0, cwd=None):
 
 
 def _help_text():
-    return (
-        "RAK_CLI commands:\n"
-        "  unpack <file>                   auto-detect & unpack partition / archive\n"
-        "  repack <folder>                 auto-detect & repack partition directory\n"
-        "  compare <dir_a> <dir_b>         compare active NeoBranch views of two partitions\n"
-        "  automation <file.renxec> [fs]   run automation on selected active NeoBranch or source\n"
-        "  policy plan <folder> [--apply]  plan NeoCat patch on active NeoBranch view\n"
-        "  mount <image>                   mount image as virtual folder in GUI tree\n"
-        "  unmount <image>                 unmount image from GUI tree\n"
-        "  mounted                         list currently mounted images in GUI\n"
-        "  img ls <image> [subpath] [-l|-r]list files inside image (no unpack!)\n"
-        "  img cat <image> <path>          print file content from image to stdout\n"
-        "  img stat <image> <path>         show metadata (perm, size, selinux)\n"
-        "  img extract <image> <path> [dst]extract file or folder from image\n"
-        "  img write <image> <path> <file> edit image in-place (active branch blocked)\n"
-        "  img perm <image> <path> <octal> change file mode/permissions in image\n"
-        "  img selinux <image> <p> <ctx>   change SELinux context in image\n"
-        "  img rm <image> <path> [-r]      delete file/folder inside image\n"
-        "  img info <image>                show image filesystem & block usage info\n"
-        "  branch create <fs> <name> [col] create and activate a new NeoBranch\n"
-        "  branch switch <fs> <name|src>   switch between branches or back to source\n"
-        "  branch list [fs]                list NeoBranches and show active branch\n"
-        "  branch current <fs>             show currently active NeoBranch\n"
-        "  branch delete <fs> <name> --yes permanently delete a NeoBranch\n"
-        "  ls [folder] [--branch-only]    list active NeoBranch project view\n"
-        "  cat <file>                     read active NeoBranch file content\n"
-        "  grep <regex> [path]            search active NeoBranch project view\n"
-        "  fs ls [folder] [--branch-only] list active NeoBranch project view\n"
-        "  fs cat <file>                  read active NeoBranch file content\n"
-        "  fs grep <regex> [path]         search active NeoBranch project view\n"
-        "  (legacy convert/unpack/APK actions are blocked on active branch targets)\n"
-        "  fs write <file> --from <input>   write UTF-8 text through NeoBranch\n"
-        "  fs replace <file> <old> <new>   replace text through NeoBranch [--all]\n"
-        "  fs copy <src> <folder>          copy through NeoBranch/config-aware tree pipeline\n"
-        "  fs move <src> <folder>          move through NeoBranch/config-aware tree pipeline\n"
-        "  fs mkdir <folder> <name>        create a branch-aware folder\n"
-        "  fs touch <folder> <name>        create a branch-aware empty file\n"
-        "  fs symlink <folder> <name> <target>  create non-overwriting Android symlink\n"
-        "  fs rename <path> <new-name> [--force] rename with Android config remapping\n"
-        "  fs delete <path> --yes          permanently delete through RAK task queue\n"
-        "  fs make-filesystem <folder> --type <erofs|ext4> [--mount-point /p] --yes\n"
-        "  <action> <path>                 single-target action (e.g. convert_sparse, delete)\n"
-        "  batch <action> <p1> | <p2> ...  multi-target action (e.g. batch unpack a.img | b.img)\n"
-        "  list                            list available actions\n"
-        "  refresh                         refresh GUI FileTree\n"
-        "  doc                             generate/update CLAUDE.md & AGENTS.md\n"
-        "  badge <path>                    show live fs_badge\n"
-        "  security check                  run local security smoke checks\n"
-        "  benchmark startup               measure cold launcher/editor startup paths\n"
-        "  help                            this help\n"
-    )
+    from core.cli_contract import help_text
+    return help_text()
 
 
 class _StdinListener(threading.Thread):
@@ -1576,71 +1649,21 @@ def maybe_autostart():
 
 
 def _bootstrap_headless(target_path=None):
-
-    from PySide6.QtWidgets import QApplication, QWidget
-    from main_ext.class_FileTree import FileTree
-    from main_ext.class_ConfigEngine import ConfigEngine
-    from core.task_queue import TaskQueue
-    from core.threader import run_in_thread
-
-    app = QApplication.instance() or QApplication(sys.argv[:1])
-
-    class _HeadlessMain(QWidget):
-        def __init__(self):
-            super().__init__()
-            self.task_queue = TaskQueue(run_in_thread)
-            self._tasks = set()
-            self.last_failed = None
-            self.super_tabs = []
-            self.active_tree = None
-
-        def push_task(self, name): self._tasks.add(name)
-        def pop_task(self, name, ok=True): self._tasks.discard(name)
-        def maybe_finish_loading(self): pass
-        def set_loading_failed(self, text="Failed"): self.last_failed = text
-        def set_loading_finished(self, text="Done"): pass
-        def hide_erofs_loading(self): pass
-        def open_super_tab(self, img_path): self.super_tabs.append(img_path)
-
-    fake = _HeadlessMain()
-    tree = FileTree()
-    tree.setParent(fake)
-    fake.active_tree = tree
-
-    base = os.getcwd()
+    from PySide6.QtCore import QCoreApplication
+    from ui.workspace_cli import headless_workspace
+    app=QCoreApplication.instance() or QCoreApplication(sys.argv[:1])
+    base=os.getcwd()
     if target_path:
-        norm = os.path.normpath(target_path)
+        norm=os.path.abspath(target_path)
         try:
             from core.rak_neobranch_view import project_root
-            base = project_root(norm)
+            base=project_root(norm)
         except ValueError:
-            cand = norm if os.path.isdir(norm) else os.path.dirname(norm)
-            base = cand
-    if not os.path.isdir(base):
-        base = os.getcwd()
-
-    tree.base = base
-    tree.engine = ConfigEngine(base)
-    try:
-        tree.engine.tree_ref = tree
-    except Exception:
-        pass
-    try:
-        _full = tree.engine.load_full_state()
-        tree.ctx = _full.get("ctx", {})
-        tree.fs = _full.get("fs", {})
-        tree.ctx_neocat = _full.get("neocat", {})
-    except Exception:
-        pass
-    tree.folder_has_child = {}
-    tree.fsdetect_cache = {}
-    tree._skip_initial_reload = True
-    try:
-        tree.populate_root()
-    except Exception:
-        pass
-    attach(fake)
-    return app, fake, tree
+            base=norm if os.path.isdir(norm) else os.path.dirname(norm)
+    if not os.path.isdir(base):base=os.getcwd()
+    owner=headless_workspace(base)
+    attach(owner)
+    return app,owner,owner.tree
 
 
 def _ipc_file_path():
@@ -1697,17 +1720,21 @@ class _IpcServer(threading.Thread):
                 client.close()
                 return
             data = json.loads(raw.decode("utf-8", errors="replace").strip())
+            if not isinstance(data,dict):raise ValueError('IPC request must be a JSON object')
             if data.get("token") != self.token:
                 res = {"ok": False, "msg": "Invalid auth token"}
             else:
                 cmd = data.get("cmd", "")
                 cwd = data.get("cwd", "")
-                res = _handle_ipc_command(cmd, cwd)
+                res = _handle_ipc_command(cmd, cwd, argv=data.get('argv'))
             resp_bytes = json.dumps(res).encode("utf-8") + b"\n"
             client.sendall(resp_bytes)
         except Exception as e:
+            context = CommandContext('IPC request')
+            with command_scope(context):
+                res = _command_response(context,{'ok':False,'msg':failure_from_exception(e)})
             try:
-                err_resp = json.dumps({"ok": False, "msg": f"IPC error: {e}"}).encode("utf-8") + b"\n"
+                err_resp = json.dumps(res).encode("utf-8") + b"\n"
                 client.sendall(err_resp)
             except Exception:
                 pass
@@ -1760,7 +1787,27 @@ def stop_ipc_server():
         _ipc_server = None
 
 
-def _handle_ipc_command(cmd, cwd=""):
+def _command_response(context, result):
+    if not result.get('ok') and not result.get('project_mismatch') and getattr(result.get('msg'),'code',None) not in ('no_match','different'):
+        message = result.get('msg','Command failed')
+        reason = str(message).split(' gagal: ',1)[-1]
+        if not any(reason in text for text,_ in context.records()):
+            from core.error_reporting import report_fatal
+            report_fatal('RAK CLI: '+str(context.command)+'\n\n'+str(message),
+                application_error=getattr(message,'application_error',False))
+    return context.response(result)
+
+
+def _handle_ipc_command(cmd, cwd="", *, argv=None):
+    context = CommandContext(cmd)
+    from core.cli_arguments import argument_scope
+    with command_scope(context),argument_scope(argv):
+        try:result = _dispatch_ipc_command(cmd,cwd)
+        except Exception as error:result = {'ok':False,'msg':failure_from_exception(error)}
+        return _command_response(context,result)
+
+
+def _dispatch_ipc_command(cmd, cwd=""):
     cmd = (cmd or "").strip()
     if not cmd:
         return {"ok": True, "msg": ""}
@@ -1771,13 +1818,16 @@ def _handle_ipc_command(cmd, cwd=""):
 
     # Perintah khusus GUI: refresh
     if action == "refresh":
-        bridge = _ensure_bridge()
-        if _on_qt_thread():
-            bridge._do_refresh()
-        else:
-            QMetaObject.invokeMethod(bridge, "_do_refresh", Qt.BlockingQueuedConnection)
-        ok, msg = bridge._result
+        ok, msg = _ensure_bridge().invoke('_refresh')
         return {"ok": ok, "msg": msg}
+
+    if action in ('activity','log','logs'):
+        ok,msg=execute_command(cmd,wait=False,cwd=cwd)
+        return {'ok':ok,'msg':msg}
+
+    if action in ('context','capabilities','events','ui','inbox'):
+        ok,msg=execute_command(cmd,wait=False,cwd=cwd)
+        return {'ok':ok,'msg':msg}
 
     if action in ("doc", "docs", "agent", "init-agent"):
         from core.rak_agent_docs import update_all_agent_files
@@ -1796,7 +1846,18 @@ def _handle_ipc_command(cmd, cwd=""):
             target = ""
             try:
                 tokens = [_cli_unquote(token) for token in shlex.split(rest, posix=False)]
-                if action in ("fs", "file", "files", "branch", "neobranch"):
+                from core.unix_cli import COMMANDS as UNIX_COMMANDS,parse as parse_unix
+                from core.unix_verify import COMMANDS as VERIFY_COMMANDS,_parser as verification_parser
+                if action in UNIX_COMMANDS:
+                    options=parse_unix(action,rest,cwd or os.getcwd())
+                    target=options.get('path') or (options.get('paths') or [''])[0]
+                elif action in VERIFY_COMMANDS:
+                    options=verification_parser(action).parse_args(tokens)
+                    target=(options.paths or [''])[0]
+                elif action=='inspect':
+                    operands=[token for token in tokens if token not in ('--json','-L','--dereference')]
+                    target=operands[0] if len(operands)==1 else ''
+                elif action in ("fs", "file", "files", "branch", "neobranch", "archive", "payload", "super", "apk", "br", "dat"):
                     target = tokens[1] if len(tokens) > 1 else ""
                 elif tokens:
                     target = tokens[0]
@@ -1849,9 +1910,7 @@ def _handle_ipc_command(cmd, cwd=""):
         return {"ok": ok, "msg": msg}
 
     if action in ("img", "vfs", "image"):
-        from core.rak_img_cli import run_img_cli
-        tokens = rest.split()
-        ok, msg = run_img_cli(tokens, cwd=cwd, main_ref=_main_ref)
+        ok, msg = execute_command(cmd,wait=True,cwd=cwd or os.getcwd())
         return {"ok": ok, "msg": msg}
 
     if action in ("mounted", "mounts"):
@@ -1861,38 +1920,12 @@ def _handle_ipc_command(cmd, cwd=""):
 
     # `fs` has two positional paths (or a destructive acknowledgement), so it
     # must be parsed before the legacy one-path IPC normalizer below.
-    if action in ("fs", "file", "files", "branch", "neobranch"):
+    from core.unix_cli import COMMANDS as UNIX_COMMANDS
+    if action in UNIX_COMMANDS or action in ("inspect", "list", "fs", "file", "files", "branch", "neobranch", "archive", "payload", "super", "apk", "br", "dat"):
         ok, msg = execute_command(cmd, wait=True, cwd=cwd or os.getcwd())
         return {"ok": ok, "msg": msg}
 
-    # Resolusi path relatif menjadi absolut menggunakan cwd klien
-    if cwd and rest and not action.startswith("-") and action not in ("help", "list", "?", "badge"):
-        if action == "batch":
-            sub = rest.split(None, 1)
-            if len(sub) >= 2:
-                baction = sub[0]
-                bpaths = [p.strip() for p in sub[1].split("|") if p.strip()]
-                bpaths_abs = [
-                    os.path.normpath(os.path.join(cwd, p)) if not os.path.isabs(p) else p
-                    for p in bpaths
-                ]
-                rest = f"{baction} " + " | ".join(bpaths_abs)
-                cmd = f"batch {rest}"
-        else:
-            name_part = ""
-            p = rest
-            if " name=" in (" " + rest):
-                idx = rest.rfind("name=")
-                if idx >= 0:
-                    name_part = " " + rest[idx:]
-                    p = rest[:idx].strip()
-            if not os.path.isabs(p):
-                p = os.path.normpath(os.path.join(cwd, p))
-            cmd = f"{action} {p}{name_part}"
-    elif action == "badge" and cwd and rest and not os.path.isabs(rest):
-        rest = os.path.normpath(os.path.join(cwd, rest))
-        cmd = f"badge {rest}"
-
+    # Each command parser resolves quoted logical paths against the client's cwd.
     ok, msg = execute_command(cmd, wait=True, cwd=cwd or os.getcwd())
     if ok and action in ("unpack", "repack", "batch"):
         try:
@@ -1903,7 +1936,7 @@ def _handle_ipc_command(cmd, cwd=""):
     return {"ok": ok, "msg": msg}
 
 
-def _call_ipc_server(cmd_line, cwd=""):
+def _call_ipc_server(cmd_line, cwd="", *, argv=None):
 
     ipc_file = _ipc_file_path()
     if not os.path.exists(ipc_file):
@@ -1933,8 +1966,18 @@ def _call_ipc_server(cmd_line, cwd=""):
             kernel32.CloseHandle(h_proc)
 
         live_endpoint = True
-        with socket.create_connection(("127.0.0.1", port), timeout=600.0) as s:
+        socket_timeout=600.0
+        from core.kitchen_cli import NAMESPACES,parse
+        command_parts=cmd_line.split(None,1)
+        if command_parts and command_parts[0].lower() in NAMESPACES:
+            try:
+                options=parse(command_parts[0].lower(),command_parts[1] if len(command_parts)>1 else '',cwd or os.getcwd())
+                socket_timeout=max(socket_timeout,(options.get('timeout') or 0)+30)
+            except ValueError:pass
+        with socket.create_connection(("127.0.0.1", port), timeout=socket_timeout) as s:
             payload = json.dumps({"cmd": cmd_line, "cwd": cwd or os.getcwd(), "token": token}) + "\n"
+            if argv is not None:
+                payload=json.dumps({'cmd':cmd_line,'cwd':cwd or os.getcwd(),'token':token,'argv':argv})+'\n'
             s.sendall(payload.encode("utf-8"))
 
             raw = b""
@@ -2055,10 +2098,25 @@ def ensure_rak_bat():
         print(f"[RAK_CLI] Gagal membuat launcher rak: {e}")
 
 
+def _print_cli_response(response, origin='GUI'):
+    ok = response.get('ok',False)
+    message = response.get('msg','')
+    log = response.get('log','')
+    if log and message in log:
+        message = log
+    elif log:
+        message += '\n\n'+log
+    print(f"[RAK_CLI:{origin}] {'OK ' if ok else 'ERR'} | {message}",
+          file=sys.stdout if ok else sys.stderr)
+
+
 def _main_cli():
 
     _force_utf8_stdio()
     args = sys.argv[1:]
+    from core.unix_cli import COMMANDS as UNIX_COMMANDS
+    from core.unix_verify import COMMANDS as VERIFY_COMMANDS
+    from core.cli_arguments import argument_scope
     if not args:
         print(_help_text())
         sys.exit(0)
@@ -2067,19 +2125,112 @@ def _main_cli():
     cmd_line = (subprocess.list2cmdline(args)
                 if args[0].lower() in ("fs", "file", "files", "branch", "neobranch",
                                        "policy", "sepolicy", "neocat_policy",
-                                       "automation", "renxec") else " ".join(args))
+                                       "automation", "renxec", "inspect", "unpack", "repack", "archive", "payload", "super", "apk", "br", "dat",*UNIX_COMMANDS,*VERIFY_COMMANDS) else " ".join(args))
     first = args[0].lower()
+    if first=='doctor':
+        response=_call_ipc_server(cmd_line,os.getcwd(),argv=args)
+        if response is not None and not response.get('project_mismatch'):
+            print(response['msg'] if response.get('ok') else json.dumps({'ok':False,'error':response.get('msg','')},ensure_ascii=False))
+            sys.exit(0 if response.get('ok') else 1)
+        output=sys.stdout
+        try:
+            sys.stdout=sys.stderr
+            with argument_scope(args):ok,message=execute_command(cmd_line,cwd=os.getcwd())
+        finally:sys.stdout=output
+        print(message if ok else json.dumps({'ok':False,'error':str(message)},ensure_ascii=False),file=sys.stdout if ok else sys.stderr)
+        sys.exit(0 if ok else 1)
+    if first == 'binary':
+        from core.binary_cli import run
+        sys.exit(run(args[1:]))
     if first in ("help", "-h", "--help"):
         print(_help_text())
         sys.exit(0)
 
-    if (first in ("ls", "cat", "grep") or
-            (first in ("fs", "file", "files") and len(args) > 1 and args[1].lower() in ("ls", "list", "cat", "read", "grep"))):
-        read_op = first if first in ("ls", "cat", "grep") else args[1].lower()
-        read_args = args[1:] if first in ("ls", "cat", "grep") else args[2:]
-        ok, msg = _execute_fs_read_command(read_op, read_args, cwd=os.getcwd())
-        print(msg, file=sys.stdout if ok else sys.stderr)
-        sys.exit(0 if ok else 1)
+    from core.kitchen_cli import NAMESPACES,parse as parse_kitchen,HELP as KITCHEN_HELP
+    from core.cli_arguments import argument_scope
+    if first in NAMESPACES:
+        try:
+            with argument_scope(args):kitchen_options=parse_kitchen(first,subprocess.list2cmdline(args[1:]),os.getcwd())
+        except ValueError as error:
+            if '--json' in args:print(json.dumps({'ok':False,'error':str(error)},ensure_ascii=False))
+            else:print(str(error),file=sys.stderr)
+            sys.exit(1)
+        if kitchen_options.get('help'):print(KITCHEN_HELP);sys.exit(0)
+    if first in UNIX_COMMANDS:
+        from core.unix_cli import parse as parse_unix,HELP as UNIX_HELP
+        try:
+            with argument_scope(args):unix_options=parse_unix(first,subprocess.list2cmdline(args[1:]),os.getcwd())
+        except ValueError as error:print(str(error),file=sys.stderr);sys.exit(1)
+        if unix_options.get('help'):print(UNIX_HELP);sys.exit(0)
+    if first=='repack' and ('-o' in args or '--to' in args):
+        from core.kitchen_repack_cli import parse as parse_repack
+        try:
+            with argument_scope(args):repack_options=parse_repack(subprocess.list2cmdline(args[1:]),os.getcwd())
+        except ValueError as error:print(str(error),file=sys.stderr);sys.exit(1)
+
+    if first in ('context','capabilities','events','ui','inbox'):
+        from core.agent_cli import HELP,parse
+        try:options=parse(first,subprocess.list2cmdline(args[1:]),os.getcwd())
+        except (ValueError,OSError) as error:
+            print(json.dumps({'ok':False,'error':str(error)},ensure_ascii=False));sys.exit(1)
+        if options.get('help'):print(HELP);sys.exit(0)
+        if first=='events' and options.get('stream'):
+            cursor=options['since'];event_session=None
+            try:
+                while True:
+                    command=['events','--since',str(cursor),'--wait','30','--limit',str(options['limit']),'--json']
+                    if options['types']:command+=['--types',','.join(options['types'])]
+                    response=_call_ipc_server(subprocess.list2cmdline(command),os.getcwd())
+                    if not response or not response.get('ok'):
+                        print(json.dumps({'ok':False,'error':(response or {}).get('msg','No live Kitchen session')}),flush=True);sys.exit(1)
+                    batch=json.loads(response['msg'])
+                    if event_session is not None and event_session!=batch['session_id']:
+                        print(json.dumps({'type':'events.reset','session_id':batch['session_id']}),flush=True)
+                        event_session=batch['session_id'];cursor=0;continue
+                    event_session=batch['session_id']
+                    if batch['gap']:print(json.dumps({'type':'events.gap','session_id':batch['session_id'],'cursor':cursor}),flush=True)
+                    for event in batch['events']:print(json.dumps({'session_id':batch['session_id'],**event},ensure_ascii=False),flush=True)
+                    cursor=batch['cursor']
+                    if batch['closed']:sys.exit(0)
+            except KeyboardInterrupt:sys.exit(0)
+        response=_call_ipc_server(subprocess.list2cmdline(args),os.getcwd())
+        if response is None and first=='capabilities':
+            output=sys.stdout
+            try:
+                sys.stdout=sys.stderr
+                from core.cli_environment import describe
+                standalone=describe(os.getcwd())
+            finally:sys.stdout=output
+            print(json.dumps(standalone,ensure_ascii=False));sys.exit(0)
+        if response is None:response={'ok':False,'msg':'No live Kitchen session. Open a project in Kitchen. Use rak doctor --json for standalone tools and branch information.'}
+        print(response['msg'] if response.get('ok') else json.dumps({'ok':False,'error':response.get('msg',''),'log':response.get('log','')},ensure_ascii=False))
+        sys.exit(0 if response.get('ok') else 1)
+
+    if first in ('activity','log','logs'):
+        from core.activity_log import HELP
+        if any(value in ('--help','-h','help') for value in args[1:]):print(HELP);sys.exit(0)
+        response=_call_ipc_server(subprocess.list2cmdline(args),os.getcwd())
+        if response is None:response={'ok':False,'msg':'No live Kitchen activity session. Open a project in Kitchen.'}
+        if '--json' in args:
+            print(response['msg'] if response.get('ok') else json.dumps({'ok':False,'error':response.get('msg',''),'log':response.get('log','')},ensure_ascii=False))
+        else:_print_cli_response(response)
+        sys.exit(0 if response.get('ok') else 1)
+
+    if (first in ("ls", "cat", "grep",*VERIFY_COMMANDS) or
+            (first in ("fs", "file", "files") and len(args) > 1 and args[1].lower() in ("ls", "list", "cat", "read", "grep",*VERIFY_COMMANDS))):
+        read_op = first if first in ("ls", "cat", "grep",*VERIFY_COMMANDS) else args[1].lower()
+        read_args = args[1:] if first in ("ls", "cat", "grep",*VERIFY_COMMANDS) else args[2:]
+        read_stdout=sys.stdout
+        try:
+            sys.stdout=sys.stderr
+            ok, msg = _execute_fs_read_command(read_op, read_args, cwd=os.getcwd(),standalone_stdin=True)
+        finally:sys.stdout=read_stdout
+        stream=sys.stdout if ok else sys.stderr
+        if msg:
+            stream.write(str(msg))
+            if read_op in ('ls','list') or not ok and not str(msg).endswith('\n'):stream.write('\n')
+        sys.stdout=sys.stderr
+        sys.exit(0 if ok else 2 if read_op in ('grep','cmp','diff') and getattr(msg,'code',None) not in ('no_match','different') else 1)
 
     if first in ("branch", "neobranch") and len(args) > 1:
         branch_op = args[1].lower()
@@ -2139,7 +2290,7 @@ def _main_cli():
         sys.exit(0 if ok else 1)
 
     # 1. Coba panggil GUI yang sedang hidup lewat IPC
-    ipc_res = _call_ipc_server(cmd_line, os.getcwd())
+    ipc_res = _call_ipc_server(cmd_line, os.getcwd(), argv=args)
     if ipc_res is not None and ipc_res.get("project_mismatch"):
         ipc_res = None
     if ipc_res is not None and first in ("fs", "file", "files") and not ipc_res.get("ok", False):
@@ -2161,8 +2312,10 @@ def _main_cli():
             ipc_res = None
         else:
             ok = ipc_res.get("ok", False)
-            tag = "OK " if ok else "ERR"
-            print(f"[RAK_CLI:GUI] {tag} | {msg}")
+            if (first in NAMESPACES or first=='inspect' or first=='repack' and ('-o' in args or '--to' in args)) and '--json' in args:
+                print(ipc_res['msg'] if ok else json.dumps({'ok':False,'error':ipc_res.get('msg',''),'log':ipc_res.get('log','')},ensure_ascii=False))
+            elif first=='readlink':print(msg,file=sys.stdout if ok else sys.stderr)
+            else:_print_cli_response(ipc_res)
             sys.exit(0 if ok else 1)
 
     # 2. GUI tidak sedang berjalan: fallback ke mode headless standalone
@@ -2173,7 +2326,7 @@ def _main_cli():
         print(f"          - Read file:      rak img cat {args[1]} <internal_path>")
         print(f"          - Edit in-place:  rak img write {args[1]} <internal_path> <local_file>")
         print(f"          - Show usage:     rak img info {args[1]}")
-        sys.exit(0)
+        sys.exit(1)
 
     if first == "unmount" and not is_attached():
         print(f"[RAK_CLI] Kitchen GUI is not currently running. No active virtual mounts to unmount.")
@@ -2191,6 +2344,12 @@ def _main_cli():
         sys.exit(0 if ok else 1)
 
     target_path = args[1] if len(args) > 1 else None
+    if first=='inspect':
+        inspect_paths=[arg for arg in args[1:] if arg not in ('--json','-L','--dereference')]
+        target_path=inspect_paths[0] if len(inspect_paths)==1 else None
+    if first in NAMESPACES:target_path=kitchen_options['path']
+    if first=='repack' and ('-o' in args or '--to' in args):target_path=repack_options['path']
+    if first in UNIX_COMMANDS:target_path=unix_options.get('path') or unix_options['paths'][0]
     if first in ("fs", "file", "files") and len(args) > 2:
         target_path = args[2]
     if first in ("branch", "neobranch"):
@@ -2199,8 +2358,10 @@ def _main_cli():
         elif len(args) > 1:
             target_path = args[1]
     headless_app = None
+    cli_stdout=sys.stdout
+    if first=='readlink' or (first in NAMESPACES or first=='inspect' or first=='repack' and ('-o' in args or '--to' in args)) and '--json' in args:sys.stdout=sys.stderr
     if not is_attached():
-        headless_app, _, _ = _bootstrap_headless(target_path)
+        headless_app, headless_owner, _ = _bootstrap_headless(target_path)
 
     if headless_app is not None:
         # FileTree actions marshal back to Qt's main thread. Keep that event
@@ -2208,7 +2369,8 @@ def _main_cli():
         result = {}
         def _execute_headless():
             try:
-                result["value"] = execute_command(cmd_line, wait=True)
+                from core.cli_arguments import argument_scope
+                with argument_scope(args):result["value"] = execute_command(cmd_line, wait=True)
             except BaseException as exc:
                 result["error"] = exc
         worker = threading.Thread(target=_execute_headless, daemon=True)
@@ -2217,17 +2379,31 @@ def _main_cli():
             headless_app.processEvents()
             worker.join(0.02)
         headless_app.processEvents()
-        if "error" in result:
-            raise result["error"]
-        ok, msg = result["value"]
+        try:
+            if "error" in result:raise result["error"]
+            ok, msg = result["value"]
+        finally:
+            headless_owner.stop()
+            from core.threader import drain_background_work
+            drain_background_work(headless_app)
+            detach(headless_owner)
     else:
-        ok, msg = execute_command(cmd_line, wait=True)
+        with argument_scope(args):ok, msg = execute_command(cmd_line, wait=True)
     if ok and first in ("branch", "neobranch"):
         try:
             _call_ipc_server("refresh", os.getcwd())
         except Exception:
             pass
+    sys.stdout=cli_stdout
     tag = "OK " if ok else "ERR"
+    if first=='readlink':
+        print(msg,file=sys.stdout if ok else sys.stderr)
+        sys.stdout=sys.stderr
+        sys.exit(0 if ok else 1)
+    if (first in NAMESPACES or first=='inspect' or first=='repack' and ('-o' in args or '--to' in args)) and '--json' in args:
+        print(msg if ok else json.dumps({'ok':False,'error':str(msg)},ensure_ascii=False))
+        sys.stdout=sys.stderr  # Keep standalone shutdown diagnostics off JSON stdout.
+        sys.exit(0 if ok else 1)
     print(f"[RAK_CLI:STANDALONE] {tag} | {msg}")
     sys.exit(0 if ok else 1)
 

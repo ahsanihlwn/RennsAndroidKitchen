@@ -63,7 +63,7 @@ class EffectLevelTests(unittest.TestCase):
         self.load({"effect_level": "high", "blur_enabled": False,
                    "animations_enabled": False, "tree_view_mode": "single_dir",
                    "project_drive_filters": {"D:": False}})
-        self.assertTrue(self.theme.live_blur_enabled)
+        self.assertFalse(self.theme.live_blur_enabled)
         for level in ("low", "medium", "high"):
             self.theme.set_effect_level(level)
             saved = json.loads(self.settings.read_text())
@@ -87,7 +87,25 @@ class EffectLevelTests(unittest.TestCase):
             save.assert_called_once()
         self.assertEqual(changes, ["high"])
         self.assertTrue(self.theme.blur_enabled)
-        self.assertTrue(self.theme.live_blur_enabled)
+        self.assertFalse(self.theme.live_blur_enabled)
+
+    def test_blur_radius_defaults_migrates_validates_and_survives_effect_switches(self):
+        self.load({'effect_level': 'medium'})
+        self.assertEqual(self.theme.blur_radius, 6)
+        for radius in (0, 12, 26):
+            self.theme.set_blur_radius(radius)
+            for level in ('high', 'low', 'medium'):
+                self.theme.set_effect_level(level)
+                restored = theme_module._Theme()
+                restored.load()
+                self.assertEqual(restored.blur_radius, radius)
+                self.assertEqual(restored.effect_level, level)
+        with patch.object(self.theme, '_save_settings') as save:
+            for value in (-1, 27, True, '12', None, float('nan')):
+                self.theme.set_blur_radius(value)
+            save.assert_not_called()
+        self.load({'blur_radius': 'invalid', 'effect_level': 'high'})
+        self.assertEqual(self.theme.blur_radius, 6)
 
     def test_shared_dropdowns_sync_and_remove_listeners_when_destroyed(self):
         with patch.object(control, "theme", self.theme):

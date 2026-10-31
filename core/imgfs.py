@@ -7,6 +7,7 @@ import os
 import sys
 import struct
 import json
+import logging
 import threading
 from contextlib import contextmanager
 
@@ -1126,10 +1127,27 @@ def is_text_filename(name: str) -> bool:
     return ext in _TEXT_EXTENSIONS
 
 
+def _root_node(fs, reader):
+    """The directory walkers deliberately omit the filesystem root itself."""
+    if fs == "EXT":
+        mode, size, _flags, _blocks, raw = reader._read_inode(2)
+        return Node("", True, size, 2, mode, selinux=reader._inode_selinux(raw))
+    inode = reader._read_inode(reader.root_nid)
+    return Node("", True, inode["size"], reader.root_nid, inode["mode"],
+                selinux=reader._inode_selinux(inode))
+
+
 def resolve_node(path, internal_path):
 
     internal_path = internal_path.strip("/").replace("\\", "/")
     fs, r = open_reader(path)
+    if not internal_path:
+        try:
+            return r, _root_node(fs, r)
+        except Exception:
+            logging.exception("Reading filesystem root metadata failed: %s", path)
+            _close(r)
+            raise
     for n in r.walk():
         if n.path == internal_path:
             return r, n
@@ -1312,6 +1330,13 @@ def _resolve_writable(path, internal_path):
 
     internal_path = internal_path.strip("/").replace("\\", "/")
     fs, r = open_reader(path, writable=True)
+    if not internal_path:
+        try:
+            return fs, r, _root_node(fs, r)
+        except Exception:
+            logging.exception("Resolving writable filesystem root failed: %s", path)
+            _close(r)
+            raise
     for n in r.walk():
         if n.path == internal_path:
             return fs, r, n

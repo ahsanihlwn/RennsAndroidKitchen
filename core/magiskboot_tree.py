@@ -9,7 +9,7 @@ import json
 import os
 import re
 import shutil
-import subprocess
+from core import kitchen_process as subprocess
 import sys
 import time
 from pathlib import Path
@@ -150,21 +150,39 @@ def read_meta(tree: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def decompress_ramdisk_component(component: Path, decoded: Path,
+                                 magiskboot: Path, verbose: bool = False) -> str:
+    if looks_like_cpio(component):
+        shutil.copy2(component, decoded)
+        return "raw"
+    with component.open("rb") as stream:
+        magic = stream.read(4)
+    if magic == b"\x28\xb5\x2f\xfd":
+        try:
+            from compression import zstd
+            # A vendor_boot v4 aggregate can contain several Zstandard frames.
+            data = zstd.decompress(component.read_bytes())
+            decoded.write_bytes(data)
+        except Exception as exc:
+            import logging
+            logging.exception("Unpack Boot: Zstandard ramdisk decode failed: %s", component)
+            raise ToolError(f"Zstandard ramdisk decode failed for {component}: {exc}") from exc
+        return "zstd"
+    out = run([magiskboot, "decompress", component.name, decoded.name],
+              component.parent, verbose)
+    match = re.search(r"Detected format:\s*\[(.*?)\]", out)
+    return match.group(1) if match else "unknown"
+
+
 def decode_ramdisk(tree: Path, magiskboot: Path, verbose: bool) -> tuple[str, bool]:
     component = tree / RAMDISK_COMPONENT
     decoded = tree / RAMDISK_DECODED
     if not component.is_file():
         return "none", False
 
-    if looks_like_cpio(component):
-        shutil.copy2(component, decoded)
-        compression = "raw"
-    else:
-        out = run([magiskboot, "decompress", RAMDISK_COMPONENT, RAMDISK_DECODED], tree, verbose)
-        match = re.search(r"Detected format:\s*\[(.*?)\]", out)
-        compression = match.group(1) if match else "unknown"
-        if compression == "unknown":
-            print("warning: could not parse ramdisk compression; repack will reuse raw copy")
+    compression = decompress_ramdisk_component(component, decoded, magiskboot, verbose)
+    if compression == "unknown":
+        print("warning: could not parse ramdisk compression; repack will reuse raw copy")
 
     old_ramdisk = tree / RAMDISK_DIR
     if old_ramdisk.exists():
@@ -191,6 +209,15 @@ def encode_ramdisk(tree: Path, magiskboot: Path, compression: str, verbose: bool
 
     if compression in ("none", "raw", "unknown"):
         shutil.copy2(decoded, component)
+    elif compression == "zstd":
+        try:
+            from compression import zstd
+            data = zstd.compress(decoded.read_bytes())
+            component.write_bytes(data)
+        except Exception as exc:
+            import logging
+            logging.exception("Repack Boot: Zstandard ramdisk encode failed: %s", decoded)
+            raise ToolError(f"Zstandard ramdisk encode failed for {decoded}: {exc}") from exc
     else:
         run(
             [magiskboot, f"compress={compression}", RAMDISK_DECODED, RAMDISK_COMPONENT],

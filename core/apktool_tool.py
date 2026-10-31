@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
+from core import kitchen_process as subprocess
 import zipfile
 
 from core.binary_handler import resolve_binary, is_available

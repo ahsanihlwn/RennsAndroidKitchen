@@ -1070,6 +1070,12 @@ class ContextPatcher:
         # fc_name = nama folder as-is (dinosaurus_vendor_besar_file_contexts)
         family = majority_domain or _domain_family(self.detect_semantic_domain(root_rel))
         base_ctx = DEFAULT_CTX_BY_DOMAIN.get(family, "u:object_r:system_file:s0")
+        # A system-as-root image can label its root rootfs while its children
+        # are system_file. The majority of its children must not relabel '/'.
+        source_root_ctx = (self.ctx_map.get(root_ctx_key)
+                           or self.ctx_map.get(root_ctx_key + "/"))
+        if source_root_ctx:
+            base_ctx = source_root_ctx
 
         results.setdefault(f"{root_rel}_file_contexts", []).append(
             (root_ctx_key, base_ctx, "predicted", "root-entry")
@@ -1218,6 +1224,13 @@ class ContextPatcher:
                 ctx_key = _normalize_neobranch_ctx_key(ctx_key)
                 if not ctx_key:
                     continue
+
+                # Also guard against an older cached root prediction. Preserve
+                # the root label explicitly present in this partition's config.
+                partition = fc_name.removesuffix("_file_contexts")
+                root_key = self.escape_ctx_key(partition)
+                if ctx_key.rstrip("/") == root_key:
+                    ctx = existing.get(root_key) or existing.get(root_key + "/") or ctx
 
                 rel = ctx_key.lstrip("/")
 

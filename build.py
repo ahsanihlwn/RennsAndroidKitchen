@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent
 BUILD_ROOT = ROOT / "build" / "nuitka"
 RELEASE_ROOT = ROOT / "release"
 
-INCLUDE_PACKAGES = ["core", "main_ext", "app_ext", "windows", "icons", "services", "textures"]
+INCLUDE_PACKAGES = ["core", "main_ext", "app_ext", "windows", "icons", "services", "textures", "ui"]
 INCLUDE_MODULES = [
     "main", "core.neocat_load", "core.error_reporting", "services.service_main", "core.rak_cli",
     "multiprocessing", "multiprocessing.spawn", "multiprocessing.popen_spawn_win32",
@@ -27,6 +27,7 @@ INCLUDE_MODULES = [
     "PySide6.QtNetwork", "PySide6.QtWebSockets", "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets", "PySide6.QtSvg", "PySide6.QtSvgWidgets",
     "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets", "PySide6.QtQuick",
+    "PySide6.QtQml", "PySide6.QtQuickControls2", "PySide6.QtWebEngineQuick",
     "skia",
 ]
 THIRD_PARTY_PACKAGES = [
@@ -68,6 +69,9 @@ def file_version():
 
 
 def embedded_asset_entries(private_build):
+    # QML stays beside the compiled ui package, matching its source layout.
+    for source in sorted(path for path in (ROOT / "ui").rglob("*") if path.suffix in (".qml", ".js", ".frag", ".vert", ".qsb")):
+        yield source, source.relative_to(ROOT).as_posix()
     for relative in ASSET_DIRS:
         source = ROOT / relative
         if not source.is_dir():
@@ -106,7 +110,7 @@ def nuitka_command(output, *, private_build, debug, jobs):
         f"--file-version={version}", f"--product-version={version}",
         "--file-description=Renns Android Kitchen", "--copyright=(c) Renns Studio",
         "--windows-console-mode=force" if debug else "--windows-console-mode=disable",
-        "--enable-plugin=pyside6", "--include-qt-plugins=sensible,multimedia",
+        "--enable-plugin=pyside6", "--include-qt-plugins=sensible,multimedia,qml",
         f"--report={output / 'report.xml'}", f"--jobs={jobs}",
         "--include-package-data=capstone", "--include-package-data=elftools",
         f"--user-package-configuration-file={ROOT / 'native/rak_blur/nuitka-package.config.yml'}",
@@ -203,6 +207,8 @@ def main():
         clean_build(output)
     output.mkdir(parents=True, exist_ok=True)
     ensure_python_dependencies(private_build=private_build)
+    from tools.build_quick_shaders import build_shaders
+    build_shaders()
     native_target = prepare_native(force=args.rebuild_rust)
     if args.rebuild_blur or not (ROOT / "core/native/rak_blur.dll").is_file():
         from tools.build_gpu_blur import main as build_blur

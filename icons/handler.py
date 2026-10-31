@@ -88,9 +88,11 @@ def _asset_has(catalog, directory, filename, *, file_only=False):
         "files" if file_only else "entries"]
 
 
-def icon(name: str) -> str:
+def icon(name: str, light: bool | None = None) -> str:
     _load_icons()
-    bg = "light" if _is_light_theme() else "dark"
+    if light is None:
+        light = _is_light_theme()
+    bg = "light" if light else "dark"
     key = (ICONS_DIR, BASE_DIR, _ASSET_GENERATION, name, bg)
     cached = _PATH_CACHE.get(key)
     if cached is not None:
@@ -165,26 +167,27 @@ def _tint_pixmap(path: str, color: str):
     return out
 
 
-def icon_pixmap(name: str):
+def icon_pixmap(name: str, light: bool | None = None):
 
     from PySide6.QtGui import QPixmap
-    path = icon(name)
-    if name in _FG_TINT_ICONS and _is_light_theme():
+    is_light = _is_light_theme() if light is None else bool(light)
+    path = icon(name, light=is_light)
+    if name in _FG_TINT_ICONS and is_light:
         try:
             from main_ext.class_ThemeUi import theme as _th
             return _tint_pixmap(path, _th.FG)
         except Exception:
             return _invert_pixmap(path)
-    if name in _ADAPTIVE_ICONS and _is_light_theme():
+    if name in _ADAPTIVE_ICONS and is_light:
         return _invert_pixmap(path)
     return QPixmap(path)
 
 
-def tint_icon(name: str, color: str, size: int = 14):
+def tint_icon(name: str, color: str, size: int = 14, light: bool | None = None):
 
     from PySide6.QtGui import QIcon
     from PySide6.QtCore import Qt
-    path = icon(name)
+    path = icon(name, light=light)
     pix = _tint_pixmap(path, color)
     if size > 0 and not pix.isNull():
         pix = pix.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
@@ -192,11 +195,11 @@ def tint_icon(name: str, color: str, size: int = 14):
 
 
 def create_themed_icon(name: str, normal_color: str, hover_color: str = None,
-                       size: int = 14, disabled_color=None):
+                       size: int = 14, disabled_color=None, light: bool | None = None):
 
     from PySide6.QtGui import QIcon
     from PySide6.QtCore import Qt
-    path = icon(name)
+    path = icon(name, light=light)
     ic = QIcon()
     pix_norm = _tint_pixmap(path, normal_color)
     if size > 0 and not pix_norm.isNull():
