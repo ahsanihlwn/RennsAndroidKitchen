@@ -238,5 +238,24 @@ class PhysicalCheckoutTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'active NeoBranch'):
             WorkspaceCli._tool_target(files,str(self.base/'vendor.img'))
 
+    def test_checkout_handles_cross_device_winerror_17(self):
+        self.manager.create_checkout_branch('vendor', 'port', 'blue')
+        (self.live / 'build.prop').write_text('port')
+        original_replace = os.replace
+        def mock_replace(src, dst):
+            # Simulate WinError 17 whenever moving neocat files across drives
+            if 'neocat' in str(src) or 'neocat' in str(dst):
+                err = OSError(17, "The system cannot move the file to a different disk drive")
+                err.winerror = 17
+                raise err
+            return original_replace(src, dst)
+
+        with patch('os.replace', side_effect=mock_replace):
+            self.manager.checkout_branch('vendor', None)
+        self.assertEqual((self.live / 'build.prop').read_bytes(), b'ro.test=source\r\n')
+        with patch('os.replace', side_effect=mock_replace):
+            self.manager.checkout_branch('vendor', 'port')
+        self.assertEqual((self.live / 'build.prop').read_text(), 'port')
+
 
 if __name__ == '__main__':unittest.main()

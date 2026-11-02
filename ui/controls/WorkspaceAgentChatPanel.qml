@@ -43,12 +43,14 @@ Item {
     Item {
         id: header; x: 18; y: 10; width: parent.width-36; height: 32
         RakLabel { anchors.verticalCenter: parent.verticalCenter; text: panel.tr.assistant; font.pixelSize: 12; font.weight: Font.Medium; color: panel.c.FG2 }
-        AgentChatChoice { id: historyMenu; objectName: "agentChatHistory"; anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-            colors: panel.c; showArrow: false; width: 24; height: 26; toolTip: panel.tr.history
-            iconSource: "image://rak/history?color="+encodeURIComponent(historyMenu.visualHovered?historyMenu.hoverLabelColor:historyMenu.labelColor)
-            enabled: !chat.busy && chat.chats.length>0
-            choices: chat.chats.map(row=>({key:row.id,label:row.label})); currentKey: chat.selectedChat
-            onChosen: key=>{historyMenu.previewCaption=null;chat.selectChat(key)}
+        AgentChatHistoryPicker {
+            id: historyMenu
+            objectName: "agentChatHistory"
+            anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+            chat: panel.chat
+            preferences: panel.preferences
+            panelItem: panel
+            onNewConversationRequested: composer.forceActiveFocus()
         }
     }
     ListView {

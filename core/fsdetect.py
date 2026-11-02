@@ -31,19 +31,20 @@ def detect_fs_type(path):
     # CHECK EROFS
     try:
         cmd = [dump_erofs, path]
-        p = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            shell=False,
-            text=True,
-            creationflags=CREATE_NO_WINDOW
-        )
-        out, err = p.communicate(timeout=5)
-        if p.returncode == 0:
-            for line in out.splitlines():
-                if "Filesystem magic number" in line and MAGIC_EROF in line:
-                    return "EROFS"
+        with subprocess.without_console():
+            p = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                shell=False,
+                text=True,
+                creationflags=CREATE_NO_WINDOW
+            )
+            out, err = p.communicate(timeout=5)
+            if p.returncode == 0:
+                for line in out.splitlines():
+                    if "Filesystem magic number" in line and MAGIC_EROF in line:
+                        return "EROFS"
     except:
         pass
 

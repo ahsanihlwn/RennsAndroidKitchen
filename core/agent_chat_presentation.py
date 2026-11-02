@@ -5,7 +5,7 @@ import json
 
 LABELS={
  'en':{
-  'assistant':'Agent','you':'You','new':'New chat','history':'History','close':'Close','more':'Options',
+  'assistant':'Agent','you':'You','new':'New chat','new_conversation':'New conversation','no_history':'No conversations yet','history':'History','close':'Close','more':'Options',
   'workspace_session_reset':'Working folder: {path}. A fresh backend session is used to avoid inheriting another workspace; earlier messages remain in history.',
   'welcome':'What would you like to do?','welcome_body':'Ask a question, or select a file and ask for help.',
   'example':'Explain the selected file','placeholder':'Ask anything, or type / for commands','send':'Send','stop':'Stop','latest':'Jump to latest message',
@@ -34,7 +34,7 @@ LABELS={
   'shortened':'Long output is available in the diagnostic log.',
  },
  'id':{
-  'assistant':'Agent','you':'Kamu','new':'Chat baru','history':'Riwayat','close':'Tutup','more':'Pilihan',
+  'assistant':'Agent','you':'Kamu','new':'Chat baru','new_conversation':'Percakapan baru','no_history':'Belum ada percakapan','history':'Riwayat','close':'Tutup','more':'Pilihan',
   'workspace_session_reset':'Folder kerja: {path}. Sesi backend baru dipakai agar workspace lama tidak ikut terbawa; pesan sebelumnya tetap di riwayat.',
   'welcome':'Mau mengerjakan apa?','welcome_body':'Tanyakan sesuatu, atau pilih file yang ingin dibantu.',
   'example':'Jelaskan file yang dipilih','placeholder':'Tanya apa saja, atau ketik / untuk perintah','send':'Kirim','stop':'Hentikan','latest':'Ke pesan terbaru',

@@ -31,10 +31,8 @@ Item {
         {key:"layout",icon:"tree_mode",tip:"Toggle Layout / Split View"},
         {key:"terminal",icon:"terminal",tip:"Terminal"},
         {key:"android",icon:"android_tools",tip:"Android Tools"},
-        {key:"import",icon:"import",tip:"Import files"},
-        {key:"newFolder",icon:"add_folder",tip:"New folder"},
-        {key:"newFile",icon:"add_file",tip:"New file"}
-    ].concat(workspace.agentChat.available?[{key:"agentInbox",icon:"send",tip:workspace.agentChat.opened?"Minimize agent":"Agent chat"}]:[]).concat(workspace.privateFeatures.allowed?[
+        {key:"import",icon:"import",tip:"Import files"}
+    ].concat(workspace.agentChat && workspace.agentChat.available?[{key:"agentInbox",icon:"send",tip:workspace.agentChat.opened?"Minimize agent":"Agent chat"}]:[]).concat(workspace.privateFeatures && workspace.privateFeatures.allowed?[
         {key:"automation",icon:"automation",tip:"Automation"},
         {key:"compare",icon:"compare",tip:"Compare FileSystem"}]:[])
     implicitHeight: 60

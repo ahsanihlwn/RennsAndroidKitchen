@@ -12,6 +12,7 @@ from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer, QUrl, Qt
 from PySide6.QtGui import QDesktopServices,QGuiApplication
 
 from core import ui_lang
+from core.project_config import resolve_tree_target
 from main_ext.class_ThemeUi import theme
 from services.async_jobs import AsyncJobs
 from ui.directory import DirectoryModel
@@ -113,7 +114,7 @@ class WorkspaceSession(QObject):
         self._operation_serial = 0
         from ui.workspace_tasks import WorkspaceTasks
         from ui.source_recovery import SourceRecovery
-        self._source_recovery = SourceRecovery([os.path.join(self.project,name) for name in (self.p1,self.p2) if name],self)
+        self._source_recovery = SourceRecovery([resolve_tree_target(self.project,name) for name in (self.p1,self.p2) if name],self)
         self._source_recovery.progress.connect(self.preparation_status)
         self._source_recovery.finished.connect(self._sources_prepared)
         self._tasks=WorkspaceTasks(self,recovery=self._source_recovery)
@@ -327,7 +328,7 @@ class WorkspaceSession(QObject):
         if self._closing or self._preparation_error or self._ready:return
         if not ok:self._tree_failed(str(result));return
         self.preparation_status.emit('Loading project files...')
-        bases=[os.path.join(self.project,name) for name in (self.p1,self.p2) if name]
+        bases=[resolve_tree_target(self.project,name) for name in (self.p1,self.p2) if name]
         self.tree.load(bases[0]);self.tree_mirror.load(bases[0])
         if self.p2:self.tree2.load(bases[1])
 
@@ -566,7 +567,7 @@ class WorkspaceSession(QObject):
 
     def _create_terminal(self,root,*,cwd=None,title='New Session',icon_key=None,manager=None):
         base_root=self._linux_source_root if root=='linux' else root
-        base = cwd or os.path.join(self.project, self.p2 if base_root == "tree2" else self.p1)
+        base = cwd or resolve_tree_target(self.project, self.p2 if base_root == "tree2" else self.p1)
         session = TerminalSession(manager=manager,parent=self) if manager is not None else self._terminal_factory(cwd=base, wsl_mode=root == "linux", parent=self)
         session.warningRaised.connect(lambda title, text: self.message(text, title))
         session.applyTheme(self.preferences.colors)

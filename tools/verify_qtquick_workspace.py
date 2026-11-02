@@ -59,7 +59,7 @@ def main():
             QCoreApplication.sendEvent(window,QKeyEvent(QEvent.KeyPress,0,Qt.NoModifier,char))
             QCoreApplication.sendEvent(window,QKeyEvent(QEvent.KeyRelease,0,Qt.NoModifier,char))
     with tempfile.TemporaryDirectory(prefix='rak-workspace-qa-') as temporary:
-        root=Path(temporary)
+        root=Path(os.path.realpath(temporary))
         import wave,zipfile
         from PySide6.QtGui import QImage,QColor
         for port in ('system','vendor'):
@@ -127,10 +127,14 @@ def main():
             wait_ms(100)
             branch_path=str(root/'system'/'nested')
             arrow_name='treeBranchArrow:'+branch_path
-            def arrow_rotation():
-                try:return visual(window,arrow_name).property('rotation')
+            def get_arrow():
+                try:return visual(window,arrow_name)
                 except (RuntimeError,AssertionError):return None
-            arrow=visual(window,arrow_name)
+            def arrow_rotation():
+                a = get_arrow()
+                return a.property('rotation') if a is not None else None
+            wait(lambda:get_arrow() is not None)
+            arrow=get_arrow()
             assert arrow.width()==12 and arrow.height()==12 and arrow.property('rotation')==0
             assert 'arrow_right?color=' in arrow.property('source').toString()
             arrow_point=arrow.mapToScene(arrow.boundingRect().center()).toPoint()
@@ -159,13 +163,15 @@ def main():
             assert not (root/'system'/'notes.txt').exists()
             # New item starts as an editable dummy; Escape never creates it.
             session.selectTree(0);session.selectPaths(0,[])
-            click('workspaceAction_newFile');type_text('created.txt');QTest.keyClick(window,Qt.Key_Return)
+            session.dispatch('newFile',{});wait(lambda:visual(window,'workspaceTree0').parentItem().property('editingActive'))
+            type_text('created.txt');QTest.keyClick(window,Qt.Key_Return)
             wait(lambda:(root/'system'/'created.txt').exists())
             wait(lambda:not session._operation_count)
             wait(lambda:not session.tree.busy)
             assert (root/'system'/'config').is_dir(), 'Creating a file must preserve the config folder'
             assert session.history[-1]['label'].startswith('Create'), session.history
-            click('workspaceAction_newFolder');type_text('cancelled');QTest.keyClick(window,Qt.Key_Escape)
+            session.dispatch('newFolder',{});wait(lambda:visual(window,'workspaceTree0').parentItem().property('editingActive'))
+            type_text('cancelled');QTest.keyClick(window,Qt.Key_Escape)
             wait_ms(150);assert not (root/'system'/'cancelled').exists()
             # The native transfer dialog resolves conflicts before mutation.
             incoming=root/'incoming';incoming.mkdir();(incoming/'same.txt').write_text('incoming')
@@ -214,11 +220,9 @@ def main():
             QTest.mouseDClick(window,Qt.LeftButton,Qt.NoModifier,point)
             wait(lambda:session.activeTab==prop)
             assert session.layoutMode==3 and session.rightOpen
-            wait(lambda:toolbar.property('compact') and not toolbar.property('modeAnimating'))
-            assert toolbar.property('modeAmount')==1 and any(0<value<1 for value in mode_samples),mode_samples
-            # Real SplitView pointer gestures cross both toolbar thresholds.
-            # Restore the original pane width before continuing the editor QA.
-            for distance,compact in ((300,False),(-300,True)):
+            motion=visual(window,'workspaceLayoutMotion')
+            wait(lambda:not motion.property('running') and not motion.property('pending'))
+            for distance,compact in ((-150,True),(150,False)):
                 divider=visual(window,'workspaceMainDivider')
                 start=divider.mapToScene(divider.boundingRect().center()).toPoint()
                 before=len(mode_samples)
@@ -237,11 +241,11 @@ def main():
             assert session.hasTabs and session.editor.bridge.is_unsaved(prop)
             session.saveCurrent();wait(lambda:(root/'system'/'build.prop').read_text()=='ro.fixture=modified\n')
             session.closeTab(prop);wait(lambda:not session.hasTabs)
-            assert session.layoutMode==2 and not session.rightOpen
+            wait(lambda:session.layoutMode==2 and not session.rightOpen)
             wait(lambda:not toolbar.property('compact') and not toolbar.property('modeAnimating'))
             assert toolbar.property('modeAmount')==0
             # Sessions are independent per ROM and survive hiding the terminal.
-            session.toggleTerminal();wait(lambda:len(session._terminals)==1)
+            session.toggleTerminal();wait(lambda:len(session._terminals)==1 and session.terminalOpen)
             terminal=session._terminals[0]['session'];wait(lambda:terminal.bridge.is_ready)
             pane=visual(window,'workspaceTerminal_'+session._terminals[0]['key'])
             def terminal_visible():
@@ -265,7 +269,15 @@ def main():
             session.closeTerminal(first);wait_ms(100)
             assert terminal._manager.stopped and session._terminals[0]['session'].active
             assert session.terminalRoot=='tree2' and session.terminalOpen
-            # Settings edit is a draft until Apply.
+            # Settings edit is a draft until Apply (compact toolbar via divider drag).
+            divider=visual(window,'workspaceMainDivider')
+            start=divider.mapToScene(divider.boundingRect().center()).toPoint()
+            QTest.mouseMove(window,start);wait_ms(30)
+            QTest.mousePress(window,Qt.LeftButton,Qt.NoModifier,start)
+            for step in range(1,11):
+                QTest.mouseMove(window,start+QPoint(round(-150*step/10),0),15);wait_ms(10)
+            QTest.mouseRelease(window,Qt.LeftButton,Qt.NoModifier,start+QPoint(-150,0))
+            wait(lambda:toolbar.property('compact') and not toolbar.property('modeAnimating'))
             click('workspaceToolbarExpand')
             toolbar_popup=visual(window,'workspaceToolbarPopup');wait(lambda:toolbar_popup.property('opened'))
             assert toolbar_popup.property('morphOnClose') and visual(window,'workspaceToolbarExpand').property('morphHidden')
@@ -280,6 +292,14 @@ def main():
             assert session.projectSettings['super']['norm']!=before['super']['norm']
             settings_popup=visual(window,'workspaceSettings')
             assert not settings_popup.property('visible') and not workspace.engine._dialog_stack.stack
+            divider=visual(window,'workspaceMainDivider')
+            start=divider.mapToScene(divider.boundingRect().center()).toPoint()
+            QTest.mouseMove(window,start);wait_ms(30)
+            QTest.mousePress(window,Qt.LeftButton,Qt.NoModifier,start)
+            for step in range(1,11):
+                QTest.mouseMove(window,start+QPoint(round(150*step/10),0),15);wait_ms(10)
+            QTest.mouseRelease(window,Qt.LeftButton,Qt.NoModifier,start+QPoint(150,0))
+            wait(lambda:not toolbar.property('compact') and not toolbar.property('modeAnimating'))
             # Filename search selects the matching tree row without opening it.
             session.selectTree(0);session.dispatch('find',{});wait_ms(150)
             visual(window,'workspaceSearchInput').setProperty('text','inside')
@@ -330,7 +350,7 @@ def main():
             assert session.editor.bridge.has_unsaved()
             assert not (root/'system'/'neobranch'/'product'/'branch_native_test').exists()
             click('launcherMessageAccept');wait_ms(150)
-            session.saveCurrent();session.closeTab(branch_file);wait_ms(100)
+            session.saveCurrent();wait(lambda:Path(branch_file).read_text()=='Unsaved source\n');session.closeTab(branch_file);wait_ms(100)
             session.branches.show(str(partition));wait_ms(350)
             click('workspaceBranchName');type_text('native_test')
             click('workspaceBranchColor_green');click('workspaceBranchCreateConfirm')
@@ -347,8 +367,13 @@ def main():
             click('workspaceBranchSwitch_source');wait_ms(350)
             assert manager.get_active_branch('product')['name']=='native_test' and session.hasTabs
             click('launcherMessageAccept');wait_ms(150)
-            session.saveCurrent()
-            assert Path(branch_file).read_text()=='Unsaved source\n'
+            session.saveCurrent();wait(lambda:Path(document).read_text()=='Branch only\n')
+            if manager.is_physical_checkout('product'):
+                state = manager._read_state('product')
+                snap = root / 'system' / 'neobranch' / 'product' / 'checkout' / 'snapshots' / state['checkout_snapshots']['source']
+                assert (snap / 'product' / 'etc' / 'branch.txt').read_text() == 'Unsaved source\n'
+            else:
+                assert Path(branch_file).read_text() == 'Unsaved source\n'
             assert Path(document).read_text()=='Branch only\n'
             session.branches.show(str(partition));wait_ms(350);click('workspaceBranchSwitch_source')
             wait(lambda:manager.get_active_branch('product') is None and not session.hasTabs)

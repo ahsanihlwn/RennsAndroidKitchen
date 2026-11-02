@@ -101,8 +101,13 @@ _STRINGS: dict[str, dict[str, str]] = {
     "btn_browse":               _e("Browse…",           "Pilih…",           "浏览…",      "Обзор…",             "ब्राउज़ करें…",     "Procurar…",         "Duyệt…",           "Gözat…",            "参照…"),
     "btn_back":                 _e("Back",              "Kembali",          "返回",       "Назад",              "वापस",              "Voltar",            "Quay lại",         "Geri",              "戻る"),
     "btn_settings":             _e("Settings",          "Pengaturan",       "设置",       "Настройки",          "सेटिंग्स",          "Configurações",     "Cài đặt",          "Ayarlar",           "設定"),
-    "btn_create_project":       _e("Create Project",    "Buat Proyek",      "创建项目",   "Создать проект",     "प्रोजेक्ट बनाएं",   "Criar Projeto",     "Tạo Dự Án",        "Proje Oluştur",     "プロジェクトを作成"),
+    "btn_create_project":       _e("New Project",       "Proyek Baru",      "新建项目",   "Новый проект",       "नया प्रोजेक्ट",      "Novo Projeto",      "Dự án mới",        "Yeni Proje",        "新規プロジェクト"),
+    "btn_new_project":          _e("New Project",       "Proyek Baru",      "新建项目",   "Новый проект",       "नया प्रोजेक्ट",      "Novo Projeto",      "Dự án mới",        "Yeni Proje",        "新規プロジェクト"),
     "btn_confirm_project":      _e("Confirm",           "Konfirmasi",      "确认",       "Подтвердить",       "पुष्टि करें",       "Confirmar",        "Xác nhận",        "Onayla",           "確認"),
+    "btn_import":               _e("Import",            "Impor",            "导入",       "Импорт",             "इम्पोर्ट",          "Importar",          "Nhập",             "İçe Aktar",         "インポート"),
+    "btn_import_folder":        _e("Import Folder",     "Impor Folder",     "导入文件夹", "Импортировать папку", "फ़ोल्डर इम्पोर्ट करें", "Importar Pasta", "Nhập thư mục",     "Klasör İçe Aktar",  "フォルダをインポート"),
+    "lbl_linked_to":            _e("Linked to",         "Terhubung ke",     "链接至",     "Связано с",          "से जुड़ा हुआ",      "Vinculado a",       "Được liên kết với","Bağlandı",          "リンク先"),
+    "btn_clear_import":         _e("Clear",             "Hapus",            "清除",       "Очистить",           "साफ़ करें",         "Limpar",            "Xóa",              "Temizle",           "クリア"),
 
     # settings
     "hdr_settings":         _e("Settings",          "Pengaturan",       "设置",      "Настройки",         "सेटिंग्स",         "Configurações",    "Cài đặt",         "Ayarlar",           "設定"),

@@ -12,6 +12,7 @@ import shutil
 import stat
 import uuid
 import re
+import errno
 from concurrent.futures import ThreadPoolExecutor
 from core.command_context import OperationError
 
@@ -55,6 +56,32 @@ def _copy(source, target):
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, target)
+
+
+def _replace_path(source, target, remove):
+    source_p = Path(source)
+    target_p = Path(target)
+    try:
+        os.replace(source_p, target_p)
+    except OSError as err:
+        if getattr(err, 'winerror', None) == 17 or getattr(err, 'errno', None) == errno.EXDEV:
+            temp_target = target_p.parent / f".tmp-{uuid.uuid4().hex}"
+            if source_p.is_symlink():
+                temp_target.parent.mkdir(parents=True, exist_ok=True)
+                temp_target.symlink_to(os.readlink(source_p), target_is_directory=source_p.is_dir())
+            elif source_p.is_dir():
+                shutil.copytree(source_p, temp_target, symlinks=True)
+            else:
+                target_p.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_p, temp_target)
+            try:
+                os.replace(temp_target, target_p)
+            finally:
+                if temp_target.exists():
+                    remove(str(temp_target))
+            remove(str(source_p))
+        else:
+            raise
 
 
 def _manifest(path):
@@ -323,13 +350,13 @@ def recover(manager, root, *, progress=None):
             previous = transaction / ('previous-' + str(index))
             if piece['phase'] == 'pending':
                 if piece['old'] and not os.path.lexists(previous):
-                    retry(lambda: os.replace(live, previous), str(live))
+                    retry(lambda: _replace_path(live, previous, remove), str(live))
                 piece['phase'] = 'displaced'
                 write(str(journal_path), journal)
             if piece['phase'] == 'displaced':
                 if piece['new'] and os.path.lexists(stage):
                     live.parent.mkdir(parents=True, exist_ok=True)
-                    retry(lambda: os.replace(stage, live), str(live))
+                    retry(lambda: _replace_path(stage, live, remove), str(live))
                 elif piece['new'] and not os.path.lexists(live):
                     raise FileNotFoundError('Missing staged checkout: ' + str(stage))
                 piece['phase'] = 'installed'

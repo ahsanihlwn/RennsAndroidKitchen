@@ -1516,7 +1516,7 @@ class AppUI(AppFeatures, QWidget):
         )
         yield
 
-        self.btn_create = bind_text(QPushButton(), lambda: t("btn_create_project"))
+        self.btn_create = bind_text(QPushButton(), lambda: t("btn_new_project"))
         self.btn_create.setLayoutDirection(Qt.LeftToRight)
         bind_icon(self.btn_create, lambda: tint_icon("plus", _th.FG2, 15))
         self.btn_create.setIconSize(QSize(15, 15))
@@ -1750,6 +1750,20 @@ class AppUI(AppFeatures, QWidget):
         yield
         card_ports_lay.addSpacing(2)
 
+        def _btn_import_ss():
+            return f"""
+                QPushButton {{
+                    background: {_th.border_color(0.05)};
+                    border: 1px solid {_th.border_color(0.09)};
+                    border-radius: 6px;
+                    color: {_th.FG_BLUE_MUTED};
+                    font-size: 12px;
+                    padding: 0 12px;
+                }}
+                QPushButton:hover {{ background: {_th.border_color(0.09)}; color: {_th.FG}; }}
+                QPushButton:pressed {{ background: {_th.border_color(0.13)}; }}
+            """
+
         self.port1_label = bind_text(QLabel(), lambda: t("lbl_ft1_folder"))
         bind_style(self.port1_label, _label_ss)
         self.input_port1 = QLineEdit()
@@ -1758,9 +1772,29 @@ class AppUI(AppFeatures, QWidget):
         self.input_port1.setFixedHeight(38)
         bind_style(self.input_port1, _input_ss)
 
+        self.btn_import_p1 = bind_text(QPushButton(), lambda: t("btn_import"))
+        self.btn_import_p1.setFixedHeight(38)
+        self.btn_import_p1.setCursor(Qt.PointingHandCursor)
+        bind_style(self.btn_import_p1, _btn_import_ss)
+        bind_icon(self.btn_import_p1, lambda: tint_icon("import", _th.FG2, 14))
+        self.btn_import_p1.setIconSize(QSize(14, 14))
+        self.btn_import_p1.clicked.connect(self._import_folder_1)
+
+        row_p1 = QHBoxLayout()
+        row_p1.setSpacing(8)
+        row_p1.setContentsMargins(0, 0, 0, 0)
+        row_p1.addWidget(self.input_port1, 1)
+        row_p1.addWidget(self.btn_import_p1)
+
+        self.lbl_import_hint1 = QLabel()
+        bind_style(self.lbl_import_hint1, lambda: f"font-size:11px; color:{_th.accent(0.95)}; background:transparent; border:none;")
+        self.lbl_import_hint1.setWordWrap(True)
+        self.lbl_import_hint1.hide()
+
         card_ports_lay.addWidget(self.port1_label)
         yield
-        card_ports_lay.addWidget(self.input_port1)
+        card_ports_lay.addLayout(row_p1)
+        card_ports_lay.addWidget(self.lbl_import_hint1)
 
         div2 = QWidget(); div2.setFixedHeight(1)
         bind_style(div2, lambda: f"background:{_th.border_color(0.07)}; border:none;")
@@ -1774,6 +1808,25 @@ class AppUI(AppFeatures, QWidget):
         self.input_port2.setFixedHeight(38)
         bind_style(self.input_port2, _input_ss)
 
+        self.btn_import_p2 = bind_text(QPushButton(), lambda: t("btn_import"))
+        self.btn_import_p2.setFixedHeight(38)
+        self.btn_import_p2.setCursor(Qt.PointingHandCursor)
+        bind_style(self.btn_import_p2, _btn_import_ss)
+        bind_icon(self.btn_import_p2, lambda: tint_icon("import", _th.FG2, 14))
+        self.btn_import_p2.setIconSize(QSize(14, 14))
+        self.btn_import_p2.clicked.connect(self._import_folder_2)
+
+        row_p2 = QHBoxLayout()
+        row_p2.setSpacing(8)
+        row_p2.setContentsMargins(0, 0, 0, 0)
+        row_p2.addWidget(self.input_port2, 1)
+        row_p2.addWidget(self.btn_import_p2)
+
+        self.lbl_import_hint2 = QLabel()
+        bind_style(self.lbl_import_hint2, lambda: f"font-size:11px; color:{_th.accent(0.95)}; background:transparent; border:none;")
+        self.lbl_import_hint2.setWordWrap(True)
+        self.lbl_import_hint2.hide()
+
         self._div2_ports = div2
         self._lbl_port2  = self.port2_label
         yield
@@ -1781,11 +1834,12 @@ class AppUI(AppFeatures, QWidget):
 
         card_ports_lay.addWidget(div2)
         card_ports_lay.addWidget(self.port2_label)
-        card_ports_lay.addWidget(self.input_port2)
+        card_ports_lay.addLayout(row_p2)
+        card_ports_lay.addWidget(self.lbl_import_hint2)
         yield
 
         # hide port2 row by default (single mode)
-        div2.hide(); self.port2_label.hide(); self.input_port2.hide()
+        div2.hide(); self.port2_label.hide(); self.input_port2.hide(); self.btn_import_p2.hide()
 
 
         center_v.addWidget(self._card_ports)
@@ -3619,11 +3673,54 @@ class AppUI(AppFeatures, QWidget):
             self._div2_ports.show()
             self._lbl_port2.show()
             self._inp_port2.show()
+            if hasattr(self, "btn_import_p2"):
+                self.btn_import_p2.show()
+            if hasattr(self, "lbl_import_hint2") and getattr(self, "_import_path2", None):
+                self.lbl_import_hint2.show()
         else:
             self._div2_ports.hide()
             self._lbl_port2.hide()
             self._inp_port2.hide()
+            if hasattr(self, "btn_import_p2"):
+                self.btn_import_p2.hide()
+            if hasattr(self, "lbl_import_hint2"):
+                self.lbl_import_hint2.hide()
             self.input_port2.clear()
+            self._import_path2 = None
+
+    def _import_folder_1(self):
+        start_dir = getattr(self, "_import_path1", None) or _resolve_default_location()
+        folder = QFileDialog.getExistingDirectory(self, t("btn_import_folder"), start_dir)
+        if folder:
+            folder = os.path.normpath(folder)
+            self._import_path1 = folder
+            current = self.input_port1.text().strip()
+            if not current or current in ("port_a", "port1"):
+                self.input_port1.setText(os.path.basename(folder))
+            if hasattr(self, "lbl_import_hint1"):
+                self.lbl_import_hint1.setText(f"↳ {t('lbl_linked_to')}: {folder}")
+                self.lbl_import_hint1.setToolTip(folder)
+                self.lbl_import_hint1.show()
+            if hasattr(self, "btn_import_p1"):
+                self.btn_import_p1.setToolTip(folder)
+            self.update_create_state()
+
+    def _import_folder_2(self):
+        start_dir = getattr(self, "_import_path2", None) or _resolve_default_location()
+        folder = QFileDialog.getExistingDirectory(self, t("btn_import_folder"), start_dir)
+        if folder:
+            folder = os.path.normpath(folder)
+            self._import_path2 = folder
+            current = self.input_port2.text().strip()
+            if not current or current in ("port_b", "port2"):
+                self.input_port2.setText(os.path.basename(folder))
+            if hasattr(self, "lbl_import_hint2"):
+                self.lbl_import_hint2.setText(f"↳ {t('lbl_linked_to')}: {folder}")
+                self.lbl_import_hint2.setToolTip(folder)
+                self.lbl_import_hint2.show()
+            if hasattr(self, "btn_import_p2"):
+                self.btn_import_p2.setToolTip(folder)
+            self.update_create_state()
 
     def update_port_mode(self):
         self._apply_port_mode()
@@ -4731,14 +4828,12 @@ class AppUI(AppFeatures, QWidget):
             AppDialog.error(self, t("lbl_error"), t("err_create_folder"))
             return
 
-        # Struktur
-        os.makedirs(os.path.join(proj_root, p1, "config"), exist_ok=True)
+        filetree_mode = 2 if self.radio_2.isChecked() else 1
+        target1 = getattr(self, "_import_path1", None)
+        target2 = getattr(self, "_import_path2", None) if filetree_mode == 2 else None
 
-        filetree_mode = 1
-        if self.radio_2.isChecked():
-            filetree_mode = 2
-            if p2:
-                os.makedirs(os.path.join(proj_root, p2, "config"), exist_ok=True)
+        from core.project_config import setup_project_container
+        setup_project_container(proj_root, name, filetree_mode, p1, p2, target1, target2)
 
         # Simpan ke JSON
         record = {
@@ -4748,6 +4843,10 @@ class AppUI(AppFeatures, QWidget):
             "port2": p2 if filetree_mode == 2 else "",
             "mode": filetree_mode
         }
+        if target1:
+            record["port1_target"] = target1
+        if target2:
+            record["port2_target"] = target2
 
         all_proj = _load_projects_json()
         all_proj.append(record)

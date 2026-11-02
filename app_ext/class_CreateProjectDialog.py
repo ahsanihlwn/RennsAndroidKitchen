@@ -82,6 +82,8 @@ class CreateProjectDialog(QDialog):
         self.setModal(not as_popup)
 
         self._port_mode = 1
+        self._import_path1 = None
+        self._import_path2 = None
         self._blur = None
         self._result_record = None
         self._popup_open = False
@@ -306,22 +308,63 @@ class CreateProjectDialog(QDialog):
         cp_lay.addWidget(_divider())
 
         lbl_p1 = bind_text(QLabel(), lambda: _t("lbl_ft1_folder")); bind_style(lbl_p1, _label_ss)
+
+        row_p1 = QHBoxLayout(); row_p1.setSpacing(8); row_p1.setContentsMargins(0, 0, 0, 0)
         self.input_port1 = QLineEdit()
         bind_language(self.input_port1, "setPlaceholderText", lambda: _t("placeholder_ft1"))
         self.input_port1.setFixedHeight(38)
         bind_style(self.input_port1, _input_ss)
-        cp_lay.addWidget(lbl_p1); cp_lay.addWidget(self.input_port1)
+
+        self.btn_import_p1 = bind_text(QPushButton(), lambda: _t("btn_import"))
+        self.btn_import_p1.setFixedHeight(38)
+        self.btn_import_p1.setCursor(Qt.PointingHandCursor)
+        bind_style(self.btn_import_p1, lambda: _btn_ss("normal"))
+        bind_icon(self.btn_import_p1, lambda: tint_icon("import", _th.FG2, 14))
+        self.btn_import_p1.setIconSize(QSize(14, 14))
+        self.btn_import_p1.clicked.connect(self._import_folder_1)
+
+        row_p1.addWidget(self.input_port1, 1)
+        row_p1.addWidget(self.btn_import_p1)
+
+        self.lbl_import_hint1 = QLabel()
+        bind_style(self.lbl_import_hint1, lambda: f"font-size:11px; color:{_th.accent(0.95)}; background:transparent; border:none;")
+        self.lbl_import_hint1.setWordWrap(True)
+        self.lbl_import_hint1.hide()
+
+        cp_lay.addWidget(lbl_p1)
+        cp_lay.addLayout(row_p1)
+        cp_lay.addWidget(self.lbl_import_hint1)
 
         self._div_p2  = _divider()
         self._lbl_p2  = bind_text(QLabel(), lambda: _t("lbl_ft2_folder")); bind_style(self._lbl_p2, _label_ss)
+
+        row_p2 = QHBoxLayout(); row_p2.setSpacing(8); row_p2.setContentsMargins(0, 0, 0, 0)
         self.input_port2 = QLineEdit()
         bind_language(self.input_port2, "setPlaceholderText", lambda: _t("placeholder_ft2"))
         self.input_port2.setFixedHeight(38)
         bind_style(self.input_port2, _input_ss)
+
+        self.btn_import_p2 = bind_text(QPushButton(), lambda: _t("btn_import"))
+        self.btn_import_p2.setFixedHeight(38)
+        self.btn_import_p2.setCursor(Qt.PointingHandCursor)
+        bind_style(self.btn_import_p2, lambda: _btn_ss("normal"))
+        bind_icon(self.btn_import_p2, lambda: tint_icon("import", _th.FG2, 14))
+        self.btn_import_p2.setIconSize(QSize(14, 14))
+        self.btn_import_p2.clicked.connect(self._import_folder_2)
+
+        row_p2.addWidget(self.input_port2, 1)
+        row_p2.addWidget(self.btn_import_p2)
+
+        self.lbl_import_hint2 = QLabel()
+        bind_style(self.lbl_import_hint2, lambda: f"font-size:11px; color:{_th.accent(0.95)}; background:transparent; border:none;")
+        self.lbl_import_hint2.setWordWrap(True)
+        self.lbl_import_hint2.hide()
+
         cp_lay.addWidget(self._div_p2)
         cp_lay.addWidget(self._lbl_p2)
-        cp_lay.addWidget(self.input_port2)
-        self._div_p2.hide(); self._lbl_p2.hide(); self.input_port2.hide()
+        cp_lay.addLayout(row_p2)
+        cp_lay.addWidget(self.lbl_import_hint2)
+        self._div_p2.hide(); self._lbl_p2.hide(); self.input_port2.hide(); self.btn_import_p2.hide()
 
         cv.addWidget(card_ports)
 
@@ -418,11 +461,50 @@ class CreateProjectDialog(QDialog):
         self._div_p2.setVisible(dual)
         self._lbl_p2.setVisible(dual)
         self.input_port2.setVisible(dual)
+        if hasattr(self, "btn_import_p2"):
+            self.btn_import_p2.setVisible(dual)
+        if hasattr(self, "lbl_import_hint2"):
+            self.lbl_import_hint2.setVisible(dual and bool(getattr(self, "_import_path2", None)))
         if not dual:
             self.input_port2.clear()
+            self._import_path2 = None
+            if hasattr(self, "lbl_import_hint2"):
+                self.lbl_import_hint2.hide()
         self.adjustSize()
         if self.isVisible():
             QTimer.singleShot(0, self, self._position_near_button)
+
+    def _import_folder_1(self):
+        start_dir = getattr(self, "_import_path1", None) or _load_default_location()
+        folder = QFileDialog.getExistingDirectory(self, _t("btn_import_folder"), start_dir)
+        if folder:
+            folder = os.path.normpath(folder)
+            self._import_path1 = folder
+            current = self.input_port1.text().strip()
+            if not current or current in ("port_a", "port1"):
+                self.input_port1.setText(os.path.basename(folder))
+            if hasattr(self, "lbl_import_hint1"):
+                self.lbl_import_hint1.setText(f"↳ {_t('lbl_linked_to')}: {folder}")
+                self.lbl_import_hint1.setToolTip(folder)
+                self.lbl_import_hint1.show()
+            self.btn_import_p1.setToolTip(folder)
+            self._update_btn()
+
+    def _import_folder_2(self):
+        start_dir = getattr(self, "_import_path2", None) or _load_default_location()
+        folder = QFileDialog.getExistingDirectory(self, _t("btn_import_folder"), start_dir)
+        if folder:
+            folder = os.path.normpath(folder)
+            self._import_path2 = folder
+            current = self.input_port2.text().strip()
+            if not current or current in ("port_b", "port2"):
+                self.input_port2.setText(os.path.basename(folder))
+            if hasattr(self, "lbl_import_hint2"):
+                self.lbl_import_hint2.setText(f"↳ {_t('lbl_linked_to')}: {folder}")
+                self.lbl_import_hint2.setToolTip(folder)
+                self.lbl_import_hint2.show()
+            self.btn_import_p2.setToolTip(folder)
+            self._update_btn()
 
     def _update_btn(self):
         name = self.input_name.text().strip()
@@ -439,6 +521,7 @@ class CreateProjectDialog(QDialog):
 
     def _do_create(self):
         from main_ext.class_AppDialog import AppDialog
+        from core.project_config import setup_project_container
         name = self.input_name.text().strip()
         p1   = self.input_port1.text().strip()
         p2   = self.input_port2.text().strip()
@@ -458,9 +541,10 @@ class CreateProjectDialog(QDialog):
             AppDialog.error(self, _t("lbl_error"), _t("err_create_folder"))
             return
 
-        os.makedirs(os.path.join(proj_root, p1, "config"), exist_ok=True)
-        if self._port_mode == 2 and p2:
-            os.makedirs(os.path.join(proj_root, p2, "config"), exist_ok=True)
+        target1 = getattr(self, "_import_path1", None)
+        target2 = getattr(self, "_import_path2", None) if self._port_mode == 2 else None
+
+        setup_project_container(proj_root, name, self._port_mode, p1, p2, target1, target2)
 
         # Store the record now; show_popup opens the editor after the closing
         # morph has hidden the popup and restored the source button.
@@ -471,6 +555,10 @@ class CreateProjectDialog(QDialog):
             "port2": p2 if self._port_mode == 2 else "",
             "mode": self._port_mode,
         }
+        if target1:
+            self._result_record["port1_target"] = target1
+        if target2:
+            self._result_record["port2_target"] = target2
         self.accept()
 
     def _position_near_button(self):
@@ -736,6 +824,12 @@ class CreateProjectDialog(QDialog):
         self._closing_with_morph = False
         self._pending_result = None
         self._result_record = None
+        self._import_path1 = None
+        self._import_path2 = None
+        if hasattr(self, "lbl_import_hint1"):
+            self.lbl_import_hint1.hide()
+        if hasattr(self, "lbl_import_hint2"):
+            self.lbl_import_hint2.hide()
         self.input_name.clear()
         self.input_port1.clear()
         self.input_port2.clear()

@@ -39,18 +39,19 @@ def check_ext4_magic(img_path: str) -> str:
         return ""
 
     try:
-        proc = subprocess.run(
-            [EXT_BIN, "--read", img_path],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=5,
-            cwd=BIN_PATH,
-            env=_ext_tool_env(),
-            creationflags=CREATE_NO_WINDOW
-        )
+        with subprocess.without_console():
+            proc = subprocess.run(
+                [EXT_BIN, "--read", img_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=5,
+                cwd=BIN_PATH,
+                env=_ext_tool_env(),
+                creationflags=CREATE_NO_WINDOW
+            )
 
         for line in proc.stdout.splitlines():
             if "Detected type" in line:

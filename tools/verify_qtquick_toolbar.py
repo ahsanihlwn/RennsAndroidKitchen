@@ -55,12 +55,12 @@ def main():
         wait(lambda:not toolbar.property('modeAnimating'))
         assert toolbar.property('modeAmount')==0 and surface.width()==toolbar.property('inlineWidth')
         assert not button.isVisible()
-        first=visual(window,'workspaceAction_back');last=visual(window,'workspaceAction_newFile')
-        assert first.width()==28 and last.width()==28 and last.x()-first.x()==7*28
+        first=visual(window,'workspaceAction_back');last=visual(window,'workspaceAction_import')
+        assert first.width()==28 and last.width()==28 and last.x()-first.x()==5*28
         window.setProperty('rightOpen',True);wait_ms(65)
         assert 0<toolbar.property('modeAmount')<1 and toolbar.property('modeAnimating')
         assert first.width()==28 and last.width()==28
-        assert 0<last.x()-first.x()<7*28 and not button.isEnabled()
+        assert 0<last.x()-first.x()<5*28 and not button.isEnabled()
         window.grabWindow().save(str(artifacts/'mode_collapsing.png'))
         # Reverse twice mid-flight: the displayed geometry cannot reset to an
         # endpoint and the last splitter position determines the final mode.
@@ -72,9 +72,9 @@ def main():
         assert toolbar.property('modeAmount')==1 and button.isEnabled() and not surface.isVisible()
         # Keep the reference's 56/100px hysteresis so a splitter near the
         # threshold does not restart the animation on every pointer movement.
-        toolbar.setWidth(325);assert toolbar.property('compact') and not toolbar.property('modeAnimating')
+        toolbar.setWidth(269);assert toolbar.property('compact') and not toolbar.property('modeAnimating')
         toolbar.setWidth(600);wait(lambda:not toolbar.property('modeAnimating'))
-        toolbar.setWidth(325);assert not toolbar.property('compact') and not toolbar.property('modeAnimating')
+        toolbar.setWidth(269);assert not toolbar.property('compact') and not toolbar.property('modeAnimating')
         toolbar.setWidth(230);wait(lambda:not toolbar.property('modeAnimating'))
         click(button);wait_ms(60)
         assert popup.property('visible') and popup.property('opening')

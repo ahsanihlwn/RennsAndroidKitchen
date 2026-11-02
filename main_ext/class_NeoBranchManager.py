@@ -1076,8 +1076,11 @@ class NeoBranchManager:
     def _read_state(self, fs_root: str) -> dict:
         p = self._state_path(fs_root)
         if os.path.isfile(p):
+            def read():
+                with open(p, "r", encoding="utf-8") as f:
+                    return json.load(f)
             try:
-                with open(p, "r", encoding="utf-8") as f: state=json.load(f)
+                state = _retry_fs_op(read, p)
                 if not isinstance(state,dict):raise ValueError('Expected an object')
                 active=state.get('active_branch')
                 if active is not None:self._validate_branch_name(active)
