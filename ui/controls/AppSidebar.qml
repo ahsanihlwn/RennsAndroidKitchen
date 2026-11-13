@@ -15,8 +15,15 @@ Item {
     readonly property var c: model.colors
     readonly property var s: model.strings
 
-    width: collapsed ? 64 : 220
+    readonly property real expandedWidth: 220
+    readonly property real collapsedWidth: 64
+    implicitWidth: collapsed ? collapsedWidth : expandedWidth
+    width: implicitWidth
 
+    Behavior on implicitWidth {
+        enabled: model.settings.animations
+        NumberAnimation { duration: 240; easing.type: Easing.OutCubic }
+    }
     Behavior on width {
         enabled: model.settings.animations
         NumberAnimation { duration: 240; easing.type: Easing.OutCubic }
