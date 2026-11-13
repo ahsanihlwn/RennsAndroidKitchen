@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 // AppSidebar.qml — Collapsible left sidebar for the RAK launcher.
 // Features:
-// 1. PINNED ICONS: Icons are 100% stationary (fixed X position at all times).
-//    During collapse & expand, icons do NOT move even a single pixel.
-// 2. Sequenced animation: text fades out first, width collapses from the right.
-// 3. Circular progress ring around drive disk icon when collapsed, fading to horizontal bar when expanded.
+// 1. PINNED ICONS: Icons are 100% stationary (fixed X/Y position at all times).
+// 2. Parallel expand animation: text fades in concurrently with sidebar opening.
+// 3. Sequential collapse animation: text fades out first before shrinking to prevent collision.
+// 4. Fill-up animations (0 to target%):
+//    - Ring sweep animation (0° to target angle) every time sidebar collapses.
+//    - Bar fill animation (0px to target width) every time sidebar expands.
 import QtQuick
 import QtQuick.Shapes
 
@@ -24,6 +26,8 @@ Item {
     property real contentWidth: expandedWidth
     property real textAlpha: 1.0
     property real ringProgress: 0.0      // 0.0 = fully expanded, 1.0 = fully collapsed
+    property real ringFill: 0.0          // sweeps from 0.0 to 1.0 when collapsing
+    property real barFill: 1.0           // fills from 0.0 to 1.0 when expanding
 
     implicitWidth: contentWidth
     width: contentWidth
@@ -37,12 +41,26 @@ Item {
         State {
             name: "expanded"
             when: !sidebar.collapsed
-            PropertyChanges { target: sidebar; contentWidth: sidebar.expandedWidth; textAlpha: 1.0; ringProgress: 0.0 }
+            PropertyChanges {
+                target: sidebar
+                contentWidth: sidebar.expandedWidth
+                textAlpha: 1.0
+                ringProgress: 0.0
+                ringFill: 0.0
+                barFill: 1.0
+            }
         },
         State {
             name: "collapsed"
             when: sidebar.collapsed
-            PropertyChanges { target: sidebar; contentWidth: sidebar.collapsedWidth; textAlpha: 0.0; ringProgress: 1.0 }
+            PropertyChanges {
+                target: sidebar
+                contentWidth: sidebar.collapsedWidth
+                textAlpha: 0.0
+                ringProgress: 1.0
+                ringFill: 1.0
+                barFill: 0.0
+            }
         }
     ]
 
@@ -50,27 +68,33 @@ Item {
         Transition {
             from: "expanded"; to: "collapsed"
             // COLLAPSE SEQUENCE:
-            // 1. Text fades out first (100ms)
-            // 2. Width shrinks to 64px from the right (200ms) — icons STAY PINNED!
+            // 1. Text fades out fast (70ms) to clear the space
+            // 2. Width glides to 64px while the circular ring sweeps from 0 to 100% (OutCubic)
             SequentialAnimation {
-                NumberAnimation { target: sidebar; property: "textAlpha"; duration: sidebar.anims ? 100 : 0; easing.type: Easing.OutQuad }
+                NumberAnimation { target: sidebar; property: "textAlpha"; duration: sidebar.anims ? 70 : 0; easing.type: Easing.OutQuad }
                 ParallelAnimation {
                     NumberAnimation { target: sidebar; property: "contentWidth"; duration: sidebar.anims ? 200 : 0; easing.type: Easing.OutCubic }
                     NumberAnimation { target: sidebar; property: "ringProgress"; duration: sidebar.anims ? 200 : 0; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: sidebar; property: "ringFill"; from: 0.0; to: 1.0; duration: sidebar.anims ? 320 : 0; easing.type: Easing.OutCubic }
                 }
             }
         },
         Transition {
             from: "collapsed"; to: "expanded"
             // EXPAND SEQUENCE:
-            // 1. Width expands to 220px to the right (200ms) — icons STAY PINNED!
-            // 2. Text smoothly fades in (120ms)
-            SequentialAnimation {
-                ParallelAnimation {
-                    NumberAnimation { target: sidebar; property: "contentWidth"; duration: sidebar.anims ? 200 : 0; easing.type: Easing.OutCubic }
-                    NumberAnimation { target: sidebar; property: "ringProgress"; duration: sidebar.anims ? 200 : 0; easing.type: Easing.OutCubic }
+            // Text animates IN PARALLEL with width expansion (does NOT wait for expand to finish)
+            // Bar sweeps from 0% to full width as it opens!
+            ParallelAnimation {
+                NumberAnimation { target: sidebar; property: "contentWidth"; duration: sidebar.anims ? 220 : 0; easing.type: Easing.OutCubic }
+                NumberAnimation { target: sidebar; property: "ringProgress"; duration: sidebar.anims ? 180 : 0; easing.type: Easing.OutCubic }
+                SequentialAnimation {
+                    PauseAnimation { duration: sidebar.anims ? 25 : 0 }
+                    NumberAnimation { target: sidebar; property: "textAlpha"; duration: sidebar.anims ? 160 : 0; easing.type: Easing.OutCubic }
                 }
-                NumberAnimation { target: sidebar; property: "textAlpha"; duration: sidebar.anims ? 120 : 0; easing.type: Easing.OutQuad }
+                SequentialAnimation {
+                    PauseAnimation { duration: sidebar.anims ? 35 : 0 }
+                    NumberAnimation { target: sidebar; property: "barFill"; from: 0.0; to: 1.0; duration: sidebar.anims ? 320 : 0; easing.type: Easing.OutCubic }
+                }
             }
         }
     ]
@@ -87,10 +111,6 @@ Item {
         border.color: sidebar.c.b06
         clip: true
 
-        // Item geometry inside panel:
-        // When collapsed (panel width = 48), button item width = 36, x = 6.
-        // Center of button item is at x = 18 inside item (which is x = 24 inside panel, x = 32 in sidebar).
-        // Standard icon width = 18 -> fixed X position inside button = 18 - 9 = 9px ALWAYS!
         readonly property real itemX: 6
         readonly property real itemWidth: width - 12
         readonly property real fixedIconX: 9
@@ -113,7 +133,7 @@ Item {
                 }
             }
 
-            // Name + subtitle (expanded only, fades in/out without moving avatar)
+            // Name + subtitle (expanded only, fades in concurrently with expand)
             Column {
                 anchors.left: avatarBox.right; anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
@@ -337,10 +357,9 @@ Item {
                         border.color: modelData.active ? (modelData.distro ? sidebar.c.a30 : sidebar.c.b08) : "transparent"
                     }
 
-                    // ── CIRCULAR PROGRESS RING (Fades in/out around pinned icon) ────
+                    // ── CIRCULAR PROGRESS RING (Animated sweep 0 -> target% on collapse) ────
                     Item {
                         id: ringArea
-                        // Center of the ring is strictly aligned to the fixed disk icon (center at x = fixedIconX + 9 = 18)
                         x: panel.fixedIconX - 9
                         anchors.verticalCenter: parent.verticalCenter
                         width: 36; height: 36
@@ -366,7 +385,7 @@ Item {
                                 }
                             }
 
-                            // Colored progress arc
+                            // Dynamic arc that sweeps from 0 to full fraction with ringFill!
                             ShapePath {
                                 strokeColor: modelData.barColor || sidebar.c.accent_hex
                                 strokeWidth: 2.2
@@ -376,7 +395,7 @@ Item {
                                     centerX: 18; centerY: 18
                                     radiusX: 13.5; radiusY: 13.5
                                     startAngle: -90
-                                    sweepAngle: 360 * Math.max(0.01, Math.min(1.0, modelData.fraction))
+                                    sweepAngle: 360 * Math.max(0.01, Math.min(1.0, modelData.fraction)) * sidebar.ringFill
                                 }
                             }
                         }
@@ -393,7 +412,7 @@ Item {
                         opacity: modelData.active ? 1 : 0.4
                     }
 
-                    // ── EXPANDED DRIVE DETAILS (Name, GB usage, horizontal bar) ───────
+                    // ── EXPANDED DRIVE DETAILS (Animated fill 0% -> target% on expand) ───────
                     Column {
                         anchors.left: diskIcon.right; anchors.leftMargin: 10
                         anchors.right: parent.right; anchors.rightMargin: 10
@@ -417,13 +436,13 @@ Item {
                             }
                         }
 
-                        // Horizontal capacity bar
+                        // Horizontal capacity bar with barFill dynamic sweep animation!
                         SmoothRectangle {
                             width: parent.width
                             height: 3; radius: 1.5
                             color: sidebar.c.b08
                             SmoothRectangle {
-                                width: parent.width * Math.max(0, Math.min(1, modelData.fraction))
+                                width: parent.width * Math.max(0, Math.min(1, modelData.fraction)) * sidebar.barFill
                                 height: parent.height; radius: parent.radius
                                 color: modelData.barColor || sidebar.c.accent_hex
                             }
