@@ -22,9 +22,9 @@ Item {
         id: appSidebar
         objectName: "appSidebar"
         z: 20
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.left: parent.left
+        anchors.top: parent.top; anchors.topMargin: 16
+        anchors.bottom: parent.bottom; anchors.bottomMargin: 16
+        anchors.left: parent.left; anchors.leftMargin: 16
         width: implicitWidth
         model: content.hostWindow.uiModel
         onTrashClicked: projectsPage.toggleTrash()

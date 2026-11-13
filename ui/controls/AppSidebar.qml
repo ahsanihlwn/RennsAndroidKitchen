@@ -104,15 +104,11 @@ Item {
     SmoothRectangle {
         id: panel
         anchors.fill: parent
-        radius: 0
+        radius: 16
         color: sidebar.c.BG2
+        border.color: sidebar.c.b08
+        border.width: 1
         clip: true
-
-        // Clean 1px right border separating sidebar from workspace
-        SmoothRectangle {
-            anchors.right: parent.right; width: 1; height: parent.height
-            color: sidebar.c.b08; z: 10
-        }
 
         readonly property real itemX: 8
         readonly property real itemWidth: width - 16

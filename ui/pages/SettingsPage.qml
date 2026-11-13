@@ -45,7 +45,7 @@ Item {
         RakLabel { id: descriptionLabel; y: 19; width: parent.width; height: Math.max(16, implicitHeight+(lineCount>1?1:0), referenceText.implicitHeight+(referenceText.lineCount>1?1:0)); text: parent.description; color: page.c.FG_DESC; font.pixelSize: 11; wrapMode: Text.WordWrap }
         RakLabel { id: referenceText; visible: false; width: parent.referenceWidth; text: parent.referenceDescription; font.pixelSize: 11; wrapMode: Text.WordWrap }
     }
-    RakLabel { z: 2; opacity: page.headingOpacity; x: 36; y: 32; height: 31; text: page.s.hdr_settings; font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG }
+    RakLabel { z: 2; opacity: page.headingOpacity; x: 32; y: 28; height: 44; text: page.s.hdr_settings; font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG }
     SmoothRectangle {
         id: settingsSurface
         readonly property rect inputBounds: Qt.rect(0,headerGlass.height,width,Math.max(0,height-headerGlass.height-footer.height))
@@ -53,7 +53,7 @@ Item {
     Flickable {
         id: scroll
         objectName: "settingsScroll"
-        x: 20; y: 77; width: parent.width - 40; height: Math.max(0, parent.height - 155)
+        x: 16; y: 77; width: parent.width - 32; height: Math.max(0, parent.height - 155)
         clip: !page.glassChrome; contentHeight: content.height + 32; boundsBehavior: Flickable.StopAtBounds
         Column {
             id: content
