@@ -84,7 +84,8 @@ def tool_entry(row,s,terminal=False):
     failed=status in ('failed','error','ERROR');denied=status in ('declined','denied','rejected')
     active=status in ('running','inProgress','pending','ACTIVE','in_progress')
     completed=status in ('completed','success','DONE','done')
-    prefix=s['tool_failed'] if failed else s['tool_denied'] if denied else s['tool_stopped'] if status in ('interrupted','cancelled') else s['running_tool'] if active and not terminal else s['tool_unknown'] if not completed else s['ran'] if command or row.get('tool_kind') in ('commandExecution','execute','Bash','run_command') else s['tool_done']
+    if terminal and active and not completed and not failed and not denied:status='stopped'
+    prefix=s['tool_failed'] if failed else s['tool_denied'] if denied else s['tool_stopped'] if status in ('interrupted','cancelled','stopped') else s['running_tool'] if active and not terminal else s['tool_unknown'] if not completed else s['ran'] if command or row.get('tool_kind') in ('commandExecution','execute','Bash','run_command') else s['tool_done']
     if completed and row.get('path'):
         if row.get('tool_kind') in ('read','Read','view_file','read_file','view_file_outline'):prefix=s['analyzed']
         elif row.get('tool_kind') in ('fileChange','Write','Edit','write_to_file','replace_file_content'):prefix=s['edited']

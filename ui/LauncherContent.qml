@@ -14,15 +14,33 @@ Item {
     function pageItem(name) { return name==="settings" ? settingsPage : name==="create" ? createPage : projectsPage }
     function cancelPageMotion() { pageMotion.cancel() }
     Component.onCompleted: hostWindow.previousPage=hostWindow.uiModel.page
+
+    // ── Left sidebar (layout-only change) ────────────────────────────────────
+    // Collapsible sidebar: Projects / Settings nav + drives info.
+    // No button styles or themes are modified here.
+    AppSidebar {
+        id: appSidebar
+        z: 20
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        anchors.left: parent.left
+        width: implicitWidth
+        model: content.hostWindow.uiModel
+        onTrashClicked: projectsPage.toggleTrash()
+    }
+
     SmoothRectangle {
         id: pageSurface
-        anchors.fill: parent
+        anchors.left: appSidebar.right
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
         color: content.hostWindow.colors.BG
         ProjectsPage { id: projectsPage; anchors.fill: parent; model: content.hostWindow.uiModel; presentationMotion: pageMotion; visible: model.page === "projects" }
         CreatePage { id: createPage; anchors.fill: parent; model: content.hostWindow.uiModel; visible: model.page === "create" }
         SettingsPage { id: settingsPage; anchors.fill: parent; model: content.hostWindow.uiModel; presentationMotion: pageMotion; visible: model.page === "settings" }
     }
-    PageMotion { id: pageMotion; anchors.fill: parent; model: content.hostWindow.uiModel; pages: [projectsPage,createPage,settingsPage] }
+    PageMotion { id: pageMotion; anchors.fill: pageSurface; model: content.hostWindow.uiModel; pages: [projectsPage,createPage,settingsPage] }
     SmoothRectangle {
         anchors.fill: parent; z: 30
         color: "#96000000"; opacity: content.hostWindow.nativeDialogActive?1:0; visible: opacity>0

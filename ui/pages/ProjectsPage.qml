@@ -63,12 +63,15 @@ Item {
         text: page.s.hdr_my_projects
         font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG
     }
+    // DriveShelf is hidden when sidebar layout is active.
+    // It is kept as a data source for listX / layout calculations.
     DriveShelf {
         id: driveShelf
         opacity: page.headingOpacity
         enabled: opacity>.99
         z: 2
         anchors.fill: parent
+        visible: false  // drives shown in AppSidebar instead
         model: page.model; headingWidth: heading.implicitWidth; trash: page.trash
         usageElapsed: driveClock.elapsed-100
         onTrashClicked: page.toggleTrash()
@@ -96,7 +99,7 @@ Item {
     ListView {
         id: projects
         objectName: "projectList"
-        x: driveShelf.listX; y: 94; width: Math.max(0, parent.width - x - 36); height: Math.max(0, parent.height - 180)
+        x: 36; y: 94; width: Math.max(0, parent.width - 72); height: Math.max(0, parent.height - 180)
         clip: !page.glassChrome; spacing: 0; boundsBehavior: Flickable.StopAtBounds
         displayMarginBeginning: page.glassChrome?94:0
         displayMarginEnd: page.glassChrome?86:0
@@ -137,13 +140,6 @@ Item {
         id: footer
         z: 2
         anchors.bottom: parent.bottom; width: parent.width; model: page.model
-        ActionButton {
-            objectName: "settingsButton"
-            width: 120; height: 32; colors: page.c; text: page.s.btn_settings
-            iconSource: page.model.icon("settings_octagon", page.c.FG2); iconWidth: 15; iconHeight: 15
-            animatePress: page.model.settings.animations
-            onClicked: page.model.navigate("settings")
-        }
         ActionButton {
             id: newProject
             objectName: "createButton"

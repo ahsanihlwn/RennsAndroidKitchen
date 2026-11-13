@@ -2,6 +2,7 @@
 import QtQuick
 import QtQuick.Controls as C
 import QtQuick.Dialogs as D
+import QtQuick.Effects
 
 Item {
     id: panel
@@ -73,9 +74,48 @@ Item {
             readonly property bool activity: modelData.role==="tool" || thought
             readonly property bool status: modelData.role==="status"
             readonly property bool problem: modelData.role==="problem"
-            SmoothRectangle { x: body.x-12; y: 0; width: body.width+24; height: parent.height; visible: message.user; radius: 13; color: panel.c.b04; border.width: 1; border.color: panel.c.b06 }
+            readonly property bool isRunning: !!(panel.chat && panel.chat.running) && (
+                (activity && (modelData.status==="running" || modelData.status==="inProgress" || modelData.status==="pending")
+                 && !(modelData.title || "").startsWith(panel.tr.tool_unknown || "No result")
+                 && !(modelData.title || "").startsWith("No result")
+                 && !(modelData.title || "").startsWith("Belum ada hasil")
+                 && !(modelData.title || "").startsWith(panel.tr.tool_stopped || "Interrupted")
+                 && !(modelData.title || "").startsWith("Stopped")
+                 && !(modelData.title || "").startsWith("Dihentikan")
+                 && !(modelData.title || "").startsWith("Terputus"))
+                || (thought && !!modelData.thinking)
+            )
+            readonly property bool isFailed: !!modelData.failed || modelData.status==="failed" || modelData.status==="error"
+            readonly property string opIconName: {
+                if (thought) return "op_thought"
+                var tk = ((modelData.tool_kind) || "").toLowerCase()
+                var title = ((modelData.title) || "").toLowerCase()
+                if (tk.indexOf("edit") !== -1 || tk.indexOf("write") !== -1 || tk.indexOf("change") !== -1 || title.indexOf("edit") !== -1 || title.indexOf("diubah") !== -1) {
+                    return "op_edit"
+                }
+                if (tk.indexOf("read") !== -1 || tk.indexOf("view") !== -1 || title.indexOf("analyz") !== -1 || title.indexOf("dianalisis") !== -1) {
+                    return "op_read"
+                }
+                return "op_command"
+            }
+            TextMetrics {
+                id: userTextMetrics
+                font.family: "Poppins"
+                font.pixelSize: 13
+                text: message.user ? (message.modelData.text || "") : ""
+            }
+            readonly property real userContentWidth: {
+                if (!user) return message.width
+                var maxW = Math.max(60, message.width - 38)
+                var w = userTextMetrics.width + 4
+                if (modelData.attachments && modelData.attachments.length > 0) {
+                    w = Math.max(w, Math.min(maxW, 174))
+                }
+                return Math.min(maxW, Math.max(20, Math.ceil(w)))
+            }
+            SmoothRectangle { x: body.x-12; y: 0; width: body.width+24; height: message.height; visible: message.user; radius: 13; color: panel.c.b04; border.width: 1; border.color: panel.c.b06 }
             Column {
-                id: body; width: parent.width-(message.user?38:0); x: message.user?parent.width-width-12:0; y: message.user?11:3; spacing: 8
+                id: body; width: message.user ? message.userContentWidth : message.width; x: message.user ? (message.width - width - 12) : 0; y: message.user ? 11 : 3; spacing: 8
                 RakLabel { visible: message.problem; width: parent.width; text: message.modelData.title || ""; font.pixelSize: 13; font.weight: Font.Medium; color: panel.c.FG_BRIGHT }
                 C.TextArea {
                     objectName: "agentChatMessageText"; visible: !message.activity && !message.problem && !message.status && !!message.modelData.text; width: parent.width; height: visible?implicitHeight:0; padding: 0
@@ -86,22 +126,243 @@ Item {
                 RakLabel { visible: message.problem; width: parent.width; text: message.modelData.body || ""; color: panel.c.FG; font.pixelSize: 12; wrapMode: Text.WordWrap }
                 RakLabel { visible: message.problem; width: parent.width; text: message.modelData.next || ""; color: panel.c.FG_MUTED; font.pixelSize: 11; wrapMode: Text.WordWrap }
                 RakLabel { objectName: "agentChatWorkStatus"; visible: message.status; width: parent.width; text: message.modelData.title || ""; font.pixelSize: 11; color: panel.c.FG_MUTED; elide: Text.ElideRight }
-                RakButton { id: activityButton; visible: message.activity; objectName: message.thought?(message.modelData.thinking?"agentChatThinking":"agentChatThought"):message.activity?"agentChatTool_"+message.modelData.key:""; width: Math.min(parent.width,implicitWidth); height: 25; text: (message.modelData.title || "")+(message.expanded?"  ⌄":"  ›")
-                    font.pixelSize: 11; leftAligned: true; leftPadding: message.modelData.thinking?13:0; rightPadding: 5; edgeWidth: 0; fillColor: "transparent"; hoverFillColor: panel.c.b03; labelColor: panel.c.FG_MUTED; hoverLabelColor: panel.c.FG
-                    onClicked: message.expanded=!message.expanded
-                    contentItem: Text { text: activityButton.text; font: activityButton.font; color: activityButton.visualHovered?activityButton.hoverLabelColor:activityButton.labelColor; elide: Text.ElideRight; verticalAlignment: Text.AlignVCenter }
-                    SmoothRectangle { visible: !!message.modelData.thinking; x: 1; y: (parent.height-height)/2; width: 4; height: 4; radius: 2; color: panel.c.FG2
-                        SequentialAnimation on opacity { running: !!message.modelData.thinking && panel.preferences.settings.animations; loops: Animation.Infinite
-                            NumberAnimation { to: .3; duration: 650 }
-                            NumberAnimation { to: 1; duration: 650 }
+                RakButton { id: activityButton; visible: message.activity
+                    objectName: message.thought ? (message.modelData.thinking ? "agentChatThinking" : "agentChatThought") : message.activity ? ("agentChatTool_" + message.modelData.key) : ""
+                    width: Math.min(parent.width, implicitWidth); height: 25
+                    text: message.modelData.title || ""
+                    font.pixelSize: 11; leftAligned: true
+                    leftPadding: 4
+                    rightPadding: 6; cornerRadius: 6
+                    edgeWidth: 0
+                    fillColor: "transparent"
+                    hoverFillColor: panel.c.b03
+                    labelColor: message.isFailed ? (panel.c.RED_STATUS || "#f87171") : panel.c.FG_MUTED
+                    hoverLabelColor: panel.c.FG
+                    onClicked: message.expanded = !message.expanded
+
+                    contentItem: Item {
+                        implicitWidth: opIconImg.width + 6 + titleText.implicitWidth + 8 + arrowIcon.width
+                        implicitHeight: activityButton.height
+
+                        Image {
+                            id: opIconImg
+                            anchors.left: parent.left
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 13; height: 13
+                            sourceSize: Qt.size(16, 16)
+                            source: "image://rak/" + message.opIconName + "?color=" + encodeURIComponent(activityButton.visualHovered ? activityButton.hoverLabelColor : activityButton.labelColor)
+                            SequentialAnimation on opacity {
+                                running: !!message.modelData.thinking && panel.preferences.settings.animations
+                                loops: Animation.Infinite
+                                NumberAnimation { to: .35; duration: 650 }
+                                NumberAnimation { to: 1; duration: 650 }
+                            }
+                        }
+
+                        Text {
+                            id: titleText
+                            anchors.left: opIconImg.right
+                            anchors.leftMargin: 6
+                            anchors.right: arrowIcon.left
+                            anchors.rightMargin: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            text: activityButton.text
+                            font: activityButton.font
+                            color: activityButton.visualHovered ? activityButton.hoverLabelColor : activityButton.labelColor
+                            elide: Text.ElideRight
+                            verticalAlignment: Text.AlignVCenter
+                        }
+
+                        ShaderEffectSource {
+                            id: titleMask
+                            sourceItem: titleText
+                            hideSource: false
+                            live: true
+                            visible: message.isRunning
+                        }
+
+                        Item {
+                            id: textShimmerLayer
+                            anchors.fill: titleText
+                            visible: message.isRunning
+                            clip: true
+                            layer.enabled: true
+                            layer.effect: MultiEffect {
+                                maskEnabled: true
+                                maskSource: titleMask
+                            }
+
+                            Rectangle {
+                                id: textShimmerBeam
+                                width: Math.max(120, titleText.width * 0.75)
+                                height: parent.height
+                                property real phase: 0
+                                x: -width + phase * (titleText.width + width * 2)
+                                NumberAnimation on phase {
+                                    from: 0; to: 1; duration: 1800
+                                    loops: Animation.Infinite
+                                    running: textShimmerLayer.visible && panel.preferences.settings.animations
+                                }
+                                gradient: Gradient {
+                                    orientation: Gradient.Horizontal
+                                    GradientStop { position: 0.00; color: "#00ffffff" }
+                                    GradientStop { position: 0.25; color: "#06ffffff" }
+                                    GradientStop { position: 0.50; color: "#36ffffff" }
+                                    GradientStop { position: 0.75; color: "#06ffffff" }
+                                    GradientStop { position: 1.00; color: "#00ffffff" }
+                                }
+                            }
+                        }
+
+                        Image {
+                            id: arrowIcon
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 8; height: 8
+                            sourceSize: Qt.size(16, 16)
+                            source: "image://rak/arrow_right?color=" + encodeURIComponent(activityButton.visualHovered ? activityButton.hoverLabelColor : activityButton.labelColor)
+                            rotation: message.expanded ? 90 : 0
+                            Behavior on rotation {
+                                enabled: panel.preferences.settings.animations
+                                NumberAnimation { duration: 160; easing.type: Easing.InOutQuad }
+                            }
                         }
                     }
                 }
-                ViewerToolButton { visible: message.problem; colors: panel.c; text: message.expanded?panel.tr.hide_details:panel.tr.details; font.pixelSize: 10; onClicked: message.expanded=!message.expanded }
-                C.ScrollView { visible: (message.problem || message.activity) && message.expanded; width: parent.width; height: visible?Math.min(200,technical.implicitHeight+8):0; clip: true
-                    C.TextArea { id: technical; objectName: message.thought?"agentChatThinkingText":"agentChatToolText"; text: message.modelData.text || (message.thought?(message.modelData.thinking?panel.tr.thinking_empty:panel.tr.thought_empty):""); textFormat: message.thought?TextEdit.MarkdownText:TextEdit.PlainText; readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; padding: 5; font.family: message.thought?"Poppins":"Consolas"; font.pixelSize: 11; color: panel.c.FG2; background: null }
+                ViewerToolButton { visible: message.problem; colors: panel.c; text: message.expanded ? panel.tr.hide_details : panel.tr.details; font.pixelSize: 10; onClicked: message.expanded = !message.expanded }
+                SmoothRectangle {
+                    id: terminalBox
+                    visible: (message.problem || message.activity) && message.expanded
+                    width: parent.width
+                    height: visible ? (boxHeader.height + scrollArea.height + (truncatedLabel.visible ? (truncatedLabel.implicitHeight + 8) : 0) + 4) : 0
+                    radius: 7
+                    color: panel.c.BG_DARK || "#0c0d14"
+                    border.width: 1
+                    border.color: message.isFailed ? panel.c.red22 : panel.c.b12
+                    clip: true
+
+                    Item {
+                        id: boxHeader
+                        width: parent.width
+                        height: 28
+
+                        SmoothRectangle {
+                            anchors.fill: parent
+                            color: panel.c.b03
+                            radius: 7
+                            Rectangle {
+                                anchors.bottom: parent.bottom
+                                width: parent.width
+                                height: 1
+                                color: panel.c.b06
+                            }
+                        }
+
+                        Row {
+                            anchors.left: parent.left
+                            anchors.leftMargin: 10
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: 6
+
+                            Image {
+                                anchors.verticalCenter: parent.verticalCenter
+                                width: 12; height: 12
+                                sourceSize: Qt.size(16, 16)
+                                source: "image://rak/" + message.opIconName + "?color=" + encodeURIComponent(panel.c.FG_MUTED)
+                            }
+
+                            RakLabel {
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: message.thought ? panel.tr.thinking_details : (message.modelData.command ? (message.modelData.command.split(' ')[0] + " · Terminal") : "Terminal Output")
+                                font.pixelSize: 10
+                                font.family: "Poppins"
+                                color: panel.c.FG_MUTED
+                            }
+                        }
+
+                        SmoothRectangle {
+                            visible: message.isFailed
+                            anchors.right: copyOutputBtn.left
+                            anchors.rightMargin: 8
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: failedBadgeText.implicitWidth + 10
+                            height: 17
+                            radius: 4
+                            color: panel.c.red14
+                            border.width: 1
+                            border.color: panel.c.red28
+
+                            RakLabel {
+                                id: failedBadgeText
+                                anchors.centerIn: parent
+                                text: message.modelData.exit_code ? ("Exit " + message.modelData.exit_code) : (panel.tr.tool_failed || "Failed")
+                                font.pixelSize: 9
+                                font.family: "Poppins"
+                                font.weight: Font.Medium
+                                color: panel.c.RED_STATUS
+                            }
+                        }
+
+                        RakButton {
+                            id: copyOutputBtn
+                            anchors.right: parent.right
+                            anchors.rightMargin: 6
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 22; height: 20
+                            cornerRadius: 4
+                            edgeWidth: 0
+                            leftPadding: 0; rightPadding: 0
+                            fillColor: "transparent"
+                            hoverFillColor: panel.c.b06
+                            iconSource: "image://rak/chat_copy?color=" + encodeURIComponent(visualHovered ? panel.c.FG : panel.c.FG_MUTED)
+                            iconWidth: 12; iconHeight: 12
+                            toolTip: panel.tr.copy
+                            onClicked: chat.copyText(technical.text)
+                        }
+                    }
+
+                    C.ScrollView {
+                        id: scrollArea
+                        anchors.top: boxHeader.bottom
+                        anchors.left: parent.left
+                        anchors.right: parent.right
+                        height: Math.min(180, Math.max(32, technical.implicitHeight + 12))
+                        clip: true
+                        C.ScrollBar.vertical: RakScrollBar { width: 3; handleColor: panel.c.b20; hoverColor: panel.c.b35 }
+
+                        C.TextArea {
+                            id: technical
+                            objectName: message.thought ? "agentChatThinkingText" : "agentChatToolText"
+                            text: message.modelData.text || (message.thought ? (message.modelData.thinking ? panel.tr.thinking_empty : panel.tr.thought_empty) : "")
+                            textFormat: message.thought ? TextEdit.MarkdownText : TextEdit.PlainText
+                            readOnly: true
+                            selectByMouse: true
+                            wrapMode: TextEdit.Wrap
+                            padding: 8
+                            font.family: message.thought ? "Poppins" : "Consolas"
+                            font.pixelSize: 11
+                            color: panel.c.FG2
+                            selectionColor: panel.c.a40
+                            selectedTextColor: panel.c.FG_BRIGHT
+                            background: null
+                        }
+                    }
+
+                    RakLabel {
+                        id: truncatedLabel
+                        visible: !!message.modelData.truncated
+                        anchors.top: scrollArea.bottom
+                        anchors.left: parent.left
+                        anchors.leftMargin: 8
+                        anchors.right: parent.right
+                        anchors.rightMargin: 8
+                        anchors.topMargin: 4
+                        text: panel.tr.shortened
+                        font.pixelSize: 10
+                        color: panel.c.FG_MUTED
+                        wrapMode: Text.WordWrap
+                    }
                 }
-                RakLabel { visible: !!message.modelData.truncated && message.expanded; width: parent.width; text: panel.tr.shortened; font.pixelSize: 10; color: panel.c.FG_MUTED; wrapMode: Text.WordWrap }
                 Flow { width: body.width; spacing: 6
                   Repeater { model: message.modelData.attachments || []
                     delegate: AgentAttachmentChip { required property var modelData; attachment: modelData; chat: panel.chat; preferences: panel.preferences; width: Math.min(174,body.width) }
@@ -179,7 +440,13 @@ Item {
             C.TextArea { id: composer; objectName: "agentChatComposer"; text: chat.draft; onTextChanged: chat.setDraft(text)
                 placeholderText: panel.tr.placeholder; placeholderTextColor: panel.c.FG_MUTED; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; font.family: "Poppins"; font.pixelSize: 12; color: panel.c.FG; padding: 5; background: null
                 Keys.onPressed: event=>{if((event.key===Qt.Key_V && (event.modifiers & Qt.ControlModifier)) || (event.key===Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier)))event.accepted=chat.pasteAttachments()}
-                Keys.onReturnPressed: event=>{if(event.modifiers & Qt.ShiftModifier)event.accepted=false;else {panel.sendMessage();event.accepted=true}}
+                Keys.onReturnPressed: event=>{
+                    if(panel.request.id && panel.request.type==="approval"){
+                        var yesChoice=(panel.approvalChoices || []).find(c=>c.kind==="yes");
+                        if(yesChoice && yesChoice.id){chat.answer(panel.request.id,yesChoice.id,{});event.accepted=true;return}
+                    }
+                    if(event.modifiers & Qt.ShiftModifier)event.accepted=false;else {panel.sendMessage();event.accepted=true}
+                }
             }
         }
         Item {

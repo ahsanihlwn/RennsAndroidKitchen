@@ -186,6 +186,15 @@ def get_all_workspace_dirs(cwd: Optional[str] = None) -> List[str]:
     # 2. Check provided cwd
     if cwd:
         _add(cwd)
+        try:
+            from core.project_config import load_project_config
+            cfg = load_project_config(cwd)
+            trees = cfg.get("trees", {})
+            for t_info in trees.values():
+                target = t_info.get("target") if isinstance(t_info, dict) else t_info
+                if target: _add(target)
+        except Exception:
+            pass
 
     # 3. If cwd was inside a tree directory, inspect parent for sibling trees
     if cwd and os.path.isdir(cwd) and os.path.basename(os.path.normpath(cwd)).lower() in ('port','port1','port2','base','stock','rom1','rom2'):
@@ -248,6 +257,7 @@ def generate_dynamic_instructions(cwd: str) -> str:
             "",
             f"Instruction format: RAK CLI contract v{DOCS_FORMAT_VERSION}; shared by {', '.join(AGENT_FILES)}.",
             "Agent memory: keep notes, learned facts, and user rules outside this managed block.",
+            "Communication & Debugging: Whenever you discover, observe, or inspect anything relevant in the code, logs, or workspace during debugging or investigation, communicate it immediately to the user! Never stay silent while running commands and only speak at the end as a finish—that is dangerous. Provide clear, proactive updates on what you found and what you are doing. Always adapt your communication and reply in whatever language the user is speaking (e.g. Indonesian or English).",
             "Use native Windows agent tools (Read, Write, Edit, shell, and Python) for ordinary project files. Do not route normal file work through RAK or WSL.",
             "Use `rak` for Kitchen operations: inspect, unpack/repack, archive and payload extraction, BR/DAT conversion, APK tools, virtual mounts, branch create/switch, and Android mode/UID/GID/SELinux metadata.",
             "",
@@ -302,6 +312,7 @@ def generate_dynamic_instructions(cwd: str) -> str:
         "",
         "## ⚠️ CRITICAL RULES FOR AI AGENTS",
         "1. **DO NOT invoke raw binaries directly** (never execute `extract.erofs.exe`, `make_ext4fs.exe`, `lpunpack.exe`, `simg2img.exe` manually).",
+        "2. **Communication & Debugging:** Whenever you discover, observe, or inspect anything relevant in the code, logs, or workspace during debugging or investigation, communicate it immediately to the user! Never stay silent while running commands and only speak at the end when finished—that is dangerous. Provide clear, proactive updates on what you found and what you are doing along the way. Always adapt your communication and reply in whatever language the user is speaking (e.g. Indonesian or English).",
         file_work_rule,
         "   - RAK's primary workflow is filesystem IMG -> unpacked folder plus config metadata -> edit -> repacked IMG. Default `rak repack system` produces system_new.img using the original EXT/EROFS engine, never ZIP.",
         "   - `.img.br` decodes to IMG; `.new.dat` and `.new.dat.br` convert to IMG using the matching transfer.list; payload.bin and SUPER extract partition IMG files. These containers are not filesystem mount targets.",
@@ -572,6 +583,114 @@ def update_all_agent_files(cwd: Optional[str] = None) -> List[str]:
         raise OperationError('Agent instructions could not be synchronized: '+', '.join(failed)+
                              '. Successfully synchronized: '+(', '.join(updated) or '(none)'))
     return updated
+
+
+def clean_agent_file(target_file_path: str, *, remove_empty: bool = True) -> bool:
+    """Remove RAK auto-generated instruction block from an agent file, preserving all user text."""
+    if not os.path.lexists(target_file_path):
+        return True
+    if os.path.islink(target_file_path):
+        return False
+    temporary = None
+    try:
+        with open(target_file_path, 'rb') as stream:
+            original_bytes = stream.read()
+        content = original_bytes.decode('utf-8')
+        mode = stat.S_IMODE(os.stat(target_file_path).st_mode)
+        bom = '\ufeff' if content.startswith('\ufeff') else ''
+        content = content[len(bom):]
+        newline = '\r\n' if '\r\n' in content else '\n'
+
+        output = []
+        inside = False
+        found_marker = False
+        fence = None
+
+        for line in content.splitlines(keepends=True):
+            if not inside:
+                fenced = re.match(r'^[ \t]{0,3}(`{3,}|~{3,})(.*)$', line.rstrip('\r\n'))
+                if fenced:
+                    token, tail = fenced.groups()
+                    if fence is None:
+                        fence = token
+                    elif token[0] == fence[0] and len(token) >= len(fence) and not tail.strip():
+                        fence = None
+                    output.append(line)
+                    continue
+                if fence is not None:
+                    output.append(line)
+                    continue
+
+            if is_start_delimiter(line):
+                if inside:
+                    raise ValueError('Nested managed instruction markers; file left unchanged')
+                inside = True
+                found_marker = True
+            elif is_end_delimiter(line):
+                if not inside:
+                    raise ValueError('Unmatched managed instruction end marker; file left unchanged')
+                inside = False
+            elif not inside:
+                output.append(line)
+
+        if inside:
+            raise ValueError('Managed instruction end marker is missing; file left unchanged')
+
+        if not found_marker:
+            return True
+
+        remaining_text = ''.join(output)
+        trimmed = remaining_text.strip()
+        if not trimmed:
+            if remove_empty:
+                os.remove(target_file_path)
+                return True
+            final = ''
+        else:
+            final = bom + trimmed + newline
+
+        if final.encode('utf-8') == original_bytes:
+            return True
+
+        descriptor, temporary = tempfile.mkstemp(
+            prefix='.rak-agent-docs-',
+            dir=os.path.dirname(os.path.abspath(target_file_path))
+        )
+        with os.fdopen(descriptor, 'w', encoding='utf-8', newline='') as stream:
+            stream.write(final)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if mode is not None:
+            os.chmod(temporary, mode)
+
+        if os.path.lexists(target_file_path) and os.path.islink(target_file_path):
+            raise ValueError('Instruction file became a symlink')
+        os.replace(temporary, target_file_path)
+        temporary = None
+        return True
+    except (OSError, UnicodeError, ValueError) as error:
+        print(f"[RAK Agent Docs] Error cleaning {target_file_path}: {error}")
+        return False
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.remove(temporary)
+
+
+def clean_all_agent_files(cwd: Optional[str] = None, *, remove_empty: bool = True) -> List[str]:
+    cleaned = []
+    failed = []
+    for directory in get_all_workspace_dirs(cwd):
+        for filename in AGENT_FILES:
+            path = os.path.join(directory, filename)
+            if os.path.exists(path):
+                if clean_agent_file(path, remove_empty=remove_empty):
+                    cleaned.append(os.path.normpath(path))
+                else:
+                    failed.append(path)
+    if failed:
+        from core.command_context import OperationError
+        raise OperationError('Agent instructions could not be cleaned: ' + ', '.join(failed))
+    return cleaned
 
 
 # Regex matching AI Agent command triggers (handles npx, paths, prefixes, suffixes)

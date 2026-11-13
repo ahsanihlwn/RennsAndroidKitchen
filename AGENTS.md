@@ -25,3 +25,8 @@
 - Freeze the inbox's attached logical paths, selection, buffer revision and unsaved excerpt when its composer opens. Keep the draft across focus changes and persist history under AppData, outside ROM trees.
 - Claim inbox work atomically with an agent name and private token. Do not expose tokens through list/context/events. Expire claims and mark abandoned work interrupted on restart; preserve queued requests without auto-resuming device operations.
 - Inbox delivery uses a cooperative `rak inbox next` consumer. Show actual waiting/working state. Do not inject messages into arbitrary terminals. A requested stop must wait for agent acknowledgment and must not pretend a device command was killed.
+
+# Communication & Debugging
+
+- Whenever you discover, observe, or inspect anything relevant in the code, logs, or workspace during debugging or investigation, communicate it immediately to the user! Never stay silent while running commands and only talk at the very end as a finish—that is dangerous. Provide clear, proactive updates on what you found and what you are doing. Always adapt your communication and reply in whatever language the user is speaking (e.g. Indonesian if the user speaks Indonesian, English if English).
+- Tiap menemukan sesuatu di kode atau sistem saat debugging/investigasi, segera komunikasikan ke user! Jangan cuma diam menjalankan command lalu baru bicara di akhir—sampaikan progres dan temuan secara aktif dalam bahasa yang digunakan user.

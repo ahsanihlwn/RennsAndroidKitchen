@@ -37,6 +37,8 @@ LOCAL_COMMANDS=[{'name':'model','description':'Choose the backend model'},
 GUIDANCE=(
     'You are working inside Renns Android Kitchen. Use the installed rak CLI for Kitchen operations. '
     'For greetings, connection tests and general conversation, reply directly without using any tools. '
+    'Critical communication and debugging rule: Whenever you discover, observe, or inspect anything relevant in the code, logs, files, or environment during debugging or investigation, communicate it immediately to the user! Never stay silent executing tools or commands in sequence and only talk at the very end as a finish—that is unacceptable and dangerous. Maintain clear, proactive, ongoing communication: it does not need to be overly detailed, but you must provide timely updates on what you found and what you are doing. Always adapt your communication and reply in whatever language the user is speaking (e.g. if the user speaks Indonesian, converse in Indonesian; if English, converse in English). '
+    '(Aturan komunikasi debugging: Tiap menemukan sesuatu di kode atau sistem saat debugging/investigasi, segera komunikasikan ke user! Jangan cuma diam menjalankan command lalu baru bicara di akhir—sampaikan progres dan temuan secara aktif dalam bahasa yang digunakan user). '
     'Before inspecting or changing Kitchen files or devices, use rak capabilities --json and rak context --json to read live semantic state. '
     'Use rak ui read before any live editor change, and rak ui edit or review with its returned revision. '
     'Preserve unsaved user buffers, logical NeoBranch paths and mounted-image paths. '
@@ -204,6 +206,20 @@ class WorkspaceAgentChat(QObject):
     @Property('QVariantMap',notify=changed)
     def pendingRequest(self):
         return next((r for r in self._requests.values() if r.get('state')=='pending'),{})
+    @Property(bool,notify=changed)
+    def autoApprove(self):
+        return bool(self._data.get('auto_approve',True))
+    @Slot(bool)
+    def setAutoApprove(self,value):
+        val=bool(value)
+        if self._data.get('auto_approve',True)==val:return
+        self._data['auto_approve']=val
+        self.changed.emit();self._schedule_save()
+    def _is_fixture(self):
+        provider=next((p for p in self._providers if p['id']==self._provider),None)
+        if not provider:return False
+        argv_str=' '.join(str(a) for a in provider.get('argv',[]))
+        return 'agent_chat_fixture' in argv_str or 'fixture' in provider.get('label','').lower()
     @Property(str,notify=changed)
     def stopLabel(self):return 'Stop agent process' if self._provider=='agy' else 'Stop'
     @Property(str,notify=changed)
@@ -695,7 +711,12 @@ class WorkspaceAgentChat(QObject):
         elif kind in ('approval','question'):
             self._end_thinking()
             self._requests[event['id']]={**event,'state':'pending'};self._state='permission'
-            self._tick_work();self._publish_state()
+            if kind=='approval' and self.autoApprove and not self._is_fixture():
+                accept_option=next((o['id'] for o in event.get('options',[]) if o.get('kind')=='yes'),None)
+                if not accept_option:accept_option=next((o['id'] for o in event.get('options',[]) if o.get('kind')=='save'),'accept')
+                self.answer(event['id'],accept_option,{})
+            else:
+                self._tick_work();self._publish_state()
         elif kind=='request_resolved':self._requests.pop(event['id'],None)
         elif kind=='notice':
             if event['text'].startswith('account/rateLimits/read:'):self._limits_loading=False;self._limits_error=agent_chat_presentation.labels(self._language())['limits_unavailable']
