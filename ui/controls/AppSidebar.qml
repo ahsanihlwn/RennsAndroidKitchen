@@ -139,7 +139,7 @@ Item {
                     color: profileHov.hovered ? sidebar.c.b06 : "transparent"
                 }
 
-                // Avatar container: FIXED X at 1px inside account area (center aligned with all icons at x=32 in sidebar)
+                // Avatar container: FIXED X at 7px inside account area (center aligned with all icons at x=32 in sidebar)
                 Item {
                     id: avatarBox
                     x: 7; y: Math.round((parent.height - 34) / 2)
@@ -148,6 +148,38 @@ Item {
                     RoundedImage {
                         anchors.fill: parent
                         source: sidebar.model.profile.avatar || ""
+                    }
+
+                    // Verified badge pinned to corner of avatar when sidebar is collapsed
+                    Item {
+                        id: avatarCornerBadge
+                        z: 10
+                        anchors.right: parent.right
+                        anchors.bottom: parent.bottom
+                        anchors.rightMargin: -2
+                        anchors.bottomMargin: -2
+                        width: 14; height: 14
+                        opacity: 1.0 - sidebar.textAlpha
+                        visible: opacity > 0.01 && !!sidebar.model.profile.badge
+
+                        SmoothRectangle {
+                            anchors.fill: parent
+                            anchors.margins: -1.5
+                            radius: width / 2
+                            color: sidebar.c.BG2
+                        }
+
+                        Image {
+                            anchors.fill: parent
+                            source: visible ? sidebar.model.icon(sidebar.model.profile.badge, "") : ""
+                            sourceSize: Qt.size(14, 14)
+                        }
+
+                        HoverHandler { id: cornerBadgeHov }
+                        HoverTip {
+                            label: "Verified (" + (sidebar.model.profile.verifiedLevel || "") + ")"
+                            hovering: cornerBadgeHov.hovered
+                        }
                     }
                 }
 
