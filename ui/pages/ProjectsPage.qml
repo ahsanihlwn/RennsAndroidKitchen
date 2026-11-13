@@ -24,9 +24,9 @@ Item {
         return null
     }
     function revealBands() {
-        let cuts=[0,86], result=[]
+        let cuts=[0,headerGlass.height], result=[]
         for (let row=0; row<projects.count; ++row) {
-            let bottom=118+row*74+66-projects.contentY
+            let bottom=projects.y+row*74+66-projects.contentY
             if (bottom>=projects.y && bottom<=projects.y+projects.height) cuts.push(bottom)
         }
         cuts.push(height)
@@ -99,13 +99,19 @@ Item {
         enabled: !page.model.busy && opacity>.99
         objectName: "projectSearch"
         anchors.right: parent.right; anchors.rightMargin: 32
-        y: 33; width: Math.min(174, Math.max(115, page.width / 4)); height: 34
+        anchors.verticalCenter: filterBar.verticalCenter
+        width: Math.min(220, Math.max(140, page.width / 4)); height: 32
         placeholderText: page.s.placeholder_search
-        font.pixelSize: 11; leftPadding: 37; rightPadding: 8
-        cornerRadius: 10; fillColor: page.c.BG2; focusFillColor: page.c.BG_INPUT
-        edgeColor: page.c.b09; focusEdgeColor: page.c.a45; hintColor: page.c.placeholder; labelColor: page.c.FG
+        font.pixelSize: 11; leftPadding: 34; rightPadding: 10
+        cornerRadius: 16; fillColor: page.c.BG2; focusFillColor: page.c.BG_INPUT
+        edgeColor: page.c.b08; focusEdgeColor: page.c.a45; hintColor: page.c.placeholder; labelColor: page.c.FG
         selectionColor: page.c.a35
-        Image { sourceSize.width: width; sourceSize.height: height; x: 9; y: 9; width: 16; height: 16; source: page.model.icon("project_search", "") }
+        Image {
+            sourceSize.width: width; sourceSize.height: height
+            x: 11; anchors.verticalCenter: parent.verticalCenter
+            width: 14; height: 14
+            source: page.model.icon("project_search", page.c.FG_MUTED)
+        }
         onTextEdited: page.model.search(text)
     }
     // Filter Pills Bar (Semua, Favorit, Sampah)
@@ -113,13 +119,13 @@ Item {
         id: filterBar
         z: 2
         opacity: page.headingOpacity
-        x: 36; y: 78
+        x: 32; y: 74
         spacing: 8
 
         // Pill: Semua
         RakButton {
-            height: 30
-            cornerRadius: 15
+            height: 32
+            cornerRadius: 16
             fillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a14 : page.c.BG2
             hoverFillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a20 : page.c.b06
             downFillColor: page.c.a30
@@ -146,11 +152,12 @@ Item {
                 }
                 Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(16, allCountLbl.implicitWidth + 8); height: 16; radius: 8
+                    width: Math.max(18, allCountLbl.implicitWidth + 8); height: 18; radius: 9
                     color: (!page.trash && !page.model.favoriteFilter) ? page.c.a25 : page.c.b08
                     RakLabel {
                         id: allCountLbl
                         anchors.centerIn: parent
+                        anchors.verticalCenterOffset: 1
                         text: (page.model.allProjectsCount !== undefined ? page.model.allProjectsCount : (page.model.projects ? page.model.projects.length : 0)).toString()
                         font.pixelSize: 9; font.weight: Font.Bold
                         color: (!page.trash && !page.model.favoriteFilter) ? page.c.accent_hex : page.c.FG_MUTED
@@ -162,8 +169,8 @@ Item {
         // Pill: Favorit (Star / Pinned)
         RakButton {
             objectName: "favoriteDrive"
-            height: 30
-            cornerRadius: 15
+            height: 32
+            cornerRadius: 16
             fillColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fef3c7" : "#2b2515") : page.c.BG2
             hoverFillColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fde68a" : "#3b331c") : page.c.b06
             downFillColor: page.c.b10
@@ -190,11 +197,12 @@ Item {
                 }
                 Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(16, favCountLbl.implicitWidth + 8); height: 16; radius: 8
+                    width: Math.max(18, favCountLbl.implicitWidth + 8); height: 18; radius: 9
                     color: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fde68a" : "#44341c") : page.c.b08
                     RakLabel {
                         id: favCountLbl
                         anchors.centerIn: parent
+                        anchors.verticalCenterOffset: 1
                         text: (page.model.favoriteCount || 0).toString()
                         font.pixelSize: 9; font.weight: Font.Bold
                         color: (!page.trash && page.model.favoriteFilter) ? "#f59e0b" : page.c.FG_MUTED
@@ -206,8 +214,8 @@ Item {
         // Pill: Sampah (Trash)
         RakButton {
             objectName: "trashDrive"
-            height: 30
-            cornerRadius: 15
+            height: 32
+            cornerRadius: 16
             fillColor: page.trash ? (page.c.is_light ? "#fee2e2" : "#301a1a") : page.c.BG2
             hoverFillColor: page.trash ? (page.c.is_light ? "#fecaca" : "#422323") : page.c.b06
             downFillColor: page.c.b10
@@ -234,11 +242,12 @@ Item {
                 }
                 Rectangle {
                     anchors.verticalCenter: parent.verticalCenter
-                    width: Math.max(16, trCountLbl.implicitWidth + 8); height: 16; radius: 8
+                    width: Math.max(18, trCountLbl.implicitWidth + 8); height: 18; radius: 9
                     color: page.trash ? (page.c.is_light ? "#fca5a5" : "#4d2020") : page.c.b08
                     RakLabel {
                         id: trCountLbl
                         anchors.centerIn: parent
+                        anchors.verticalCenterOffset: 1
                         text: (page.model.trashCount || 0).toString()
                         font.pixelSize: 9; font.weight: Font.Bold
                         color: page.trash ? (page.c.red_alt || "#ef4444") : page.c.FG_MUTED
@@ -255,9 +264,9 @@ Item {
     ListView {
         id: projects
         objectName: "projectList"
-        x: 36; y: 118; width: Math.max(0, parent.width - 72); height: Math.max(0, parent.height - 118 - 80)
+        x: 32; y: 120; width: Math.max(0, parent.width - 64); height: Math.max(0, parent.height - 120 - 80)
         clip: !page.glassChrome; spacing: 0; boundsBehavior: Flickable.StopAtBounds
-        displayMarginBeginning: page.glassChrome?118:0
+        displayMarginBeginning: page.glassChrome?120:0
         displayMarginEnd: page.glassChrome?80:0
         model: page.trash ? page.model.trashRows : page.model.projectRows
         interactive: !projectMotion.active
@@ -295,7 +304,7 @@ Item {
     }
     PageRevealMask { anchors.fill: parent; motion: page.presentationMotion; page: page; topInset: headerGlass.height; bottomInset: footer.height }
     }
-    GlassBand { id: headerGlass; objectName: "projectsHeaderGlass"; z: 1; width: parent.width; height: 86; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,0) }
+    GlassBand { id: headerGlass; objectName: "projectsHeaderGlass"; z: 1; width: parent.width; height: 120; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,0) }
     GlassBand { objectName: "projectsFooterGlass"; z: 1; y: parent.height-80; width: parent.width; height: 80; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,y) }
     PageFooter {
         id: footer

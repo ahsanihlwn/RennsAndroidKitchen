@@ -300,6 +300,7 @@ Item {
                     RakLabel {
                         id: projCountLbl
                         anchors.centerIn: parent
+                        anchors.verticalCenterOffset: 1
                         text: (sidebar.model.allProjectsCount !== undefined ? sidebar.model.allProjectsCount : (sidebar.model.projects ? sidebar.model.projects.length : 0)).toString()
                         font.pixelSize: 9; font.weight: Font.DemiBold
                         color: sidebar.model.page === "projects" ? sidebar.c.accent_hex : sidebar.c.FG_MUTED
