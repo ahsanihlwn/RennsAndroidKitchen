@@ -26,7 +26,7 @@ Item {
     function revealBands() {
         let cuts=[0,86], result=[]
         for (let row=0; row<projects.count; ++row) {
-            let bottom=94+row*74+66-projects.contentY
+            let bottom=118+row*74+66-projects.contentY
             if (bottom>=projects.y && bottom<=projects.y+projects.height) cuts.push(bottom)
         }
         cuts.push(height)
@@ -43,6 +43,22 @@ Item {
         trash=!trash
         projects.forceLayout()
         projectMotion.layoutApplied()
+    }
+
+    function toggleFavorites() {
+        if (model.busy || projectMotion.active) return
+        if (trash) {
+            if (!model.favoriteFilter) model.toggleFavoriteFilter()
+            toggleTrash()
+        } else {
+            model.toggleFavoriteFilter()
+        }
+    }
+
+    function clearFilter() {
+        if (model.busy || projectMotion.active) return
+        if (trash) toggleTrash()
+        if (model.favoriteFilter) model.toggleFavoriteFilter()
     }
     Connections {
         target: page.trash ? page.model.trashRows : page.model.projectRows
@@ -92,6 +108,146 @@ Item {
         Image { sourceSize.width: width; sourceSize.height: height; x: 9; y: 9; width: 16; height: 16; source: page.model.icon("project_search", "") }
         onTextEdited: page.model.search(text)
     }
+    // Filter Pills Bar (Semua, Favorit, Sampah)
+    Row {
+        id: filterBar
+        z: 2
+        opacity: page.headingOpacity
+        x: 36; y: 78
+        spacing: 8
+
+        // Pill: Semua
+        RakButton {
+            height: 30
+            cornerRadius: 15
+            fillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a14 : page.c.BG2
+            hoverFillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a20 : page.c.b06
+            downFillColor: page.c.a30
+            edgeColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a35 : page.c.b08
+            edgeWidth: 1
+            animatePress: page.model.settings.animations
+            onClicked: page.clearFilter()
+
+            contentItem: Row {
+                anchors.centerIn: parent
+                spacing: 6
+                leftPadding: 10; rightPadding: 10
+                Image {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 13; height: 13
+                    source: page.model.icon("project_all", (!page.trash && !page.model.favoriteFilter) ? page.c.accent_hex : page.c.FG_MUTED)
+                    sourceSize: Qt.size(13, 13)
+                }
+                RakLabel {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: "Semua"
+                    font.pixelSize: 11; font.weight: (!page.trash && !page.model.favoriteFilter) ? Font.DemiBold : Font.Normal
+                    color: (!page.trash && !page.model.favoriteFilter) ? page.c.accent_hex : page.c.FG
+                }
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(16, allCountLbl.implicitWidth + 8); height: 16; radius: 8
+                    color: (!page.trash && !page.model.favoriteFilter) ? page.c.a25 : page.c.b08
+                    RakLabel {
+                        id: allCountLbl
+                        anchors.centerIn: parent
+                        text: (page.model.allProjectsCount !== undefined ? page.model.allProjectsCount : (page.model.projects ? page.model.projects.length : 0)).toString()
+                        font.pixelSize: 9; font.weight: Font.Bold
+                        color: (!page.trash && !page.model.favoriteFilter) ? page.c.accent_hex : page.c.FG_MUTED
+                    }
+                }
+            }
+        }
+
+        // Pill: Favorit (Star / Pinned)
+        RakButton {
+            objectName: "favoriteDrive"
+            height: 30
+            cornerRadius: 15
+            fillColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fef3c7" : "#2b2515") : page.c.BG2
+            hoverFillColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fde68a" : "#3b331c") : page.c.b06
+            downFillColor: page.c.b10
+            edgeColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#f59e0b" : "#5a4520") : page.c.b08
+            edgeWidth: 1
+            animatePress: page.model.settings.animations
+            onClicked: page.toggleFavorites()
+
+            contentItem: Row {
+                anchors.centerIn: parent
+                spacing: 6
+                leftPadding: 10; rightPadding: 10
+                Image {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 13; height: 13
+                    source: page.model.icon("project_favorite", (!page.trash && page.model.favoriteFilter) ? "#f59e0b" : page.c.FG_MUTED)
+                    sourceSize: Qt.size(13, 13)
+                }
+                RakLabel {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: page.s.hdr_favorites || "Favorit"
+                    font.pixelSize: 11; font.weight: (!page.trash && page.model.favoriteFilter) ? Font.DemiBold : Font.Normal
+                    color: (!page.trash && page.model.favoriteFilter) ? "#f59e0b" : page.c.FG
+                }
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(16, favCountLbl.implicitWidth + 8); height: 16; radius: 8
+                    color: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fde68a" : "#44341c") : page.c.b08
+                    RakLabel {
+                        id: favCountLbl
+                        anchors.centerIn: parent
+                        text: (page.model.favoriteCount || 0).toString()
+                        font.pixelSize: 9; font.weight: Font.Bold
+                        color: (!page.trash && page.model.favoriteFilter) ? "#f59e0b" : page.c.FG_MUTED
+                    }
+                }
+            }
+        }
+
+        // Pill: Sampah (Trash)
+        RakButton {
+            objectName: "trashDrive"
+            height: 30
+            cornerRadius: 15
+            fillColor: page.trash ? (page.c.is_light ? "#fee2e2" : "#301a1a") : page.c.BG2
+            hoverFillColor: page.trash ? (page.c.is_light ? "#fecaca" : "#422323") : page.c.b06
+            downFillColor: page.c.b10
+            edgeColor: page.trash ? (page.c.is_light ? "#fca5a5" : "#552424") : page.c.b08
+            edgeWidth: 1
+            animatePress: page.model.settings.animations
+            onClicked: page.toggleTrash()
+
+            contentItem: Row {
+                anchors.centerIn: parent
+                spacing: 6
+                leftPadding: 10; rightPadding: 10
+                Image {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 13; height: 13
+                    source: page.model.icon("project_trash", page.trash ? (page.c.red_alt || "#ef4444") : page.c.FG_MUTED)
+                    sourceSize: Qt.size(13, 13)
+                }
+                RakLabel {
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: page.s.hdr_trash || "Sampah"
+                    font.pixelSize: 11; font.weight: page.trash ? Font.DemiBold : Font.Normal
+                    color: page.trash ? (page.c.red_alt || "#ef4444") : page.c.FG
+                }
+                Rectangle {
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(16, trCountLbl.implicitWidth + 8); height: 16; radius: 8
+                    color: page.trash ? (page.c.is_light ? "#fca5a5" : "#4d2020") : page.c.b08
+                    RakLabel {
+                        id: trCountLbl
+                        anchors.centerIn: parent
+                        text: (page.model.trashCount || 0).toString()
+                        font.pixelSize: 9; font.weight: Font.Bold
+                        color: page.trash ? (page.c.red_alt || "#ef4444") : page.c.FG_MUTED
+                    }
+                }
+            }
+        }
+    }
+
     SmoothRectangle {
         id: projectSurface
         readonly property rect inputBounds: Qt.rect(0,headerGlass.height,width,Math.max(0,height-headerGlass.height-footer.height))
@@ -99,10 +255,10 @@ Item {
     ListView {
         id: projects
         objectName: "projectList"
-        x: 36; y: 94; width: Math.max(0, parent.width - 72); height: Math.max(0, parent.height - 180)
+        x: 36; y: 118; width: Math.max(0, parent.width - 72); height: Math.max(0, parent.height - 118 - 80)
         clip: !page.glassChrome; spacing: 0; boundsBehavior: Flickable.StopAtBounds
-        displayMarginBeginning: page.glassChrome?94:0
-        displayMarginEnd: page.glassChrome?86:0
+        displayMarginBeginning: page.glassChrome?118:0
+        displayMarginEnd: page.glassChrome?80:0
         model: page.trash ? page.model.trashRows : page.model.projectRows
         interactive: !projectMotion.active
         delegate: Item {
@@ -123,6 +279,11 @@ Item {
         RakLabel {
             anchors.centerIn: parent; width: parent.width - 32
             visible: page.trash && projects.count === 0 && !projectMotion.active; text: page.s.trash_empty; color: page.c.FG3
+            horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 11
+        }
+        RakLabel {
+            anchors.centerIn: parent; width: parent.width - 32
+            visible: !page.trash && page.model.favoriteFilter && projects.count === 0 && !projectMotion.active; text: page.s.favorites_empty; color: page.c.FG3
             horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 11
         }
     }

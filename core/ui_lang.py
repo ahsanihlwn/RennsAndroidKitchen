@@ -55,6 +55,10 @@ def _e(en, id, zh, ru, hi, pt, vi, tr, ja):
 
 # string tables
 _STRINGS: dict[str, dict[str, str]] = {
+    "hdr_favorites": _e("Favorites", "Favorit", "收藏", "Избранное", "पसंदीदा", "Favoritos", "Yêu thích", "Favoriler", "お気に入り"),
+    "favorite_count": _e("{n} projects", "{n} proyek", "{n} 个项目", "Проектов: {n}", "{n} प्रोजेक्ट", "{n} projetos", "{n} dự án", "{n} proje", "{n} 件"),
+    "tooltip_filter_favorites": _e("Filter starred projects", "Filter proyek favorit", "筛选星标项目", "Фильтр избранных проектов", "पसंदीदा प्रोजेक्ट फ़िल्टर करें", "Filtrar projetos favoritos", "Lọc dự án gắn dấu sao", "Yıldızlı projeleri filtrele", "スター付きプロジェクトをフィルター"),
+    "favorites_empty": _e("No starred projects yet. Star projects from their menu to see them here.", "Belum ada proyek favorit. Beri bintang pada proyek dari menunya untuk melihatnya di sini.", "暂无星标项目。可在菜单中为项目添加星标。", "Нет избранных проектов. Отметьте проекты звездочкой в меню.", "कोई पसंदीदा प्रोजेक्ट नहीं।", "Nenhum projeto favorito ainda.", "Chưa có dự án yêu thích nào.", "Henüz favori proje yok.", "お気に入りプロジェクトはまだありません。"),
     "hdr_trash": _e("Trash", "Trash", "回收站", "Корзина", "ट्रैश", "Lixeira", "Thùng rác", "Çöp", "ゴミ箱"),
     "trash_count": _e("{n} projects", "{n} proyek", "{n} 个项目", "Проектов: {n}", "{n} प्रोजेक्ट", "{n} projetos", "{n} dự án", "{n} proje", "{n} 件"),
     "btn_back_projects": _e("Back to projects", "Kembali ke proyek", "返回项目", "К проектам", "प्रोजेक्ट पर वापस", "Voltar aos projetos", "Về dự án", "Projelere dön", "プロジェクトに戻る"),

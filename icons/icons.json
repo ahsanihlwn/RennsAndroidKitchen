@@ -100,6 +100,9 @@
   "project_disk": "project_disk.svg",
   "project_more": "project_more.svg",
   "project_search": "project_search.svg",
+  "project_favorite": "project_favorite.svg",
+  "project_all": "project_all.svg",
+  "star": "star.svg",
   "back_to_proj": "back_to_proj.svg",
   "sparse_label": "sparse_label.svg",
   "super_label": "super_label.svg",
@@ -141,5 +144,9 @@
   "avatar_t": "avatar_t.svg",
   "toggle": "toggle.svg",
   "not_found": "not_found.svg",
-  "history": "history.svg"
+  "history": "history.svg",
+  "op_command": "op_command.svg",
+  "op_edit": "op_edit.svg",
+  "op_read": "op_read.svg",
+  "op_thought": "op_thought.svg"
 }

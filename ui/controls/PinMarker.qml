@@ -4,18 +4,16 @@ import QtQuick.Shapes
 
 Item {
     id: pin
-    property color color: "#3ecf8e"
+    property color color: "#f59e0b"
     property string toolTip: ""
     HoverHandler { id: hover }
     HoverTip { label: pin.toolTip; hovering: hover.hovered }
     width: 12; height: 12; clip: true
-    SmoothRectangle { x: 2.64; y: 0; width: 6.72; height: 6.72; radius: 3.36; color: pin.color }
     Shape {
         anchors.fill: parent
         ShapePath {
             fillColor: pin.color; strokeColor: "transparent"
-            PathSvg { path: "M 6 6.24 L 2.64 8.64 L 6 11.04 L 9.36 8.64 Z" }
+            PathSvg { path: "M 6 1 L 7.55 4.13 L 11 4.64 L 8.5 7.07 L 9.09 10.51 L 6 8.89 L 2.91 10.51 L 3.5 7.07 L 1 4.64 L 4.45 4.13 Z" }
         }
     }
-    SmoothRectangle { x: 5.52; y: 10.08; width: .96; height: 2.16; radius: .48; color: pin.color }
 }

@@ -290,6 +290,22 @@ Item {
                     visible: opacity > 0.01
                 }
 
+                Rectangle {
+                    visible: opacity > 0.01
+                    opacity: sidebar.textAlpha
+                    anchors.right: parent.right; anchors.rightMargin: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: Math.max(18, projCountLbl.implicitWidth + 8); height: 18; radius: 9
+                    color: sidebar.model.page === "projects" ? sidebar.c.a20 : sidebar.c.b08
+                    RakLabel {
+                        id: projCountLbl
+                        anchors.centerIn: parent
+                        text: (sidebar.model.allProjectsCount !== undefined ? sidebar.model.allProjectsCount : (sidebar.model.projects ? sidebar.model.projects.length : 0)).toString()
+                        font.pixelSize: 9; font.weight: Font.DemiBold
+                        color: sidebar.model.page === "projects" ? sidebar.c.accent_hex : sidebar.c.FG_MUTED
+                    }
+                }
+
                 HoverHandler { id: navProjHov; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
                     onTapped: {
@@ -352,54 +368,13 @@ Item {
             color: sidebar.c.b06
         }
 
-        // Trash shortcut item
-        Item {
-            id: trashRow
-            x: panel.itemX
-            y: divDrives.y + 8
-            width: panel.itemWidth; height: 38
 
-            SmoothRectangle {
-                anchors.fill: parent; radius: 8
-                color: trashHov.hovered ? sidebar.c.b05 : "transparent"
-            }
-
-            // ICON IS TOTALLY PINNED AT fixedIconX (NO MOVEMENT)
-            Image {
-                id: trashIcon
-                x: panel.fixedIconX
-                anchors.verticalCenter: parent.verticalCenter
-                width: 18; height: 18
-                source: sidebar.model.icon("project_trash", sidebar.c.FG_MUTED)
-                sourceSize: Qt.size(18, 18)
-            }
-
-            Column {
-                anchors.left: trashIcon.right; anchors.leftMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                opacity: sidebar.textAlpha
-                visible: opacity > 0.01
-                spacing: 1
-
-                RakLabel {
-                    text: sidebar.s.hdr_trash
-                    font.pixelSize: 11; font.weight: Font.DemiBold; color: sidebar.c.FG_BRIGHT
-                }
-                RakLabel {
-                    text: sidebar.s.trash_count.replace("{n}", sidebar.model.trashCount.toString())
-                    font.pixelSize: 9; color: sidebar.c.FG_MUTED
-                }
-            }
-
-            HoverHandler { id: trashHov; cursorShape: Qt.PointingHandCursor }
-            TapHandler { onTapped: sidebar.trashClicked() }
-        }
 
         // ── Drive storage section ─────────────────────────────────────────────
         Column {
             id: driveColumn
             x: panel.itemX
-            y: trashRow.y + trashRow.height + 6
+            y: divDrives.y + 8
             width: panel.itemWidth
             spacing: 5
 

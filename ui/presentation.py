@@ -38,6 +38,7 @@ class LauncherModel(QObject):
     pageChanged = Signal()
     projectsChanged = Signal()
     trashChanged = Signal()
+    favoriteFilterChanged = Signal()
     drivesChanged = Signal()
     presentationRequested = Signal(str, "QVariantMap")
     command = Signal(str, "QVariantMap")
@@ -58,6 +59,7 @@ class LauncherModel(QObject):
         self._previous = "projects"
         self._query = ""
         self._trash = []
+        self._favorite_filter = False
         self._default_location = ""
         self._busy = False
         self._drives = [dict(row) for row in drives]
@@ -219,12 +221,32 @@ class LauncherModel(QObject):
         self._string_cache = result
         return result
 
+    @Property(bool, notify=favoriteFilterChanged)
+    def favoriteFilter(self):
+        return self._favorite_filter
+
+    @Property(int, notify=projectsChanged)
+    def allProjectsCount(self):
+        return len(self._projects)
+
+    @Property(int, notify=projectsChanged)
+    def favoriteCount(self):
+        return sum(1 for row in self._projects if row.get("pinned", False))
+
+    @Slot()
+    def toggleFavoriteFilter(self):
+        self._favorite_filter = not self._favorite_filter
+        self.favoriteFilterChanged.emit()
+        self.projectsChanged.emit()
+
     @Property("QVariantList", notify=projectsChanged)
     def projects(self):
         query = self._query.casefold().strip()
         rows = [row for row in self._projects if row.get("drive", "").casefold() not in self._excluded_drives
                 and (not query or query in " ".join(str(row.get(key, "")) for key in
                 ("project_name", "path", "port1", "port2")).casefold())]
+        if self._favorite_filter:
+            rows = [row for row in rows if row.get("pinned", False)]
         return sorted(rows, key=lambda row: not row.get("pinned", False))
 
     @Slot(str)
