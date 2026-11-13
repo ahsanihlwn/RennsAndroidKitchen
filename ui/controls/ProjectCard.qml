@@ -30,7 +30,7 @@ RakCard {
     Connections { target: card.model; function onSettingsChanged() { if (!card.model.settings.animations) { hoverAnimation.stop(); card.cardScale=1 } } }
     objectName: (presentationCopy ? "projectMotionCard_" : "projectCard_") + modelData.path
     height: 66
-    color: isDeleting ? card.c.BG_SELECTED : (cardHover.hovered ? card.c.BG_SELECTED : card.c.BG2)
+    color: isDeleting ? card.c.BG2 : (cardHover.hovered ? card.c.BG_SELECTED : card.c.BG2)
     border.color: isDeleting ? "#65ef4444" : (cardHover.hovered ? card.c.a30 : card.c.b07)
     border.width: 1
     radius: 10
@@ -193,8 +193,8 @@ RakCard {
         x: parent.width - 57; y: 18; width: 28; height: 28
         visible: !card.trash
         toolTip: card.trash?card.model.strings.btn_restore_project:card.model.strings.menu_open_project
-        cornerRadius: 8; fillColor: cardHover.hovered ? card.c.a18 : card.c.BG4; hoverFillColor: card.c.a18
-        edgeColor: cardHover.hovered ? card.c.a30 : card.c.b05; hoverEdgeColor: card.c.a30
+        cornerRadius: 8; fillColor: (cardHover.hovered && !card.isDeleting) ? card.c.a18 : card.c.BG4; hoverFillColor: card.c.a18
+        edgeColor: (cardHover.hovered && !card.isDeleting) ? card.c.a30 : card.c.b05; hoverEdgeColor: card.c.a30
         iconSource: card.model.icon("arrow_right", card.c.FG)
         iconWidth: 12; iconHeight: 12; leftPadding: 0; rightPadding: 0
         enabled: card.interactive && !card.model.busy && !card.isDeleting
