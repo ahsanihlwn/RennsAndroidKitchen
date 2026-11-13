@@ -232,11 +232,7 @@ Item {
             }
         }
 
-        // Tap anywhere on collapsed rail to expand
-        TapHandler {
-            enabled: sidebar.collapsed
-            onTapped: sidebar.collapsed = false
-        }
+
 
         // Divider under account (visible only when profile is shown)
         SmoothRectangle {
@@ -308,7 +304,6 @@ Item {
                 HoverHandler { id: navProjHov; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
                     onTapped: {
-                        if (sidebar.collapsed) sidebar.collapsed = false
                         if (sidebar.model.page !== "projects") sidebar.model.navigate("projects")
                     }
                 }
@@ -351,7 +346,6 @@ Item {
                 HoverHandler { id: navSetHov; cursorShape: Qt.PointingHandCursor }
                 TapHandler {
                     onTapped: {
-                        if (sidebar.collapsed) sidebar.collapsed = false
                         if (sidebar.model.page !== "settings") sidebar.model.navigate("settings")
                     }
                 }
@@ -492,12 +486,76 @@ Item {
                         hovering: driveHover.hovered
                     }
                     TapHandler {
-                        onTapped: {
-                            if (sidebar.collapsed) sidebar.collapsed = false
-                            else sidebar.model.dispatch("toggleDrive", {key: modelData.key})
-                        }
+                        onTapped: sidebar.model.dispatch("toggleDrive", {key: modelData.key})
                     }
                 }
+            }
+         }
+
+        // ── Bottom expand/collapse toggle button ─────────────────────────────
+        Item {
+            id: toggleBtn
+            objectName: "sidebarExpandToggle"
+            x: panel.itemX
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 10
+            width: panel.itemWidth
+            height: 34
+
+            SmoothRectangle {
+                anchors.fill: parent
+                radius: 8
+                color: toggleHov.hovered ? sidebar.c.b06 : "transparent"
+                border.color: toggleHov.hovered ? sidebar.c.b08 : "transparent"
+            }
+
+            // Stationary pinned icon container centered at x = 32px (aligned with all icons)
+            Item {
+                id: toggleIconBox
+                x: panel.fixedIconX
+                anchors.verticalCenter: parent.verticalCenter
+                width: 18; height: 18
+
+                // Direct vector chevron — no external SVG asset needed
+                Shape {
+                    anchors.centerIn: parent
+                    width: 10; height: 12
+                    layer.enabled: true
+                    layer.samples: 4
+
+                    ShapePath {
+                        strokeColor: toggleHov.hovered ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
+                        strokeWidth: 2
+                        fillColor: "transparent"
+                        capStyle: ShapePath.RoundCap
+                        joinStyle: ShapePath.RoundJoin
+                        startX: sidebar.collapsed ? 3 : 7
+                        startY: 2
+                        PathLine { x: sidebar.collapsed ? 7 : 3; y: 6 }
+                        PathLine { x: sidebar.collapsed ? 3 : 7; y: 10 }
+                    }
+                }
+            }
+
+            RakLabel {
+                anchors.left: toggleIconBox.right
+                anchors.leftMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                text: sidebar.collapsed ? (sidebar.s.btn_expand || "Perluas") : (sidebar.s.btn_collapse || "Ciutkan")
+                font.pixelSize: 11
+                font.weight: Font.Medium
+                color: toggleHov.hovered ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
+                opacity: sidebar.textAlpha
+                visible: opacity > 0.01
+            }
+
+            HoverHandler { id: toggleHov; cursorShape: Qt.PointingHandCursor }
+            HoverTip {
+                label: sidebar.collapsed ? (sidebar.s.btn_expand || "Perluas") : (sidebar.s.btn_collapse || "Ciutkan")
+                hovering: toggleHov.hovered
+            }
+            TapHandler {
+                onTapped: sidebar.collapsed = !sidebar.collapsed
             }
         }
     }
