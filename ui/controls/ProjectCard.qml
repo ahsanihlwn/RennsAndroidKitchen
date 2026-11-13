@@ -30,8 +30,8 @@ RakCard {
     Connections { target: card.model; function onSettingsChanged() { if (!card.model.settings.animations) { hoverAnimation.stop(); card.cardScale=1 } } }
     objectName: (presentationCopy ? "projectMotionCard_" : "projectCard_") + modelData.path
     height: 66
-    color: cardHover.hovered ? card.c.BG_SELECTED : card.c.BG2
-    border.color: isDeleting ? "#85ef4444" : (cardHover.hovered ? card.c.a30 : card.c.b07)
+    color: isDeleting ? card.c.BG_SELECTED : (cardHover.hovered ? card.c.BG_SELECTED : card.c.BG2)
+    border.color: isDeleting ? "#65ef4444" : (cardHover.hovered ? card.c.a30 : card.c.b07)
     border.width: 1
     radius: 10
     HoverHandler {
@@ -104,22 +104,21 @@ RakCard {
         z: 2
         clip: true
 
-        // Inward border glow frame tipis mengikuti rounded corners kartu
+        // Subtle ambient red tint on body (seperti a12 versi merah saat card ditekan/di-hover)
         SmoothRectangle {
             anchors.fill: parent
             radius: card.radius
-            color: "transparent"
-            border.width: 1.5
-            border.color: "#18ef4444"
+            color: "#ef4444"
+            opacity: 0.05
         }
 
-        readonly property real runnerW: 100
+        readonly property real runnerW: 130
         property real phase: 0
         readonly property real runnerX: -runnerW + phase * (card.width + runnerW * 2)
 
         NumberAnimation on phase {
             from: 0; to: 1
-            duration: 1250
+            duration: 1300
             loops: Animation.Infinite
             running: deletionEffect.visible && card.model.settings.animations
         }
@@ -127,29 +126,31 @@ RakCard {
         // Top border light runner + inward impact
         Item {
             anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
-            anchors.leftMargin: 6; anchors.rightMargin: 6
-            height: 5
+            anchors.leftMargin: 8; anchors.rightMargin: 8
+            height: 6
             clip: true
 
+            // Inward impact: 4.5px soft glow
             Rectangle {
-                x: deletionEffect.runnerX; y: 1; width: deletionEffect.runnerW; height: 3.5
+                x: deletionEffect.runnerX; y: 1.2; width: deletionEffect.runnerW; height: 4.5
                 gradient: Gradient {
                     orientation: Gradient.Horizontal
                     GradientStop { position: 0.00; color: "#00ef4444" }
-                    GradientStop { position: 0.30; color: "#14ff5555" }
-                    GradientStop { position: 0.50; color: "#25ff6b6b" }
-                    GradientStop { position: 0.70; color: "#14ff5555" }
+                    GradientStop { position: 0.25; color: "#10ff5252" }
+                    GradientStop { position: 0.50; color: "#24ff5252" }
+                    GradientStop { position: 0.75; color: "#10ff5252" }
                     GradientStop { position: 1.00; color: "#00ef4444" }
                 }
             }
+            // Crisp border trace: murni merah terang hangat, no white
             Rectangle {
-                x: deletionEffect.runnerX; y: 0; width: deletionEffect.runnerW; height: 1
+                x: deletionEffect.runnerX; y: 0; width: deletionEffect.runnerW; height: 1.2
                 gradient: Gradient {
                     orientation: Gradient.Horizontal
                     GradientStop { position: 0.00; color: "#00ef4444" }
-                    GradientStop { position: 0.25; color: "#70ff6b6b" }
-                    GradientStop { position: 0.50; color: "#ffffa3a3" }
-                    GradientStop { position: 0.75; color: "#70ff6b6b" }
+                    GradientStop { position: 0.25; color: "#70ff5252" }
+                    GradientStop { position: 0.50; color: "#e0ff5252" }
+                    GradientStop { position: 0.75; color: "#70ff5252" }
                     GradientStop { position: 1.00; color: "#00ef4444" }
                 }
             }
@@ -158,29 +159,31 @@ RakCard {
         // Bottom border light runner + inward impact
         Item {
             anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.right: parent.right
-            anchors.leftMargin: 6; anchors.rightMargin: 6
-            height: 5
+            anchors.leftMargin: 8; anchors.rightMargin: 8
+            height: 6
             clip: true
 
+            // Inward impact: 4.5px soft glow
             Rectangle {
-                x: deletionEffect.runnerX; y: 0.5; width: deletionEffect.runnerW; height: 3.5
+                x: deletionEffect.runnerX; y: 0.3; width: deletionEffect.runnerW; height: 4.5
                 gradient: Gradient {
                     orientation: Gradient.Horizontal
                     GradientStop { position: 0.00; color: "#00ef4444" }
-                    GradientStop { position: 0.30; color: "#14ff5555" }
-                    GradientStop { position: 0.50; color: "#25ff6b6b" }
-                    GradientStop { position: 0.70; color: "#14ff5555" }
+                    GradientStop { position: 0.25; color: "#10ff5252" }
+                    GradientStop { position: 0.50; color: "#24ff5252" }
+                    GradientStop { position: 0.75; color: "#10ff5252" }
                     GradientStop { position: 1.00; color: "#00ef4444" }
                 }
             }
+            // Crisp border trace: murni merah terang hangat, no white
             Rectangle {
-                x: deletionEffect.runnerX; y: 4; width: deletionEffect.runnerW; height: 1
+                x: deletionEffect.runnerX; y: 4.8; width: deletionEffect.runnerW; height: 1.2
                 gradient: Gradient {
                     orientation: Gradient.Horizontal
                     GradientStop { position: 0.00; color: "#00ef4444" }
-                    GradientStop { position: 0.25; color: "#70ff6b6b" }
-                    GradientStop { position: 0.50; color: "#ffffa3a3" }
-                    GradientStop { position: 0.75; color: "#70ff6b6b" }
+                    GradientStop { position: 0.25; color: "#70ff5252" }
+                    GradientStop { position: 0.50; color: "#e0ff5252" }
+                    GradientStop { position: 0.75; color: "#70ff5252" }
                     GradientStop { position: 1.00; color: "#00ef4444" }
                 }
             }
