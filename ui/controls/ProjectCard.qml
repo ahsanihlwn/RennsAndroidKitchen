@@ -18,6 +18,7 @@ RakCard {
     property real cardScale: 1
     readonly property bool transformed: Math.abs(cardScale-1)>.0001
     readonly property bool isDeleting: card.model.deletingPath === card.modelData.path
+    readonly property bool isOpening: card.model.openingPath === card.modelData.path
     scale: cardScale
     function animateCard(target,duration) {
         hoverAnimation.stop()
@@ -30,17 +31,17 @@ RakCard {
     Connections { target: card.model; function onSettingsChanged() { if (!card.model.settings.animations) { hoverAnimation.stop(); card.cardScale=1 } } }
     objectName: (presentationCopy ? "projectMotionCard_" : "projectCard_") + modelData.path
     height: 66
-    color: isDeleting ? card.c.BG2 : (cardHover.hovered ? card.c.BG_SELECTED : card.c.BG2)
-    border.color: isDeleting ? "#65ef4444" : (cardHover.hovered ? card.c.a30 : card.c.b07)
+    color: (isDeleting || isOpening) ? card.c.BG2 : (cardHover.hovered ? card.c.BG_SELECTED : card.c.BG2)
+    border.color: isDeleting ? "#65ef4444" : (isOpening ? card.c.a50 : (cardHover.hovered ? card.c.a30 : card.c.b07))
     border.width: 1
     radius: 10
     HoverHandler {
-        id: cardHover; enabled: card.interactive && !card.isDeleting; cursorShape: Qt.PointingHandCursor
+        id: cardHover; enabled: card.interactive && !card.isDeleting && !card.isOpening; cursorShape: Qt.PointingHandCursor
         onHoveredChanged: if (!card.cardPressed) card.animateCard(hovered?.995:1,hovered?170:150)
     }
     HoverTip { label: card.trash?(card.modelData.toolTip || ""):""; hovering: cardHover.hovered }
     TapHandler {
-        enabled: card.interactive && !card.model.busy && !card.isDeleting
+        enabled: card.interactive && !card.model.busy && !card.isDeleting && !card.isOpening
         onPressedChanged: if (!pressed || point.position.x<card.width-90) card.cardPressed=pressed
         onTapped: if (!card.trash) card.model.dispatch("openProject", {"path": card.modelData.path})
     }
@@ -90,7 +91,7 @@ RakCard {
         cornerRadius: 6; fillColor: "transparent"; hoverFillColor: card.c.a12
         iconSource: card.model.icon("project_more", ""); iconWidth: 14; iconHeight: 14; leftPadding: 0; rightPadding: 0
         animatePress: card.model.settings.animations
-        enabled: card.interactive && !card.model.busy && !card.isDeleting
+        enabled: card.interactive && !card.model.busy && !card.isDeleting && !card.isOpening
         onClicked: {
             const position = mapToItem(null, 0, height)
             card.model.dispatch("projectMenu", {path: card.modelData.path, id: card.modelData._trash_id || "", x: position.x, y: position.y})
@@ -189,15 +190,115 @@ RakCard {
             }
         }
     }
+    Item {
+        id: openEffect
+        objectName: "openProgress_" + card.modelData.path
+        anchors.fill: parent
+        visible: card.isOpening
+        z: 2
+        clip: true
+
+        readonly property color accentColor: card.c.accent_hex
+        readonly property color cTrans: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0)
+        readonly property color cGlowMid: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.07)
+        readonly property color cGlowCenter: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.16)
+        readonly property color cTraceMid: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.44)
+        readonly property color cTraceCenter: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.88)
+
+        // Subtle ambient accent tint on body
+        SmoothRectangle {
+            anchors.fill: parent
+            radius: card.radius
+            color: openEffect.accentColor
+            opacity: 0.05
+        }
+
+        readonly property real runnerW: 130
+        property real phase: 0
+        readonly property real runnerX: -runnerW + phase * (card.width + runnerW * 2)
+
+        NumberAnimation on phase {
+            from: 0; to: 1
+            duration: 1300
+            loops: Animation.Infinite
+            running: openEffect.visible && card.model.settings.animations
+        }
+
+        // Top border light runner + inward impact
+        Item {
+            anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
+            anchors.leftMargin: 8; anchors.rightMargin: 8
+            height: 6
+            clip: true
+
+            // Inward impact: 4.5px soft glow
+            Rectangle {
+                x: openEffect.runnerX; y: 1.2; width: openEffect.runnerW; height: 4.5
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.00; color: openEffect.cTrans }
+                    GradientStop { position: 0.25; color: openEffect.cGlowMid }
+                    GradientStop { position: 0.50; color: openEffect.cGlowCenter }
+                    GradientStop { position: 0.75; color: openEffect.cGlowMid }
+                    GradientStop { position: 1.00; color: openEffect.cTrans }
+                }
+            }
+            // Crisp border trace: aksen tema
+            Rectangle {
+                x: openEffect.runnerX; y: 0; width: openEffect.runnerW; height: 1.2
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.00; color: openEffect.cTrans }
+                    GradientStop { position: 0.25; color: openEffect.cTraceMid }
+                    GradientStop { position: 0.50; color: openEffect.cTraceCenter }
+                    GradientStop { position: 0.75; color: openEffect.cTraceMid }
+                    GradientStop { position: 1.00; color: openEffect.cTrans }
+                }
+            }
+        }
+
+        // Bottom border light runner + inward impact
+        Item {
+            anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.right: parent.right
+            anchors.leftMargin: 8; anchors.rightMargin: 8
+            height: 6
+            clip: true
+
+            // Inward impact: 4.5px soft glow
+            Rectangle {
+                x: openEffect.runnerX; y: 0.3; width: openEffect.runnerW; height: 4.5
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.00; color: openEffect.cTrans }
+                    GradientStop { position: 0.25; color: openEffect.cGlowMid }
+                    GradientStop { position: 0.50; color: openEffect.cGlowCenter }
+                    GradientStop { position: 0.75; color: openEffect.cGlowMid }
+                    GradientStop { position: 1.00; color: openEffect.cTrans }
+                }
+            }
+            // Crisp border trace: aksen tema
+            Rectangle {
+                x: openEffect.runnerX; y: 4.8; width: openEffect.runnerW; height: 1.2
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.00; color: openEffect.cTrans }
+                    GradientStop { position: 0.25; color: openEffect.cTraceMid }
+                    GradientStop { position: 0.50; color: openEffect.cTraceCenter }
+                    GradientStop { position: 0.75; color: openEffect.cTraceMid }
+                    GradientStop { position: 1.00; color: openEffect.cTrans }
+                }
+            }
+        }
+    }
     RakButton {
         x: parent.width - 57; y: 18; width: 28; height: 28
         visible: !card.trash
         toolTip: card.trash?card.model.strings.btn_restore_project:card.model.strings.menu_open_project
-        cornerRadius: 8; fillColor: (cardHover.hovered && !card.isDeleting) ? card.c.a18 : card.c.BG4; hoverFillColor: card.c.a18
-        edgeColor: (cardHover.hovered && !card.isDeleting) ? card.c.a30 : card.c.b05; hoverEdgeColor: card.c.a30
+        cornerRadius: 8; fillColor: (cardHover.hovered && !card.isDeleting && !card.isOpening) ? card.c.a18 : card.c.BG4; hoverFillColor: card.c.a18
+        edgeColor: (cardHover.hovered && !card.isDeleting && !card.isOpening) ? card.c.a30 : card.c.b05; hoverEdgeColor: card.c.a30
         iconSource: card.model.icon("arrow_right", card.c.FG)
         iconWidth: 12; iconHeight: 12; leftPadding: 0; rightPadding: 0
-        enabled: card.interactive && !card.model.busy && !card.isDeleting
+        enabled: card.interactive && !card.model.busy && !card.isDeleting && !card.isOpening
         onClicked: card.model.dispatch(card.trash ? "restoreProject" : "openProject", {path: card.modelData.path, id: card.modelData._trash_id || ""})
     }
 }

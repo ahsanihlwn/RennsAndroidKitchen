@@ -34,6 +34,7 @@ class LauncherModel(QObject):
     busyChanged = Signal()
     startupChanged = Signal()
     deletingPathChanged = Signal()
+    openingPathChanged = Signal()
     panelBorderChanged = Signal()
     pageChanged = Signal()
     projectsChanged = Signal()
@@ -66,6 +67,7 @@ class LauncherModel(QObject):
         self._excluded_drives = set()
         self._startup_active = False
         self._deleting_path = ""
+        self._opening_path = ""
         self._animate_rows = True
         self._color_cache = None
         self._string_cache = None
@@ -137,6 +139,17 @@ class LauncherModel(QObject):
             return
         self._deleting_path = path
         self.deletingPathChanged.emit()
+        self.changed.emit()
+
+    @Property(str, notify=openingPathChanged)
+    def openingPath(self):
+        return self._opening_path
+
+    def setOpeningPath(self, path):
+        if path == self._opening_path:
+            return
+        self._opening_path = path
+        self.openingPathChanged.emit()
         self.changed.emit()
 
     @Property("QVariantMap", constant=True)

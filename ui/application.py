@@ -650,7 +650,7 @@ class LauncherApplication(QObject):
             self._open_project(record,"create")
 
     def _open_project(self, record, origin="existing"):
-        if self.loader is not None or self.editor is not None:
+        if self.editor is not None or self.model.openingPath:
             return
         if not os.path.isdir(record["path"]):
             raise FileNotFoundError(record["path"])
@@ -658,15 +658,8 @@ class LauncherApplication(QObject):
         opened_at = time.perf_counter()
         log_project_event("OPEN_START", project_root, origin=origin)
         self.model.setBusy(True)
-        self.hide()
-        self.loader = QuickLoadingWindow(self.engine,self.model,project_root,self)
-        self.loader._block_close = True
-        self.loader._on_hide_requested = self._cancel_open
-        # Match the reference's loader.show()/processEvents() barrier without
-        # nesting an event loop: wait for a composed loading frame first.
-        loader = self.loader
-        loader._presenter.presented.connect(lambda:QTimer.singleShot(0,lambda:self._construct_editor(record,origin,opened_at,loader)))
-        self.loader.show()
+        self.model.setOpeningPath(project_root)
+        QTimer.singleShot(0, lambda: self._construct_editor(record, origin, opened_at))
 
     def _show_editor_with_reveal(self, project_root, opened_at, origin):
         editor, loader = self.editor, self.loader
@@ -675,24 +668,40 @@ class LauncherApplication(QObject):
                 return
             editor.reveal()
             self._log_project_entered(project_root,opened_at,origin)
-        if loader is None:
-            show_editor(); return
-        loader._block_close = True
-        fade = QPropertyAnimation(loader.window,b"opacity",loader)
-        fade.setDuration(160 if self.model.settings["animations"] else 0)
-        fade.setStartValue(loader.window.opacity()); fade.setEndValue(0)
+            self.model.setOpeningPath("")
+            self.hide()
+            self.window.setOpacity(1)
+
+        if loader is not None:
+            loader._block_close = True
+            fade = QPropertyAnimation(loader.window,b"opacity",loader)
+            fade.setDuration(160 if self.model.settings["animations"] else 0)
+            fade.setStartValue(loader.window.opacity()); fade.setEndValue(0)
+            fade.setEasingCurve(QEasingCurve.OutCubic)
+            def finish_loader():
+                dismissed = not loader.isVisible()
+                loader._block_close = False
+                loader.close(); loader._handoff_fade = None
+                fade.deleteLater(); loader.deleteLater()
+                if self.loader is loader: self.loader = None
+                if dismissed:
+                    log_project_event("OPEN_CANCELLED",project_root,origin=origin)
+                else: show_editor()
+            fade.finished.connect(finish_loader)
+            loader._handoff_fade = fade
+            fade.start()
+            return
+
+        if not self.model.settings["animations"]:
+            show_editor()
+            return
+
+        fade = QPropertyAnimation(self.window, b"opacity", self)
+        fade.setDuration(160)
+        fade.setStartValue(self.window.opacity())
+        fade.setEndValue(0)
         fade.setEasingCurve(QEasingCurve.OutCubic)
-        def finish_loader():
-            dismissed = not loader.isVisible()
-            loader._block_close = False
-            loader.close(); loader._handoff_fade = None
-            fade.deleteLater(); loader.deleteLater()
-            if self.loader is loader: self.loader = None
-            if dismissed:
-                log_project_event("OPEN_CANCELLED",project_root,origin=origin)
-            else: show_editor()
-        fade.finished.connect(finish_loader)
-        loader._handoff_fade = fade
+        fade.finished.connect(lambda: [fade.deleteLater(), show_editor()])
         fade.start()
 
     def _log_project_entered(self, project_root, opened_at, origin):
@@ -723,13 +732,13 @@ class LauncherApplication(QObject):
             loader._block_close=False
             loader.close();loader.deleteLater()
 
-    def _construct_editor(self, record, origin, opened_at, loader):
-        if self.loader is not loader or self._quitting:
+    def _construct_editor(self, record, origin, opened_at, loader=None):
+        if not self.model.openingPath or self._quitting:
             return
         if self._prewarm_thread is not None and not self._prewarm_complete:
             # Importing Main here while the prewarm owns its import lock would
             # freeze the GUI/spinner. Resume from its queued completion instead.
-            self._pending_editor = (record, origin, opened_at, loader)
+            self._pending_editor = (record, origin, opened_at)
             return
         try:
             from main import Main
@@ -757,14 +766,17 @@ class LauncherApplication(QObject):
         self._message(str(error))
 
     def _editor_ready(self, editor, path, opened_at, origin):
-        if self.editor is editor and self.loader is not None:
-            self.loader._block_close = False
+        if self.editor is editor:
+            if self.loader is not None:
+                self.loader._block_close = False
             self._show_editor_with_reveal(path, opened_at, origin)
 
     def _cancel_open(self):
         self._pending_editor = None
         self._cancel_project_preparation(self.editor)
+        self.model.setOpeningPath("")
         self.model.setBusy(False)
+        self.window.setOpacity(1)
         self.show()
 
     def on_return_from_editor(self):
@@ -775,9 +787,11 @@ class LauncherApplication(QObject):
             self.loader._block_close = False
             self.loader.close()
             self.loader = None
+        self.model.setOpeningPath("")
         self.model.setBusy(False)
         self.model.navigate("projects")
         self._reload()
+        self.window.setOpacity(1)
         self.show()
 
     def _open_dialog(self, kind):
