@@ -127,8 +127,8 @@ Item {
                 id: profileArea
                 visible: sidebar.showProfile
                 anchors.left: parent.left
-                anchors.right: collapseBtn.left
-                anchors.rightMargin: 4
+                anchors.right: parent.right
+                anchors.rightMargin: 6
                 anchors.top: parent.top
                 anchors.bottom: parent.bottom
 
@@ -209,27 +209,7 @@ Item {
                 }
             }
 
-            // Collapse toggle chevron (expanded only)
-            Item {
-                id: collapseBtn
-                anchors.right: parent.right; anchors.rightMargin: 4
-                anchors.verticalCenter: parent.verticalCenter
-                width: 22; height: 22
-                opacity: sidebar.textAlpha
-                visible: opacity > 0.01
 
-                SmoothRectangle {
-                    anchors.fill: parent; radius: 6
-                    color: collapseHov.hovered ? sidebar.c.b08 : "transparent"
-                }
-                Image {
-                    anchors.centerIn: parent; width: 11; height: 11
-                    source: sidebar.model.icon("arrow_right", sidebar.c.FG_MUTED)
-                    rotation: 180; sourceSize: Qt.size(11, 11)
-                }
-                HoverHandler { id: collapseHov; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: sidebar.collapsed = true }
-            }
         }
 
 
@@ -492,14 +472,14 @@ Item {
             }
          }
 
-        // ── Bottom expand/collapse toggle button ─────────────────────────────
+        // ── Bottom custom sidebar toggle button (no arrows, no text) ─────────
         Item {
             id: toggleBtn
             objectName: "sidebarExpandToggle"
-            x: panel.itemX
+            x: 13
             anchors.bottom: parent.bottom
-            anchors.bottomMargin: 10
-            width: panel.itemWidth
+            anchors.bottomMargin: 12
+            width: 38
             height: 34
 
             SmoothRectangle {
@@ -509,49 +489,62 @@ Item {
                 border.color: toggleHov.hovered ? sidebar.c.b08 : "transparent"
             }
 
-            // Stationary pinned icon container centered at x = 32px (aligned with all icons)
+            // Custom sidebar logo: App window outline with left sidebar partition
             Item {
-                id: toggleIconBox
-                x: panel.fixedIconX
-                anchors.verticalCenter: parent.verticalCenter
-                width: 18; height: 18
+                anchors.centerIn: parent
+                width: 17; height: 14
 
-                // Direct vector chevron — no external SVG asset needed
-                Shape {
-                    anchors.centerIn: parent
-                    width: 10; height: 12
-                    layer.enabled: true
-                    layer.samples: 4
+                // Outer window frame
+                SmoothRectangle {
+                    anchors.fill: parent
+                    radius: 3
+                    color: "transparent"
+                    border.color: toggleHov.hovered ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
+                    border.width: 1.4
 
-                    ShapePath {
-                        strokeColor: toggleHov.hovered ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
-                        strokeWidth: 2
-                        fillColor: "transparent"
-                        capStyle: ShapePath.RoundCap
-                        joinStyle: ShapePath.RoundJoin
-                        startX: sidebar.collapsed ? 3 : 7
-                        startY: 2
-                        PathLine { x: sidebar.collapsed ? 7 : 3; y: 6 }
-                        PathLine { x: sidebar.collapsed ? 3 : 7; y: 10 }
+                    // Vertical partition line separating sidebar from main canvas
+                    SmoothRectangle {
+                        x: 5.5
+                        anchors.top: parent.top
+                        anchors.bottom: parent.bottom
+                        width: 1.4
+                        color: toggleHov.hovered ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
+                    }
+
+                    // Miniature sidebar panel fill: illuminates with accent when expanded
+                    SmoothRectangle {
+                        x: 1.2; y: 1.2
+                        width: 4.3
+                        height: parent.height - 2.4
+                        radius: 1.5
+                        color: sidebar.collapsed
+                            ? (toggleHov.hovered ? sidebar.c.b08 : "transparent")
+                            : (toggleHov.hovered ? sidebar.c.accent_hex : sidebar.c.a35)
+                    }
+
+                    // Content hints in the right partition (subtle horizontal bars)
+                    Column {
+                        anchors.left: parent.left; anchors.leftMargin: 8
+                        anchors.right: parent.right; anchors.rightMargin: 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 2
+                        opacity: toggleHov.hovered ? 0.9 : 0.6
+
+                        SmoothRectangle {
+                            width: Math.max(3, parent.width - 2); height: 1.2; radius: 0.6
+                            color: toggleHov.hovered ? sidebar.c.FG_MUTED : sidebar.c.FG_DARK
+                        }
+                        SmoothRectangle {
+                            width: Math.max(2, parent.width - 4); height: 1.2; radius: 0.6
+                            color: toggleHov.hovered ? sidebar.c.FG_MUTED : sidebar.c.FG_DARK
+                        }
                     }
                 }
             }
 
-            RakLabel {
-                anchors.left: toggleIconBox.right
-                anchors.leftMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                text: sidebar.collapsed ? (sidebar.s.btn_expand || "Perluas") : (sidebar.s.btn_collapse || "Ciutkan")
-                font.pixelSize: 11
-                font.weight: Font.Medium
-                color: toggleHov.hovered ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
-                opacity: sidebar.textAlpha
-                visible: opacity > 0.01
-            }
-
             HoverHandler { id: toggleHov; cursorShape: Qt.PointingHandCursor }
             HoverTip {
-                label: sidebar.collapsed ? (sidebar.s.btn_expand || "Perluas") : (sidebar.s.btn_collapse || "Ciutkan")
+                label: sidebar.collapsed ? (sidebar.s.btn_expand || "Perluas sidebar") : (sidebar.s.btn_collapse || "Ciutkan sidebar")
                 hovering: toggleHov.hovered
             }
             TapHandler {
