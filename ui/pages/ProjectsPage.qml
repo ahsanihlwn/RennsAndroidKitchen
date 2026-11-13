@@ -14,6 +14,7 @@ Item {
     readonly property real headingOpacity: presentationMotion ? presentationMotion.opacityAt(page,40) : 1
     property alias footer: footer
     property alias createButton: newProject
+    property alias importButton: importProject
     readonly property var identityItem: footer.identityItem
     function identityEndpoint(host) { return footer.identityEndpoint(host) }
     function menuAnchor(path) {
@@ -310,6 +311,16 @@ Item {
         id: footer
         z: 2
         anchors.bottom: parent.bottom; width: parent.width; model: page.model
+        ActionButton {
+            id: importProject
+            objectName: "importButton"
+            width: 95; height: 32; colors: page.c; primary: false
+            text: page.s.btn_import_project || "Import"
+            iconSource: page.model.icon("import", page.c.FG2)
+            iconWidth: 14; iconHeight: 14
+            animatePress: page.model.settings.animations
+            onClicked: page.model.dispatch("importProject", {})
+        }
         ActionButton {
             id: newProject
             objectName: "createButton"

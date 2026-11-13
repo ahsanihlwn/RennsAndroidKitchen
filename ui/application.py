@@ -394,14 +394,22 @@ class LauncherApplication(QObject):
                 self._output_location = None
                 self._reload()
                 self.model.presentationRequested.emit("newProject", {})
+            elif command == "importProject" and not self.model.busy:
+                self.model.presentationRequested.emit("chooseFolder", {
+                    "purpose": "importProject",
+                    "url": QUrl.fromLocalFile(self.model.location).toString()
+                })
             elif command in ("chooseOutput", "defaultLocation"):
                 self.model.presentationRequested.emit("chooseFolder", {"purpose": command,
                     "url": QUrl.fromLocalFile(self.model.location).toString()})
             elif command == "folderSelected":
                 path = QUrl(data["url"]).toLocalFile()
                 if path:
+                    path = os.path.normpath(path)
                     if data["purpose"] == "defaultLocation":
                         self.store.set_location(path)
+                    elif data["purpose"] == "importProject":
+                        self._import_project(path)
                     else:
                         self._output_location = path
                     self._reload()
@@ -523,6 +531,8 @@ class LauncherApplication(QObject):
             actions = [{"label": ui_lang.t("menu_open_project"), "action": "open"},
                        {"label": ui_lang.t("menu_unpin_project" if project.get("pinned") else "menu_pin_project"), "action": "pin"},
                        {"label": ui_lang.t("menu_delete_project"), "action": "delete", "danger": True}]
+            if project.get("imported"):
+                actions.insert(2, {"label": ui_lang.t("menu_remove_from_list"), "action": "remove_from_list", "danger": True})
         self.model.presentationRequested.emit("projectMenu", {**data, "actions": actions})
 
     def _project_action(self, data):
@@ -534,6 +544,11 @@ class LauncherApplication(QObject):
         elif action == "pin" and not identifier:
             self.store.toggle_pin(data["path"])
             self._reload()
+        elif action == "remove_from_list":
+            record = self._project(data["path"])
+            text = ui_lang.t("dlg_remove_from_list_msg", name=record["project_name"])
+            self._message(text, ui_lang.t("dlg_remove_from_list_title"),
+                          confirmation=lambda: self._remove_from_list(record["path"]))
         elif action == "delete":
             if identifier:
                 entry = next(row for row in self.store.trash.entries() if row["id"] == identifier)
@@ -607,6 +622,24 @@ class LauncherApplication(QObject):
             predicate = (lambda path: project_storage_key(path).casefold() in available) if os.name == "nt" else None
             return self.store.trash.maintain(drive_available=predicate)
         self._job(maintain)
+
+    def _import_project(self, folder_path):
+        def job():
+            try:
+                return self.store.import_project(folder_path)
+            except ValueError:
+                from core.project_trash import _key
+                for row in self.store.projects():
+                    if _key(row["path"]) == _key(folder_path):
+                        return row
+                raise
+        def on_done(record):
+            self._open_project(record, "import")
+        self._job(job, on_done)
+
+    def _remove_from_list(self, path):
+        self.store.remove_from_list(path)
+        self._reload()
 
     def _created(self, record):
         self._pending_created = record

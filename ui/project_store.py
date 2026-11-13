@@ -26,12 +26,40 @@ def _write_json(path, value):
             os.unlink(temporary)
 
 
+_ACTIVE_STORES: list["ProjectStore"] = []
+
+
+def find_project_record(path: str) -> dict | None:
+    """Find a project record by path across active stores or central projects.json."""
+    if not path:
+        return None
+    req_key = _key(path)
+    for store in reversed(_ACTIVE_STORES):
+        try:
+            for row in store.projects():
+                if isinstance(row, dict) and _key(row.get("path", "")) == req_key:
+                    return row
+        except Exception:
+            pass
+
+    default_file = Path(PROJECT_DATA_DIR) / "projects.json"
+    if default_file.is_file():
+        try:
+            for row in _read(default_file):
+                if isinstance(row, dict) and _key(row.get("path", "")) == req_key:
+                    return row
+        except Exception:
+            pass
+    return None
+
+
 class ProjectStore:
     def __init__(self, directory=PROJECT_DATA_DIR):
         self.directory = Path(directory)
         self.projects_path = self.directory / "projects.json"
         self.location_path = self.directory / "default_location.json"
         self.trash = ProjectTrash(str(self.directory))
+        _ACTIVE_STORES.append(self)
 
     def projects(self):
         rows = _read(self.projects_path)
@@ -84,11 +112,25 @@ class ProjectStore:
         root = os.path.join(base, name)
         if any(_key(row["path"]) == _key(root) for row in rows) or os.path.lexists(root):
             raise FileExistsError(f"A project or folder already exists at {root}")
-        os.makedirs(os.path.join(root, port1, "config"))
-        if port2:
-            os.makedirs(os.path.join(root, port2, "config"))
+        target1 = arguments.get("target1") or None
+        target2 = arguments.get("target2") if mode == 2 else None
+        if target1:
+            target1 = os.path.normpath(str(target1).strip())
+            if not target1 or not os.path.isdir(target1):
+                target1 = None
+        if target2:
+            target2 = os.path.normpath(str(target2).strip())
+            if not target2 or not os.path.isdir(target2):
+                target2 = None
+
+        from core.project_config import setup_project_container
+        setup_project_container(root, name, mode, port1, port2, target1, target2)
         record = {"project_name": name, "path": root, "port1": port1,
                   "port2": port2, "mode": mode}
+        if target1:
+            record["port1_target"] = target1
+        if target2:
+            record["port2_target"] = target2
         _write(self.projects_path, [*rows, record])
         return record
 
@@ -101,3 +143,75 @@ class ProjectStore:
             raise ValueError("pin_limit")
         target["pinned"] = not target.get("pinned", False)
         _write(self.projects_path, rows)
+
+    def update_cached_size(self, path, size_str):
+        rows = self.projects()
+        target = next((row for row in rows if _key(row["path"]) == _key(path)), None)
+        if target is None:
+            return None
+        if target.get("cached_size") == size_str:
+            return target
+        target["cached_size"] = size_str
+        _write(self.projects_path, rows)
+        return target
+
+    def recycle_missing_projects(self, *, drive_available=None):
+        """Move projects whose root folder does not exist on an available drive to Trash.
+
+        Removable/external drives that are currently disconnected/offline are skipped
+        so that unplugged storage is never treated as deleted.
+        """
+        rows = self.projects()
+        available = self.trash._drive_available if drive_available is None else drive_available
+        missing = []
+        for row in rows:
+            path = row.get("path")
+            if not path or not isinstance(path, str):
+                continue
+            if not available(path):
+                continue
+            if not os.path.isdir(path):
+                missing.append(row)
+
+        recycled = []
+        for row in missing:
+            try:
+                entry = self.trash.recycle(row)
+                recycled.append(entry)
+            except Exception:
+                pass
+        return recycled
+
+    def import_project(self, folder_path):
+        folder_path = os.path.normpath(str(folder_path).strip())
+        if not os.path.isdir(folder_path):
+            raise FileNotFoundError(f"Folder not found: {folder_path}")
+        rows = self.projects()
+        if any(_key(row["path"]) == _key(folder_path) for row in rows):
+            raise ValueError(f"Project is already in the list: {folder_path}")
+        name = os.path.basename(folder_path)
+        if not name:
+            name = folder_path.replace(":", "").replace("\\", "_").replace("/", "_")
+
+        from core.project_config import setup_imported_project
+        setup_imported_project(folder_path)
+
+        record = {
+            "project_name": name,
+            "path": folder_path,
+            "port1": name,
+            "port2": "",
+            "mode": 1,
+            "imported": True,
+            "port1_target": folder_path,
+        }
+        _write(self.projects_path, [*rows, record])
+        return record
+
+    def remove_from_list(self, path):
+        rows = self.projects()
+        remaining = [row for row in rows if _key(row["path"]) != _key(path)]
+        if len(remaining) != len(rows):
+            _write(self.projects_path, remaining)
+            return True
+        return False
