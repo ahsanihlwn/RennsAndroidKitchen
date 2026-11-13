@@ -20,6 +20,7 @@ Item {
     // No button styles or themes are modified here.
     AppSidebar {
         id: appSidebar
+        objectName: "appSidebar"
         z: 20
         anchors.top: parent.top
         anchors.bottom: parent.bottom
