@@ -11,6 +11,7 @@ LiveGlass {
     tintColor: Qt.rgba(panel.r,panel.g,panel.b,.58)
     cornerRadius: 0
     edgeColor: "transparent"
+    sampleInSourceCoordinates: true
     HoverHandler { blocking: true; cursorShape: Qt.ArrowCursor }
     MouseArea { anchors.fill: parent; hoverEnabled: true; acceptedButtons: Qt.AllButtons; onWheel: wheel=>wheel.accepted=true }
 }
