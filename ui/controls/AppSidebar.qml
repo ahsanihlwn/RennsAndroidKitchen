@@ -103,23 +103,25 @@ Item {
     // ── Background panel ──────────────────────────────────────────────────────
     SmoothRectangle {
         id: panel
-        anchors.top: parent.top;          anchors.topMargin: 12
-        anchors.bottom: parent.bottom;    anchors.bottomMargin: 12
-        anchors.left: parent.left;        anchors.leftMargin: 8
-        anchors.right: parent.right;      anchors.rightMargin: 8
-        radius: 14
-        color: sidebar.c.BG_DARK
-        border.color: sidebar.c.b06
+        anchors.fill: parent
+        radius: 0
+        color: sidebar.c.BG2
         clip: true
 
-        readonly property real itemX: 6
-        readonly property real itemWidth: width - 12
-        readonly property real fixedIconX: 9
+        // Clean 1px right border separating sidebar from workspace
+        SmoothRectangle {
+            anchors.right: parent.right; width: 1; height: parent.height
+            color: sidebar.c.b08; z: 10
+        }
+
+        readonly property real itemX: 8
+        readonly property real itemWidth: width - 16
+        readonly property real fixedIconX: 15
 
         // ── Top / Account section ─────────────────────────────────────────────
         Item {
             id: topSection
-            x: panel.itemX; y: 12
+            x: panel.itemX; y: 18
             width: panel.itemWidth
             height: sidebar.showProfile ? 46 : (sidebar.collapsed ? 0 : 32)
             visible: sidebar.showProfile || !sidebar.collapsed
@@ -144,7 +146,7 @@ Item {
                 // Avatar container: FIXED X at 1px inside account area (center aligned with all icons at x=32 in sidebar)
                 Item {
                     id: avatarBox
-                    x: 1; y: Math.round((parent.height - 34) / 2)
+                    x: 7; y: Math.round((parent.height - 34) / 2)
                     width: 34; height: 34
 
                     RoundedImage {
