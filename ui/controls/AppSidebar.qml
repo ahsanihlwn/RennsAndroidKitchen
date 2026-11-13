@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 // AppSidebar.qml — Collapsible left sidebar for the RAK launcher.
 // Features:
-// 1. Sequenced collapse/expand animation: text fades out first before shrinking,
-//    preventing text-icon collision / "ngejedug".
-// 2. Circular progress ring for drive storage when collapsed (PathAngleArc),
-//    expanding to full detailed horizontal progress bar when expanded.
-// 3. Symmetrical alignment across all icons in both modes.
+// 1. PINNED ICONS: Icons are 100% stationary (fixed X position at all times).
+//    During collapse & expand, icons do NOT move even a single pixel.
+// 2. Sequenced animation: text fades out first, width collapses from the right.
+// 3. Circular progress ring around drive disk icon when collapsed, fading to horizontal bar when expanded.
 import QtQuick
 import QtQuick.Shapes
 
@@ -51,25 +50,25 @@ Item {
         Transition {
             from: "expanded"; to: "collapsed"
             // COLLAPSE SEQUENCE:
-            // 1. Text fades out first to prevent collision (100ms)
-            // 2. Width glides to 64px while icons slide to center and rings appear (220ms)
+            // 1. Text fades out first (100ms)
+            // 2. Width shrinks to 64px from the right (200ms) — icons STAY PINNED!
             SequentialAnimation {
                 NumberAnimation { target: sidebar; property: "textAlpha"; duration: sidebar.anims ? 100 : 0; easing.type: Easing.OutQuad }
                 ParallelAnimation {
-                    NumberAnimation { target: sidebar; property: "contentWidth"; duration: sidebar.anims ? 220 : 0; easing.type: Easing.OutCubic }
-                    NumberAnimation { target: sidebar; property: "ringProgress"; duration: sidebar.anims ? 220 : 0; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: sidebar; property: "contentWidth"; duration: sidebar.anims ? 200 : 0; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: sidebar; property: "ringProgress"; duration: sidebar.anims ? 200 : 0; easing.type: Easing.OutCubic }
                 }
             }
         },
         Transition {
             from: "collapsed"; to: "expanded"
             // EXPAND SEQUENCE:
-            // 1. Width glides to 220px first while rings return to bars (220ms)
-            // 2. Text gracefully fades in once space is ready (120ms)
+            // 1. Width expands to 220px to the right (200ms) — icons STAY PINNED!
+            // 2. Text smoothly fades in (120ms)
             SequentialAnimation {
                 ParallelAnimation {
-                    NumberAnimation { target: sidebar; property: "contentWidth"; duration: sidebar.anims ? 220 : 0; easing.type: Easing.OutCubic }
-                    NumberAnimation { target: sidebar; property: "ringProgress"; duration: sidebar.anims ? 220 : 0; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: sidebar; property: "contentWidth"; duration: sidebar.anims ? 200 : 0; easing.type: Easing.OutCubic }
+                    NumberAnimation { target: sidebar; property: "ringProgress"; duration: sidebar.anims ? 200 : 0; easing.type: Easing.OutCubic }
                 }
                 NumberAnimation { target: sidebar; property: "textAlpha"; duration: sidebar.anims ? 120 : 0; easing.type: Easing.OutQuad }
             }
@@ -88,8 +87,13 @@ Item {
         border.color: sidebar.c.b06
         clip: true
 
-        readonly property real itemWidth: width - 12
+        // Item geometry inside panel:
+        // When collapsed (panel width = 48), button item width = 36, x = 6.
+        // Center of button item is at x = 18 inside item (which is x = 24 inside panel, x = 32 in sidebar).
+        // Standard icon width = 18 -> fixed X position inside button = 18 - 9 = 9px ALWAYS!
         readonly property real itemX: 6
+        readonly property real itemWidth: width - 12
+        readonly property real fixedIconX: 9
 
         // ── Account section ───────────────────────────────────────────────────
         Item {
@@ -97,11 +101,10 @@ Item {
             x: panel.itemX; y: 12
             width: panel.itemWidth; height: 46
 
-            // Avatar container: smoothly shifts from x=4 to center as sidebar collapses
+            // Avatar container: FIXED X at 1px inside accountRow (center aligned with all icons at x=32 in sidebar)
             Item {
                 id: avatarBox
-                x: Math.round(4 + (parent.width - 34 - 4) * sidebar.ringProgress / 2)
-                y: Math.round((parent.height - 34) / 2)
+                x: 1; y: Math.round((parent.height - 34) / 2)
                 width: 34; height: 34
 
                 RoundedImage {
@@ -110,7 +113,7 @@ Item {
                 }
             }
 
-            // Name + subtitle (fades out first during collapse)
+            // Name + subtitle (expanded only, fades in/out without moving avatar)
             Column {
                 anchors.left: avatarBox.right; anchors.leftMargin: 10
                 anchors.verticalCenter: parent.verticalCenter
@@ -185,10 +188,10 @@ Item {
                     border.color: sidebar.model.page === "projects" ? sidebar.c.a35 : "transparent"
                 }
 
-                // Icon shifts dynamically into center
+                // ICON IS TOTALLY PINNED AT fixedIconX (NO MOVEMENT)
                 Image {
                     id: projIcon
-                    x: Math.round(10 + ((parent.width - 18) / 2 - 10) * sidebar.ringProgress)
+                    x: panel.fixedIconX
                     anchors.verticalCenter: parent.verticalCenter
                     width: 18; height: 18
                     source: sidebar.model.icon("project_list",
@@ -226,10 +229,10 @@ Item {
                     border.color: sidebar.model.page === "settings" ? sidebar.c.a35 : "transparent"
                 }
 
-                // Icon shifts dynamically into center
+                // ICON IS TOTALLY PINNED AT fixedIconX (NO MOVEMENT)
                 Image {
                     id: setIcon
-                    x: Math.round(10 + ((parent.width - 18) / 2 - 10) * sidebar.ringProgress)
+                    x: panel.fixedIconX
                     anchors.verticalCenter: parent.verticalCenter
                     width: 18; height: 18
                     source: sidebar.model.icon("settings_octagon",
@@ -280,10 +283,10 @@ Item {
                 color: trashHov.hovered ? sidebar.c.b05 : "transparent"
             }
 
-            // Trash icon shifts into center
+            // ICON IS TOTALLY PINNED AT fixedIconX (NO MOVEMENT)
             Image {
                 id: trashIcon
-                x: Math.round(10 + ((parent.width - 18) / 2 - 10) * sidebar.ringProgress)
+                x: panel.fixedIconX
                 anchors.verticalCenter: parent.verticalCenter
                 width: 18; height: 18
                 source: sidebar.model.icon("project_trash", sidebar.c.FG_MUTED)
@@ -311,7 +314,7 @@ Item {
             TapHandler { onTapped: sidebar.trashClicked() }
         }
 
-        // ── Drive storage section (With Circular Progress Ring on Collapse) ───
+        // ── Drive storage section ─────────────────────────────────────────────
         Column {
             id: driveColumn
             x: panel.itemX
@@ -326,12 +329,7 @@ Item {
                     required property var modelData
                     required property int index
                     width: driveColumn.width
-                    height: sidebar.collapsed ? 40 : 46
-
-                    Behavior on height {
-                        enabled: sidebar.anims
-                        NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
-                    }
+                    height: 42
 
                     SmoothRectangle {
                         anchors.fill: parent; radius: 8
@@ -339,10 +337,12 @@ Item {
                         border.color: modelData.active ? (modelData.distro ? sidebar.c.a30 : sidebar.c.b08) : "transparent"
                     }
 
-                    // ── COLLAPSED MODE: CIRCULAR RING SURROUNDING THE DRIVE ICON ───
+                    // ── CIRCULAR PROGRESS RING (Fades in/out around pinned icon) ────
                     Item {
-                        id: ringContainer
-                        anchors.centerIn: parent
+                        id: ringArea
+                        // Center of the ring is strictly aligned to the fixed disk icon (center at x = fixedIconX + 9 = 18)
+                        x: panel.fixedIconX - 9
+                        anchors.verticalCenter: parent.verticalCenter
                         width: 36; height: 36
                         opacity: sidebar.ringProgress
                         visible: opacity > 0.01
@@ -352,7 +352,7 @@ Item {
                             layer.enabled: true
                             layer.samples: 4
 
-                            // Background subtle circular track
+                            // Background circular track
                             ShapePath {
                                 strokeColor: sidebar.c.b10
                                 strokeWidth: 2.2
@@ -366,7 +366,7 @@ Item {
                                 }
                             }
 
-                            // Colored progress arc for capacity fraction
+                            // Colored progress arc
                             ShapePath {
                                 strokeColor: modelData.barColor || sidebar.c.accent_hex
                                 strokeWidth: 2.2
@@ -380,65 +380,52 @@ Item {
                                 }
                             }
                         }
-
-                        // Drive disk icon placed in center of the ring
-                        Image {
-                            anchors.centerIn: parent
-                            width: 14; height: 14
-                            source: sidebar.model.icon("project_disk", modelData.distro ? sidebar.c.accent_hex : "")
-                            sourceSize: Qt.size(14, 14)
-                            opacity: modelData.active ? 1 : 0.4
-                        }
                     }
 
-                    // ── EXPANDED MODE: HORIZONTAL LAYOUT WITH PROGRESS BAR ─────────
-                    Item {
-                        id: expandedContainer
-                        anchors.fill: parent
-                        opacity: 1.0 - sidebar.ringProgress
+                    // ── DRIVE DISK ICON IS TOTALLY PINNED AT fixedIconX (NO MOVEMENT) ──
+                    Image {
+                        id: diskIcon
+                        x: panel.fixedIconX
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 18; height: 18
+                        source: sidebar.model.icon("project_disk", modelData.distro ? sidebar.c.accent_hex : "")
+                        sourceSize: Qt.size(18, 18)
+                        opacity: modelData.active ? 1 : 0.4
+                    }
+
+                    // ── EXPANDED DRIVE DETAILS (Name, GB usage, horizontal bar) ───────
+                    Column {
+                        anchors.left: diskIcon.right; anchors.leftMargin: 10
+                        anchors.right: parent.right; anchors.rightMargin: 10
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: 4
+                        opacity: sidebar.textAlpha
                         visible: opacity > 0.01
 
-                        Image {
-                            id: expDiskIcon
-                            x: 10
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 18; height: 18
-                            source: sidebar.model.icon("project_disk", modelData.distro ? sidebar.c.accent_hex : "")
-                            sourceSize: Qt.size(18, 18)
-                            opacity: modelData.active ? 1 : 0.4
+                        Item {
+                            width: parent.width; height: 14
+                            RakLabel {
+                                anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+                                text: modelData.name || modelData.key
+                                font.pixelSize: 10; font.weight: Font.DemiBold
+                                color: modelData.active ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
+                            }
+                            RakLabel {
+                                anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
+                                text: (modelData.used / 1073741824).toFixed(0) + " / " + (modelData.total / 1073741824).toFixed(0) + " GB"
+                                font.pixelSize: 9; color: sidebar.c.FG_MUTED
+                            }
                         }
 
-                        Column {
-                            anchors.left: expDiskIcon.right; anchors.leftMargin: 10
-                            anchors.right: parent.right; anchors.rightMargin: 10
-                            anchors.verticalCenter: parent.verticalCenter
-                            spacing: 4
-
-                            Item {
-                                width: parent.width; height: 14
-                                RakLabel {
-                                    anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
-                                    text: modelData.name || modelData.key
-                                    font.pixelSize: 10; font.weight: Font.DemiBold
-                                    color: modelData.active ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
-                                }
-                                RakLabel {
-                                    anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-                                    text: (modelData.used / 1073741824).toFixed(0) + " / " + (modelData.total / 1073741824).toFixed(0) + " GB"
-                                    font.pixelSize: 9; color: sidebar.c.FG_MUTED
-                                }
-                            }
-
-                            // Horizontal capacity bar
+                        // Horizontal capacity bar
+                        SmoothRectangle {
+                            width: parent.width
+                            height: 3; radius: 1.5
+                            color: sidebar.c.b08
                             SmoothRectangle {
-                                width: parent.width
-                                height: 3; radius: 1.5
-                                color: sidebar.c.b08
-                                SmoothRectangle {
-                                    width: parent.width * Math.max(0, Math.min(1, modelData.fraction))
-                                    height: parent.height; radius: parent.radius
-                                    color: modelData.barColor || sidebar.c.accent_hex
-                                }
+                                width: parent.width * Math.max(0, Math.min(1, modelData.fraction))
+                                height: parent.height; radius: parent.radius
+                                color: modelData.barColor || sidebar.c.accent_hex
                             }
                         }
                     }
