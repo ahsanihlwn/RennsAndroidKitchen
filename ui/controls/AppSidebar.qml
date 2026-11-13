@@ -35,6 +35,7 @@ Item {
     readonly property var c: model.colors
     readonly property var s: model.strings
     readonly property bool anims: model.settings.animations
+    readonly property bool showProfile: !!model.privateEnabled && !!model.profile.name
 
     // ── Sequenced States & Transitions ────────────────────────────────────────
     states: [
@@ -115,45 +116,104 @@ Item {
         readonly property real itemWidth: width - 12
         readonly property real fixedIconX: 9
 
-        // ── Account section ───────────────────────────────────────────────────
+        // ── Top / Account section ─────────────────────────────────────────────
         Item {
-            id: accountRow
+            id: topSection
             x: panel.itemX; y: 12
-            width: panel.itemWidth; height: 46
+            width: panel.itemWidth
+            height: sidebar.showProfile ? 46 : (sidebar.collapsed ? 0 : 32)
+            visible: sidebar.showProfile || !sidebar.collapsed
 
-            // Avatar container: FIXED X at 1px inside accountRow (center aligned with all icons at x=32 in sidebar)
+            // Profile card (Visible only when connected to rennsproject / OFCL)
             Item {
-                id: avatarBox
-                x: 1; y: Math.round((parent.height - 34) / 2)
-                width: 34; height: 34
+                id: profileArea
+                visible: sidebar.showProfile
+                anchors.left: parent.left
+                anchors.right: collapseBtn.left
+                anchors.rightMargin: 4
+                anchors.top: parent.top
+                anchors.bottom: parent.bottom
 
-                RoundedImage {
+                // Hover feedback
+                SmoothRectangle {
                     anchors.fill: parent
-                    source: sidebar.model.profile.avatar || ""
+                    radius: 8
+                    color: profileHov.hovered ? sidebar.c.b06 : "transparent"
                 }
-            }
 
-            // Name + subtitle (expanded only, fades in concurrently with expand)
-            Column {
-                anchors.left: avatarBox.right; anchors.leftMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                opacity: sidebar.textAlpha
-                visible: opacity > 0.01
-                spacing: 1
+                // Avatar container: FIXED X at 1px inside account area (center aligned with all icons at x=32 in sidebar)
+                Item {
+                    id: avatarBox
+                    x: 1; y: Math.round((parent.height - 34) / 2)
+                    width: 34; height: 34
 
-                RakLabel {
-                    text: sidebar.model.profile.name || ""
-                    font.pixelSize: 12; font.weight: Font.DemiBold
-                    color: sidebar.c.FG_BRIGHT
+                    RoundedImage {
+                        anchors.fill: parent
+                        source: sidebar.model.profile.avatar || ""
+                    }
                 }
-                RakLabel {
-                    text: sidebar.model.profile.subtitle || ""
-                    font.pixelSize: 10; color: sidebar.c.FG_MUTED
+
+                // Name + subtitle + badge (expanded only, fades in concurrently with expand)
+                Item {
+                    id: profileTextArea
+                    anchors.left: avatarBox.right; anchors.leftMargin: 10
+                    anchors.right: parent.right; anchors.rightMargin: 2
+                    anchors.verticalCenter: parent.verticalCenter
+                    height: 32
+                    opacity: sidebar.textAlpha
+                    visible: opacity > 0.01
+                    clip: true
+
+                    RakLabel {
+                        id: profileName
+                        x: 0; y: 0; height: 17
+                        text: sidebar.model.profile.name || ""
+                        font.pixelSize: 12; font.weight: Font.DemiBold
+                        color: sidebar.c.FG_BRIGHT
+                        elide: Text.ElideRight
+                        width: Math.min(implicitWidth, parent.width - (profileBadge.visible ? 18 : 0))
+                    }
+
+                    Image {
+                        id: profileBadge
+                        x: profileName.x + profileName.width + 4
+                        y: 1.5
+                        width: 14; height: 14
+                        visible: !!sidebar.model.profile.badge
+                        source: visible ? sidebar.model.icon(sidebar.model.profile.badge, "") : ""
+                        sourceSize: Qt.size(14, 14)
+
+                        HoverHandler { id: badgeHover }
+                        HoverTip {
+                            label: "Verified (" + (sidebar.model.profile.verifiedLevel || "") + ")"
+                            hovering: badgeHover.hovered
+                        }
+                    }
+
+                    RakLabel {
+                        id: profileStatus
+                        x: 0; y: 17; height: 15
+                        width: parent.width
+                        text: sidebar.model.profile.subtitle || ""
+                        font.pixelSize: 10
+                        color: sidebar.c.FG_MUTED
+                        elide: Text.ElideRight
+                    }
+                }
+
+                HoverHandler {
+                    id: profileHov
+                    cursorShape: (sidebar.model.profile.canEdit !== false) ? Qt.PointingHandCursor : Qt.ArrowCursor
+                }
+                TapHandler {
+                    enabled: sidebar.model.profile.canEdit !== false
+                    onTapped: sidebar.model.dispatch("profile", {})
                 }
             }
 
             // Collapse toggle chevron (expanded only)
             Item {
+                id: collapseBtn
                 anchors.right: parent.right; anchors.rightMargin: 4
                 anchors.verticalCenter: parent.verticalCenter
                 width: 22; height: 22
@@ -172,20 +232,21 @@ Item {
                 HoverHandler { id: collapseHov; cursorShape: Qt.PointingHandCursor }
                 TapHandler { onTapped: sidebar.collapsed = true }
             }
-
-            // Tap anywhere on collapsed rail to expand
-            TapHandler {
-                enabled: sidebar.collapsed
-                onTapped: sidebar.collapsed = false
-            }
         }
 
-        // Divider under account
+        // Tap anywhere on collapsed rail to expand
+        TapHandler {
+            enabled: sidebar.collapsed
+            onTapped: sidebar.collapsed = false
+        }
+
+        // Divider under account (visible only when profile is shown)
         SmoothRectangle {
             id: divAccount
+            visible: sidebar.showProfile
             anchors.horizontalCenter: parent.horizontalCenter
-            y: accountRow.y + accountRow.height + 6
-            width: parent.width - 16; height: 1
+            y: topSection.y + topSection.height + 6
+            width: parent.width - 16; height: visible ? 1 : 0
             color: sidebar.c.b06
         }
 
@@ -193,7 +254,7 @@ Item {
         Column {
             id: navColumn
             x: panel.itemX
-            y: divAccount.y + 10
+            y: sidebar.showProfile ? (divAccount.y + 10) : (topSection.y + topSection.height + (sidebar.collapsed ? 0 : 8))
             width: panel.itemWidth
             spacing: 5
 

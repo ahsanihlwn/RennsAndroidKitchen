@@ -6,7 +6,7 @@ Item {
     // PageMotion owns the visible button copies until the native handoff.
     enabled: opacity>.99
     required property var model
-    property bool showProfile: true
+    property bool showProfile: false
     default property alias actions: actionRow.data
     height: 80
     property alias identityItem: profile

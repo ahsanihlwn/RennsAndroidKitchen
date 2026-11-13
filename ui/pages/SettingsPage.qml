@@ -12,16 +12,9 @@ Item {
     readonly property bool motionInBackdrop: true
     readonly property real headingOpacity: presentationMotion ? presentationMotion.opacityAt(page,40) : 1
     property alias footer: footer
-    readonly property var identityItem: profileCard
+    readonly property var identityItem: null
     function identityEndpoint(host) {
-        const origin=profileCard.mapToItem(host,0,0)
-        if (!model.profile.name || origin.y<77 || origin.y+74>height-78) return null
-        let extras=[]
-        if (profileEdit.visible) extras.push({rect:profileEdit.mapToItem(host,0,0,30,30),icon:profileEdit.iconSource})
-        if (profileSync.visible) extras.push({rect:profileSync.mapToItem(host,0,0,profileSync.width,profileSync.height),text:profileSync.text,color:profileSync.color,font:profileSync.font})
-        return {card:true,surface:Qt.rect(origin.x,origin.y,profileCard.width,74),extras:extras,
-                avatar:Qt.rect(origin.x+14,origin.y+12,48,48),name:Qt.rect(origin.x+74,origin.y+12,profileName.implicitWidth,23),
-                status:Qt.rect(origin.x+74,origin.y+37,profileStatus.implicitWidth,23),badge:badge.visible?badge.mapToItem(host,0,0,18,18):null,nameSize:13,statusSize:11}
+        return null
     }
     function revealBands() {
         let bands=[]
@@ -65,18 +58,6 @@ Item {
         Column {
             id: content
             x: 16; y: 8; width: parent.width - 32; spacing: 20
-            Card {
-                id: profileCard
-                objectName: "settingsProfileCard"
-                visible: !!page.model.profile.name
-                height: visible ? 74 : 0
-                RoundedImage { x: 14; y: 12; width: 48; height: 48; source: page.model.profile.avatar || "" }
-                RakLabel { id: profileName; x: 74; y: 12; height: 23; text: page.model.profile.name || ""; color: page.c.FG; font.pixelSize: 13; font.weight: Font.DemiBold }
-                Image { id: badge; x: profileName.x+profileName.width+6; y: 14.5; width: 18; height: 18; visible: !!page.model.profile.badge; source: visible?page.model.icon(page.model.profile.badge, ""):""; sourceSize: Qt.size(18,18); HoverHandler { id: badgeHover } HoverTip { label: "Verified ("+(page.model.profile.verifiedLevel || "")+")"; hovering: badgeHover.hovered } }
-                RakLabel { id: profileSync; x: badge.visible?badge.x+24:profileName.x+profileName.width+6; y: 12; height: 23; visible: !!page.model.profile.sync; text: "("+(page.model.profile.sync || "")+")"; font.pixelSize: 11; color: page.model.profile.sync==="synced"?page.c.GREEN_STATUS:page.model.profile.sync==="local only"?page.c.RED_SYNC:page.c.FG_SYNC }
-                RakLabel { id: profileStatus; x: 74; y: 37; height: 23; text: page.model.profile.subtitle || ""; color: page.c.FG_MUTED; font.pixelSize: 11 }
-                RakButton { id: profileEdit; anchors.right: parent.right; anchors.rightMargin: 14; y: 21; width: 30; height: 30; iconSource: page.model.icon("profile_edit", ""); iconWidth: 20; iconHeight: 20; hoverFillColor: page.c.b06; cornerRadius: 6; toolTip: page.s.tooltip_edit_profile; visible: page.model.profile.canEdit!==false; onClicked: page.model.dispatch("profile", {}) }
-            }
             Card {
                 height: 139
                 CardTitle { text: page.s.hdr_product_info; iconName: "info" }
