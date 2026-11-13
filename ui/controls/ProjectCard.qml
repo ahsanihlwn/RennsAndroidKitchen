@@ -17,6 +17,7 @@ RakCard {
     property bool cardPressed: false
     property real cardScale: 1
     readonly property bool transformed: Math.abs(cardScale-1)>.0001
+    readonly property bool isDeleting: card.model.deletingPath === card.modelData.path
     scale: cardScale
     function animateCard(target,duration) {
         hoverAnimation.stop()
@@ -30,15 +31,16 @@ RakCard {
     objectName: (presentationCopy ? "projectMotionCard_" : "projectCard_") + modelData.path
     height: 66
     color: cardHover.hovered ? card.c.BG_SELECTED : card.c.BG2
-    border.color: cardHover.hovered ? card.c.a30 : card.c.b07
+    border.color: isDeleting ? "#ef4444" : (cardHover.hovered ? card.c.a30 : card.c.b07)
+    border.width: isDeleting ? 1.5 : 1
     radius: 10
     HoverHandler {
-        id: cardHover; enabled: card.interactive; cursorShape: Qt.PointingHandCursor
+        id: cardHover; enabled: card.interactive && !card.isDeleting; cursorShape: Qt.PointingHandCursor
         onHoveredChanged: if (!card.cardPressed) card.animateCard(hovered?.995:1,hovered?170:150)
     }
     HoverTip { label: card.trash?(card.modelData.toolTip || ""):""; hovering: cardHover.hovered }
     TapHandler {
-        enabled: card.interactive && !card.model.busy
+        enabled: card.interactive && !card.model.busy && !card.isDeleting
         onPressedChanged: if (!pressed || point.position.x<card.width-90) card.cardPressed=pressed
         onTapped: if (!card.trash) card.model.dispatch("openProject", {"path": card.modelData.path})
     }
@@ -88,21 +90,57 @@ RakCard {
         cornerRadius: 6; fillColor: "transparent"; hoverFillColor: card.c.a12
         iconSource: card.model.icon("project_more", ""); iconWidth: 14; iconHeight: 14; leftPadding: 0; rightPadding: 0
         animatePress: card.model.settings.animations
-        enabled: card.interactive && !card.model.busy
+        enabled: card.interactive && !card.model.busy && !card.isDeleting
         onClicked: {
             const position = mapToItem(null, 0, height)
             card.model.dispatch("projectMenu", {path: card.modelData.path, id: card.modelData._trash_id || "", x: position.x, y: position.y})
         }
     }
-    SmoothRectangle {
-        id: deletion
+    Item {
+        id: deletionEffect
         objectName: "deleteProgress_" + card.modelData.path
-        visible: card.model.deletingPath===card.modelData.path && card.model.settings.animations
-        x: 12; y: card.height+2; width: Math.max(0,card.width-24); height: 3; radius: 1.5
-        color: card.c.a18; clip: true
-        property real phase: 0
-        NumberAnimation on phase { from: 0; to: 1; duration: 1300; loops: Animation.Infinite; running: deletion.visible }
-        SmoothRectangle { x: -width+deletion.phase*(deletion.width+width); width: Math.max(24,deletion.width*.28); height: 3; radius: 1.5; color: card.c.accent_hex }
+        anchors.fill: parent
+        visible: card.isDeleting
+        z: 2
+        clip: true
+
+        SmoothRectangle {
+            anchors.fill: parent
+            radius: card.radius
+            color: "#ef4444"
+            opacity: 0.12
+        }
+
+        SmoothRectangle {
+            anchors.fill: parent
+            radius: card.radius
+            color: "transparent"
+            border.width: 1.5
+            border.color: "#ef4444"
+            opacity: 0.85
+        }
+
+        Rectangle {
+            id: shimmerBeam
+            width: Math.max(160, card.width * 0.35)
+            height: parent.height
+            gradient: Gradient {
+                orientation: Gradient.Horizontal
+                GradientStop { position: 0.00; color: "#00ef4444" }
+                GradientStop { position: 0.25; color: "#25ff6b6b" }
+                GradientStop { position: 0.50; color: "#60ffa3a3" }
+                GradientStop { position: 0.75; color: "#25ff6b6b" }
+                GradientStop { position: 1.00; color: "#00ef4444" }
+            }
+
+            NumberAnimation on x {
+                from: -shimmerBeam.width
+                to: card.width
+                duration: 1100
+                loops: Animation.Infinite
+                running: deletionEffect.visible && card.model.settings.animations
+            }
+        }
     }
     RakButton {
         x: parent.width - 57; y: 18; width: 28; height: 28
@@ -112,7 +150,7 @@ RakCard {
         edgeColor: cardHover.hovered ? card.c.a30 : card.c.b05; hoverEdgeColor: card.c.a30
         iconSource: card.model.icon("arrow_right", card.c.FG)
         iconWidth: 12; iconHeight: 12; leftPadding: 0; rightPadding: 0
-        enabled: card.interactive && !card.model.busy
+        enabled: card.interactive && !card.model.busy && !card.isDeleting
         onClicked: card.model.dispatch(card.trash ? "restoreProject" : "openProject", {path: card.modelData.path, id: card.modelData._trash_id || ""})
     }
 }

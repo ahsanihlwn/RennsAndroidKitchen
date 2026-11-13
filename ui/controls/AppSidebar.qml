@@ -564,11 +564,11 @@ Item {
 
                         SmoothRectangle {
                             width: Math.max(3, parent.width - 2); height: 1.2; radius: 0.6
-                            color: toggleHov.hovered ? sidebar.c.FG_MUTED : sidebar.c.FG_DARK
+                            color: toggleHov.hovered ? sidebar.c.FG_MUTED : sidebar.c.FG3
                         }
                         SmoothRectangle {
                             width: Math.max(2, parent.width - 4); height: 1.2; radius: 0.6
-                            color: toggleHov.hovered ? sidebar.c.FG_MUTED : sidebar.c.FG_DARK
+                            color: toggleHov.hovered ? sidebar.c.FG_MUTED : sidebar.c.FG3
                         }
                     }
                 }
