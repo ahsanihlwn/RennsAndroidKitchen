@@ -31,8 +31,8 @@ RakCard {
     objectName: (presentationCopy ? "projectMotionCard_" : "projectCard_") + modelData.path
     height: 66
     color: cardHover.hovered ? card.c.BG_SELECTED : card.c.BG2
-    border.color: isDeleting ? "#ef4444" : (cardHover.hovered ? card.c.a30 : card.c.b07)
-    border.width: isDeleting ? 1.5 : 1
+    border.color: isDeleting ? "#85ef4444" : (cardHover.hovered ? card.c.a30 : card.c.b07)
+    border.width: 1
     radius: 10
     HoverHandler {
         id: cardHover; enabled: card.interactive && !card.isDeleting; cursorShape: Qt.PointingHandCursor
@@ -104,41 +104,85 @@ RakCard {
         z: 2
         clip: true
 
-        SmoothRectangle {
-            anchors.fill: parent
-            radius: card.radius
-            color: "#ef4444"
-            opacity: 0.12
-        }
-
+        // Inward border glow frame tipis mengikuti rounded corners kartu
         SmoothRectangle {
             anchors.fill: parent
             radius: card.radius
             color: "transparent"
             border.width: 1.5
-            border.color: "#ef4444"
-            opacity: 0.85
+            border.color: "#18ef4444"
         }
 
-        Rectangle {
-            id: shimmerBeam
-            width: Math.max(160, card.width * 0.35)
-            height: parent.height
-            gradient: Gradient {
-                orientation: Gradient.Horizontal
-                GradientStop { position: 0.00; color: "#00ef4444" }
-                GradientStop { position: 0.25; color: "#25ff6b6b" }
-                GradientStop { position: 0.50; color: "#60ffa3a3" }
-                GradientStop { position: 0.75; color: "#25ff6b6b" }
-                GradientStop { position: 1.00; color: "#00ef4444" }
-            }
+        readonly property real runnerW: 100
+        property real phase: 0
+        readonly property real runnerX: -runnerW + phase * (card.width + runnerW * 2)
 
-            NumberAnimation on x {
-                from: -shimmerBeam.width
-                to: card.width
-                duration: 1100
-                loops: Animation.Infinite
-                running: deletionEffect.visible && card.model.settings.animations
+        NumberAnimation on phase {
+            from: 0; to: 1
+            duration: 1250
+            loops: Animation.Infinite
+            running: deletionEffect.visible && card.model.settings.animations
+        }
+
+        // Top border light runner + inward impact
+        Item {
+            anchors.top: parent.top; anchors.left: parent.left; anchors.right: parent.right
+            anchors.leftMargin: 6; anchors.rightMargin: 6
+            height: 5
+            clip: true
+
+            Rectangle {
+                x: deletionEffect.runnerX; y: 1; width: deletionEffect.runnerW; height: 3.5
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.00; color: "#00ef4444" }
+                    GradientStop { position: 0.30; color: "#14ff5555" }
+                    GradientStop { position: 0.50; color: "#25ff6b6b" }
+                    GradientStop { position: 0.70; color: "#14ff5555" }
+                    GradientStop { position: 1.00; color: "#00ef4444" }
+                }
+            }
+            Rectangle {
+                x: deletionEffect.runnerX; y: 0; width: deletionEffect.runnerW; height: 1
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.00; color: "#00ef4444" }
+                    GradientStop { position: 0.25; color: "#70ff6b6b" }
+                    GradientStop { position: 0.50; color: "#ffffa3a3" }
+                    GradientStop { position: 0.75; color: "#70ff6b6b" }
+                    GradientStop { position: 1.00; color: "#00ef4444" }
+                }
+            }
+        }
+
+        // Bottom border light runner + inward impact
+        Item {
+            anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.right: parent.right
+            anchors.leftMargin: 6; anchors.rightMargin: 6
+            height: 5
+            clip: true
+
+            Rectangle {
+                x: deletionEffect.runnerX; y: 0.5; width: deletionEffect.runnerW; height: 3.5
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.00; color: "#00ef4444" }
+                    GradientStop { position: 0.30; color: "#14ff5555" }
+                    GradientStop { position: 0.50; color: "#25ff6b6b" }
+                    GradientStop { position: 0.70; color: "#14ff5555" }
+                    GradientStop { position: 1.00; color: "#00ef4444" }
+                }
+            }
+            Rectangle {
+                x: deletionEffect.runnerX; y: 4; width: deletionEffect.runnerW; height: 1
+                gradient: Gradient {
+                    orientation: Gradient.Horizontal
+                    GradientStop { position: 0.00; color: "#00ef4444" }
+                    GradientStop { position: 0.25; color: "#70ff6b6b" }
+                    GradientStop { position: 0.50; color: "#ffffa3a3" }
+                    GradientStop { position: 0.75; color: "#70ff6b6b" }
+                    GradientStop { position: 1.00; color: "#00ef4444" }
+                }
             }
         }
     }
