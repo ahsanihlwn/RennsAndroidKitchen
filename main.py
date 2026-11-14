@@ -72,3 +72,71 @@ class Main(QuickWorkspace):
         if cls._config_service_mgr is not None:cls._config_service_mgr.stop()
         cls._config_service_mgr=None
         cls._config_service_ready=False
+
+if __name__ == "__main__":
+    import sys
+    import os
+    import argparse
+    from pathlib import Path
+    from PySide6.QtGui import QGuiApplication
+    from ui.runtime import initialize_quick_runtime
+    from core.fonts import configure_text_rendering_env, apply_app_font
+
+    configure_text_rendering_env()
+    initialize_quick_runtime(webengine=True)
+    app = QGuiApplication(sys.argv)
+    apply_app_font(app, polish_widgets=False)
+
+    parser = argparse.ArgumentParser(description="RAK Workspace Editor")
+    parser.add_argument("project", help="Path to project directory")
+    parser.add_argument("p1", help="Primary partition")
+    parser.add_argument("p2", nargs="?", default=None, help="Secondary partition")
+    parser.add_argument("--palette", default=None, help="Theme palette")
+    parser.add_argument("--lang", default=None, help="Language code")
+    args = parser.parse_args()
+
+    from core import ui_lang
+    from main_ext.class_ThemeUi import theme
+    from ui.presentation import LauncherModel
+
+    theme.load()
+    ui_lang.init()
+    palette = args.palette or theme.name
+    lang = args.lang or ui_lang._current_lang
+
+    preferences = LauncherModel(
+        palette=palette,
+        language=lang,
+        settings={
+            "effects": theme.effect_level,
+            "animations": theme.animations_enabled,
+            "treeMode": theme.tree_view_mode
+        }
+    )
+
+    editor = Main(
+        args.project,
+        args.p1,
+        args.p2,
+        preferences=preferences,
+        enable_private_services=True,
+        enable_cli_services=True
+    )
+
+    def on_ready():
+        print("[RAK_WORKSPACE_READY]", flush=True)
+        editor.reveal()
+
+    def on_return():
+        print("[RAK_WORKSPACE_RETURN]", flush=True)
+        sys.exit(42)
+
+    def on_failed(err):
+        print(f"[RAK_WORKSPACE_FAILED] {err}", flush=True)
+        sys.exit(1)
+
+    editor.ready.connect(on_ready)
+    editor.return_to_project_signal.connect(on_return)
+    editor.preparation_failed.connect(on_failed)
+
+    sys.exit(app.exec())

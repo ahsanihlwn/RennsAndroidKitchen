@@ -14,6 +14,7 @@ def main():
     repo = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(repo))
     os.chdir(repo)
+    os.environ["RAK_TEST_IN_PROCESS"] = "1"
     from core.fonts import configure_text_rendering_env, apply_app_font
     configure_text_rendering_env()
     from ui.runtime import initialize_quick_runtime

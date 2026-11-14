@@ -6,7 +6,9 @@ import logging
 import os
 import re
 import time
+import sys
 import threading
+from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QTimer, QUrl, Qt, Signal, Slot, QPoint, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QIcon
@@ -119,6 +121,7 @@ class LauncherApplication(QObject):
         self._prewarm_thread = None
         self._prewarm_complete = False
         self._pending_editor = None
+        self._workspace_process = None
         self._startup_started = False
         self._startup_ready = False
         self._startup_verification_pending = False
@@ -650,7 +653,7 @@ class LauncherApplication(QObject):
             self._open_project(record,"create")
 
     def _open_project(self, record, origin="existing"):
-        if self.editor is not None or self.model.openingPath:
+        if self.editor is not None or self.model.openingPath or getattr(self, "_workspace_process", None) is not None:
             return
         if not os.path.isdir(record["path"]):
             raise FileNotFoundError(record["path"])
@@ -659,7 +662,86 @@ class LauncherApplication(QObject):
         log_project_event("OPEN_START", project_root, origin=origin)
         self.model.setBusy(True)
         self.model.setOpeningPath(project_root)
-        QTimer.singleShot(0, lambda: self._construct_editor(record, origin, opened_at))
+
+        if getattr(self, "_in_process_workspace", False) or os.environ.get("RAK_TEST_IN_PROCESS") == "1":
+            QTimer.singleShot(0, lambda: self._construct_editor(record, origin, opened_at))
+            return
+
+        self._spawn_workspace_process(record, origin, opened_at)
+
+    def _spawn_workspace_process(self, record, origin, opened_at):
+        from PySide6.QtCore import QProcess
+        process = QProcess(self)
+        self._workspace_process = process
+        repo_root = str(Path(__file__).resolve().parents[1])
+        main_script = str(Path(__file__).resolve().parents[1] / "main.py")
+        args = [main_script, record["path"], record["port1"]]
+        if record.get("port2"):
+            args.append(record["port2"])
+        args.extend(["--palette", self.model.palette, "--lang", self.model.language])
+        process.setWorkingDirectory(repo_root)
+        process.setProgram(sys.executable)
+        process.setArguments(args)
+
+        def on_stdout():
+            data = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
+            for line in data.splitlines():
+                if "[RAK_WORKSPACE_READY]" in line:
+                    self._on_workspace_process_ready(record["path"], opened_at, origin)
+                elif "[RAK_WORKSPACE_FAILED]" in line:
+                    err = line.partition("[RAK_WORKSPACE_FAILED]")[2].strip()
+                    self._on_workspace_process_failed(err)
+
+        def on_finished(exit_code, exit_status):
+            self._workspace_process = None
+            self.model.setOpeningPath("")
+            self.model.setBusy(False)
+            self._reload()
+            self.window.setOpacity(1)
+            self.show()
+
+        def on_error(err):
+            if process is getattr(self, "_workspace_process", None):
+                self._workspace_process = None
+                self._on_workspace_process_failed(f"Failed to start workspace: {err}")
+
+        process.readyReadStandardOutput.connect(on_stdout)
+        process.finished.connect(on_finished)
+        process.errorOccurred.connect(on_error)
+        process.start()
+
+    def _on_workspace_process_ready(self, project_root, opened_at, origin):
+        self._log_project_entered(project_root, opened_at, origin)
+        self.model.setOpeningPath("")
+        if not self.model.settings["animations"]:
+            self.hide()
+            self.window.setOpacity(1)
+            return
+        fade = QPropertyAnimation(self.window, b"opacity", self)
+        fade.setDuration(160)
+        fade.setStartValue(self.window.opacity())
+        fade.setEndValue(0)
+        fade.setEasingCurve(QEasingCurve.OutCubic)
+        def finish():
+            fade.deleteLater()
+            self.hide()
+            self.window.setOpacity(1)
+        fade.finished.connect(finish)
+        fade.start()
+
+    def _on_workspace_process_failed(self, error):
+        logging.error("Workspace process failed: %s", error)
+        if getattr(self, "_workspace_process", None) is not None:
+            try:
+                self._workspace_process.kill()
+            except Exception:
+                pass
+            self._workspace_process = None
+        self.model.setOpeningPath("")
+        self.model.setBusy(False)
+        self.window.setOpacity(1)
+        self.show()
+        self._message(str(error))
 
     def _show_editor_with_reveal(self, project_root, opened_at, origin):
         editor, loader = self.editor, self.loader
@@ -705,7 +787,8 @@ class LauncherApplication(QObject):
         fade.start()
 
     def _log_project_entered(self, project_root, opened_at, origin):
-        self.editor._project_session_started_at = time.perf_counter()
+        if self.editor is not None:
+            self.editor._project_session_started_at = time.perf_counter()
         log_project_event("ENTER", project_root, origin=origin,
                           open_ms=round((time.perf_counter()-opened_at)*1000),load_status="ok")
 
@@ -773,6 +856,7 @@ class LauncherApplication(QObject):
 
     def _cancel_open(self):
         self._pending_editor = None
+        self._workspace_process = None
         self._cancel_project_preparation(self.editor)
         self.model.setOpeningPath("")
         self.model.setBusy(False)
@@ -837,6 +921,12 @@ class LauncherApplication(QObject):
         return {"logout":True}
 
     def quit(self):
+        if getattr(self, "_workspace_process", None) is not None:
+            try:
+                self._workspace_process.kill()
+            except Exception:
+                pass
+            self._workspace_process = None
         if self._quitting:
             return
         self._quitting = True
