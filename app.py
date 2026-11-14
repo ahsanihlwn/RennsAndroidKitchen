@@ -22,6 +22,13 @@ if "--rak-cli" in sys.argv[1:2]:
     raise SystemExit(0)
 
 
+if "--workspace-worker" in sys.argv[1:2]:
+    sys.argv = [sys.argv[0], *sys.argv[2:]]
+    from main import run_workspace_worker
+    run_workspace_worker()
+    raise SystemExit(0)
+
+
 if "--workspace" in sys.argv[1:2]:
     sys.argv = [sys.argv[0], *sys.argv[2:]]
     from main import run_workspace_standalone

@@ -79,6 +79,135 @@ class Main(QuickWorkspace):
         cls._config_service_mgr=None
         cls._config_service_ready=False
 
+def run_workspace_worker():
+    import sys
+    import os
+    import json
+    import threading
+    from pathlib import Path
+    from PySide6.QtCore import QObject, Signal, Slot, QTimer
+    from PySide6.QtWidgets import QApplication
+    from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent, qmlRegisterType
+    from ui.runtime import initialize_quick_runtime
+    from core.fonts import configure_text_rendering_env, apply_app_font
+    from core.error_reporting import install_error_reporter
+    from ui.presentation import LauncherModel
+    from ui.application import AccountState
+    from core import ui_lang
+    from main_ext.class_ThemeUi import theme
+
+    configure_text_rendering_env()
+    initialize_quick_runtime(webengine=True)
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    apply_app_font(app, polish_widgets=False)
+    install_error_reporter()
+
+    theme.load()
+    ui_lang.init()
+    account_state = AccountState(app)
+
+    from ui.workspace_window import (
+        ViewerDocument, HexDocument, SoDocument, PartitionDocument,
+        ImageDocument, MediaDocument, ArchiveDocument
+    )
+    qmlRegisterType(ViewerDocument, "Renns.Workspace", 1, 0, "ViewerDocument")
+    qmlRegisterType(HexDocument, "Renns.Workspace", 1, 0, "HexDocument")
+    qmlRegisterType(SoDocument, "Renns.Workspace", 1, 0, "SoDocument")
+    qmlRegisterType(PartitionDocument, "Renns.Workspace", 1, 0, "PartitionDocument")
+    qmlRegisterType(ImageDocument, "Renns.Workspace", 1, 0, "ImageDocument")
+    qmlRegisterType(MediaDocument, "Renns.Workspace", 1, 0, "MediaDocument")
+    qmlRegisterType(ArchiveDocument, "Renns.Workspace", 1, 0, "ArchiveDocument")
+
+    # Warm up QML compilation for Workspace.qml in advance
+    warm_engine = QQmlApplicationEngine()
+    workspace_qml_path = str(Path(__file__).resolve().parent / "ui" / "Workspace.qml")
+    comp = QQmlComponent(warm_engine, workspace_qml_path)
+
+    class WorkerBridge(QObject):
+        commandReceived = Signal(dict)
+
+    bridge = WorkerBridge()
+    active_editor = [None]
+
+    @Slot(dict)
+    def handle_command(cmd):
+        project = cmd["project"]
+        p1 = cmd["p1"]
+        p2 = cmd.get("p2")
+        palette = cmd.get("palette") or theme.name
+        lang = cmd.get("lang") or ui_lang._current_lang
+
+        preferences = LauncherModel(
+            palette=palette,
+            language=lang,
+            profile=account_state.profile(),
+            settings={
+                "effects": theme.effect_level,
+                "animations": theme.animations_enabled,
+                "treeMode": theme.tree_view_mode
+            },
+            parent=app
+        )
+        account_state.changed.connect(lambda: preferences.replaceProfile(account_state.profile()))
+
+        from main import Main
+        editor = Main(
+            project,
+            p1,
+            p2,
+            preferences=preferences,
+            profile_provider=account_state.profile_provider,
+            enable_private_services=True,
+            enable_cli_services=True
+        )
+        active_editor[0] = editor
+
+        def on_ready():
+            print("[RAK_WORKSPACE_READY]", flush=True)
+            editor.reveal()
+
+        def on_return():
+            print("[RAK_WORKSPACE_RETURN]", flush=True)
+            sys.exit(42)
+
+        def on_quit():
+            print("[RAK_WORKSPACE_QUIT]", flush=True)
+            sys.exit(0)
+
+        def on_failed(err):
+            print(f"[RAK_WORKSPACE_FAILED] {err}", flush=True)
+            sys.exit(1)
+
+        editor.ready.connect(on_ready)
+        editor.return_to_project_signal.connect(on_return)
+        editor.preparation_failed.connect(on_failed)
+        editor._shutdown_and_quit = on_quit
+
+    bridge.commandReceived.connect(handle_command)
+
+    def listen_stdin():
+        for line in sys.stdin:
+            line = line.strip()
+            if not line:
+                break
+            try:
+                data = json.loads(line)
+                bridge.commandReceived.emit(data)
+                return
+            except Exception as e:
+                print(f"[RAK_WORKSPACE_FAILED] Invalid worker payload: {e}", flush=True)
+        if active_editor[0] is None:
+            QTimer.singleShot(0, app.quit)
+
+    t = threading.Thread(target=listen_stdin, daemon=True)
+    t.start()
+
+    print("[RAK_WORKSPACE_STANDBY_READY]", flush=True)
+    sys.exit(app.exec())
+
+
 def run_workspace_standalone(argv=None):
     import sys
     import os

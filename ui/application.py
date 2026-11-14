@@ -122,6 +122,9 @@ class LauncherApplication(QObject):
         self._prewarm_complete = False
         self._pending_editor = None
         self._workspace_process = None
+        self._standby_worker = None
+        self._standby_worker_ready = False
+        self._standby_worker_stderr = []
         self._startup_started = False
         self._startup_ready = False
         self._startup_verification_pending = False
@@ -268,6 +271,85 @@ class LauncherApplication(QObject):
         pending, self._pending_editor = self._pending_editor, None
         if pending is not None:
             self._construct_editor(*pending)
+        if not error and not self._quitting:
+            QTimer.singleShot(0, self._spawn_standby_worker)
+
+    def _spawn_standby_worker(self):
+        """Pre-spawn a worker process that pre-compiles Workspace.qml.
+
+        When the user later clicks a project card, we reuse this already-warm
+        process instead of spawning a new one, eliminating the QML compilation
+        delay (~10 s) from the perceived open time.
+        """
+        if self._quitting or getattr(self, "_standby_worker", None) is not None:
+            return
+        from PySide6.QtCore import QProcess, QProcessEnvironment
+        is_compiled = getattr(sys, "frozen", False) or "__compiled__" in globals() or (
+            Path(sys.executable).suffix.lower() == ".exe" and
+            Path(sys.executable).name.lower() not in ("python.exe", "pythonw.exe")
+        )
+        if is_compiled:
+            program = sys.executable
+            worker_args = ["--workspace-worker"]
+            working_dir = str(Path(sys.executable).resolve().parent)
+        else:
+            program = sys.executable
+            app_script = str(Path(__file__).resolve().parents[1] / "app.py")
+            worker_args = [app_script, "--workspace-worker"]
+            working_dir = str(Path(__file__).resolve().parents[1])
+
+        proc = QProcess(self)
+        proc.setProgram(program)
+        proc.setArguments(worker_args)
+        proc.setWorkingDirectory(working_dir)
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONUNBUFFERED", "1")
+        proc.setProcessEnvironment(env)
+        self._standby_worker = proc
+        self._standby_worker_ready = False
+        self._standby_worker_stderr = []
+
+        def on_standby_stdout():
+            data = bytes(proc.readAllStandardOutput()).decode("utf-8", errors="replace")
+            for line in data.splitlines():
+                if "[RAK_WORKSPACE_STANDBY_READY]" in line:
+                    logging.debug("Standby worker ready")
+                    self._standby_worker_ready = True
+
+        def on_standby_stderr():
+            data = bytes(proc.readAllStandardError()).decode("utf-8", errors="replace")
+            if data:
+                self._standby_worker_stderr.append(data)
+
+        def on_standby_finished(exit_code, exit_status):
+            if self._standby_worker is proc:
+                self._standby_worker = None
+                self._standby_worker_ready = False
+            logging.debug("Standby worker exited with code %s", exit_code)
+
+        def on_standby_error(err):
+            logging.warning("Failed to start standby worker: %s", err)
+            if self._standby_worker is proc:
+                self._standby_worker = None
+                self._standby_worker_ready = False
+
+        proc.readyReadStandardOutput.connect(on_standby_stdout)
+        proc.readyReadStandardError.connect(on_standby_stderr)
+        proc.finished.connect(on_standby_finished)
+        proc.errorOccurred.connect(on_standby_error)
+        proc.start()
+        logging.debug("Standby worker spawned")
+
+    def _kill_standby_worker(self):
+        """Kill the standby worker if it is still alive."""
+        proc = getattr(self, "_standby_worker", None)
+        if proc is not None:
+            self._standby_worker = None
+            self._standby_worker_ready = False
+            try:
+                proc.kill()
+            except Exception:
+                pass
 
     @Slot()
     def _reveal_startup(self):
@@ -670,7 +752,47 @@ class LauncherApplication(QObject):
         self._spawn_workspace_process(record, origin, opened_at)
 
     def _spawn_workspace_process(self, record, origin, opened_at):
+        """Open a workspace in a child process.
+
+        Fast path: if the standby worker is already warm, send it a JSON
+        command via stdin and wire up its signals for this open session.
+        Slow path (fallback): spawn a fresh process exactly as before.
+        """
+        import json as _json
         from PySide6.QtCore import QProcess, QProcessEnvironment
+
+        # ── fast path: reuse the pre-warmed standby worker ──────────────────
+        if getattr(self, "_standby_worker_ready", False) and self._standby_worker is not None:
+            proc = self._standby_worker
+            self._standby_worker = None
+            self._standby_worker_ready = False
+            self._workspace_process = proc
+            # Disconnect the standby bookkeeping signals before rewiring.
+            try:
+                proc.readyReadStandardOutput.disconnect()
+                proc.readyReadStandardError.disconnect()
+                proc.finished.disconnect()
+                proc.errorOccurred.disconnect()
+            except Exception:
+                pass
+            self._wire_workspace_process_signals(proc, record, origin, opened_at,
+                                                 extra_stderr=self._standby_worker_stderr)
+            self._standby_worker_stderr = []
+            # Send the open command to the worker via stdin.
+            payload = _json.dumps({
+                "project": record["path"],
+                "p1": record["port1"],
+                "p2": record.get("port2"),
+                "palette": self.model.paletteName,
+                "lang": self.model._language,
+            }) + "\n"
+            proc.write(payload.encode("utf-8"))
+            logging.debug("Reused standby worker for %s", record["path"])
+            # Spawn a replacement standby worker for the next open.
+            QTimer.singleShot(0, self._spawn_standby_worker)
+            return
+
+        # ── slow path: spawn a new process ───────────────────────────────────
         process = QProcess(self)
         self._workspace_process = process
 
@@ -702,8 +824,13 @@ class LauncherApplication(QObject):
         env.insert("PYTHONUNBUFFERED", "1")
         process.setProcessEnvironment(env)
 
+        self._wire_workspace_process_signals(process, record, origin, opened_at)
+        process.start()
+
+    def _wire_workspace_process_signals(self, process, record, origin, opened_at, extra_stderr=None):
+        """Connect stdout/stderr/finished/error signals for a workspace process."""
         return_requested = [False]
-        stderr_lines = []
+        stderr_lines = list(extra_stderr) if extra_stderr else []
 
         def on_stdout():
             data = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
@@ -740,7 +867,6 @@ class LauncherApplication(QObject):
         process.readyReadStandardError.connect(on_stderr)
         process.finished.connect(on_finished)
         process.errorOccurred.connect(on_error)
-        process.start()
 
     def _on_workspace_process_ready(self, project_root, opened_at, origin):
         self._log_project_entered(project_root, opened_at, origin)
@@ -889,6 +1015,7 @@ class LauncherApplication(QObject):
     def _cancel_open(self):
         self._pending_editor = None
         self._workspace_process = None
+        self._kill_standby_worker()
         self._cancel_project_preparation(self.editor)
         self.model.setOpeningPath("")
         self.model.setBusy(False)
@@ -953,6 +1080,7 @@ class LauncherApplication(QObject):
         return {"logout":True}
 
     def quit(self):
+        self._kill_standby_worker()
         if getattr(self, "_workspace_process", None) is not None:
             try:
                 self._workspace_process.kill()
