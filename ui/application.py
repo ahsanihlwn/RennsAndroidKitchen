@@ -670,35 +670,66 @@ class LauncherApplication(QObject):
         self._spawn_workspace_process(record, origin, opened_at)
 
     def _spawn_workspace_process(self, record, origin, opened_at):
-        from PySide6.QtCore import QProcess
+        from PySide6.QtCore import QProcess, QProcessEnvironment
         process = QProcess(self)
         self._workspace_process = process
-        repo_root = str(Path(__file__).resolve().parents[1])
-        main_script = str(Path(__file__).resolve().parents[1] / "main.py")
-        args = [main_script, record["path"], record["port1"]]
+
+        is_compiled = getattr(sys, "frozen", False) or "__compiled__" in globals() or (
+            Path(sys.executable).suffix.lower() == ".exe" and
+            Path(sys.executable).name.lower() not in ("python.exe", "pythonw.exe")
+        )
+
+        args = ["--workspace", record["path"], record["port1"]]
         if record.get("port2"):
             args.append(record["port2"])
-        args.extend(["--palette", self.model.palette, "--lang", self.model.language])
-        process.setWorkingDirectory(repo_root)
-        process.setProgram(sys.executable)
+        args.extend(["--palette", self.model.paletteName, "--lang", self.model._language])
+
+        if is_compiled:
+            program = sys.executable
+            working_dir = str(Path(sys.executable).resolve().parent)
+        else:
+            program = sys.executable
+            repo_root = str(Path(__file__).resolve().parents[1])
+            app_script = str(Path(__file__).resolve().parents[1] / "app.py")
+            args.insert(0, app_script)
+            working_dir = repo_root
+
+        process.setWorkingDirectory(working_dir)
+        process.setProgram(program)
         process.setArguments(args)
+
+        env = QProcessEnvironment.systemEnvironment()
+        env.insert("PYTHONUNBUFFERED", "1")
+        process.setProcessEnvironment(env)
+
+        return_requested = [False]
+        stderr_lines = []
 
         def on_stdout():
             data = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
             for line in data.splitlines():
                 if "[RAK_WORKSPACE_READY]" in line:
                     self._on_workspace_process_ready(record["path"], opened_at, origin)
+                elif "[RAK_WORKSPACE_RETURN]" in line:
+                    return_requested[0] = True
                 elif "[RAK_WORKSPACE_FAILED]" in line:
                     err = line.partition("[RAK_WORKSPACE_FAILED]")[2].strip()
                     self._on_workspace_process_failed(err)
 
+        def on_stderr():
+            data = bytes(process.readAllStandardError()).decode("utf-8", errors="replace")
+            if data:
+                stderr_lines.append(data)
+
         def on_finished(exit_code, exit_status):
             self._workspace_process = None
-            self.model.setOpeningPath("")
-            self.model.setBusy(False)
-            self._reload()
-            self.window.setOpacity(1)
-            self.show()
+            if return_requested[0] or exit_code == 42:
+                self.on_return_from_editor()
+            elif exit_code == 0:
+                self.quit()
+            else:
+                err_text = "".join(stderr_lines).strip()
+                self._on_workspace_process_failed(err_text or f"Workspace process exited with code {exit_code}")
 
         def on_error(err):
             if process is getattr(self, "_workspace_process", None):
@@ -706,6 +737,7 @@ class LauncherApplication(QObject):
                 self._on_workspace_process_failed(f"Failed to start workspace: {err}")
 
         process.readyReadStandardOutput.connect(on_stdout)
+        process.readyReadStandardError.connect(on_stderr)
         process.finished.connect(on_finished)
         process.errorOccurred.connect(on_error)
         process.start()

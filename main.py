@@ -73,19 +73,23 @@ class Main(QuickWorkspace):
         cls._config_service_mgr=None
         cls._config_service_ready=False
 
-if __name__ == "__main__":
+def run_workspace_standalone(argv=None):
     import sys
     import os
     import argparse
     from pathlib import Path
-    from PySide6.QtGui import QGuiApplication
+    from PySide6.QtWidgets import QApplication
     from ui.runtime import initialize_quick_runtime
     from core.fonts import configure_text_rendering_env, apply_app_font
+    from core.error_reporting import install_error_reporter
 
     configure_text_rendering_env()
     initialize_quick_runtime(webengine=True)
-    app = QGuiApplication(sys.argv)
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv if argv is None else [sys.argv[0]] + list(argv))
     apply_app_font(app, polish_widgets=False)
+    install_error_reporter()
 
     parser = argparse.ArgumentParser(description="RAK Workspace Editor")
     parser.add_argument("project", help="Path to project directory")
@@ -93,7 +97,7 @@ if __name__ == "__main__":
     parser.add_argument("p2", nargs="?", default=None, help="Secondary partition")
     parser.add_argument("--palette", default=None, help="Theme palette")
     parser.add_argument("--lang", default=None, help="Language code")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     from core import ui_lang
     from main_ext.class_ThemeUi import theme
@@ -131,6 +135,10 @@ if __name__ == "__main__":
         print("[RAK_WORKSPACE_RETURN]", flush=True)
         sys.exit(42)
 
+    def on_quit():
+        print("[RAK_WORKSPACE_QUIT]", flush=True)
+        sys.exit(0)
+
     def on_failed(err):
         print(f"[RAK_WORKSPACE_FAILED] {err}", flush=True)
         sys.exit(1)
@@ -138,5 +146,10 @@ if __name__ == "__main__":
     editor.ready.connect(on_ready)
     editor.return_to_project_signal.connect(on_return)
     editor.preparation_failed.connect(on_failed)
+    editor._shutdown_and_quit = on_quit
 
     sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    run_workspace_standalone()
