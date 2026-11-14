@@ -14,10 +14,16 @@ class Main(QuickWorkspace):
             from core import ui_lang
             from main_ext.class_ThemeUi import theme
             from ui.presentation import LauncherModel
+            from ui.application import AccountState
             theme.load(); ui_lang.init()
+            acc = AccountState(parent=parent)
+            if profile_provider is None:
+                profile_provider = acc.profile_provider
             preferences = LauncherModel(palette=theme.name, language=ui_lang._current_lang,
+                profile=acc.profile(),
                 settings={"effects":theme.effect_level,"animations":theme.animations_enabled,
                           "treeMode":theme.tree_view_mode},parent=parent)
+            acc.changed.connect(lambda: preferences.replaceProfile(acc.profile()))
         self._owned_preferences = preferences
         self._enable_cli=options.pop('enable_cli_services',True)
         super().__init__(project,p1,p2,preferences=preferences,
@@ -102,27 +108,34 @@ def run_workspace_standalone(argv=None):
     from core import ui_lang
     from main_ext.class_ThemeUi import theme
     from ui.presentation import LauncherModel
+    from ui.application import AccountState
 
     theme.load()
     ui_lang.init()
     palette = args.palette or theme.name
     lang = args.lang or ui_lang._current_lang
 
+    account_state = AccountState(app)
+
     preferences = LauncherModel(
         palette=palette,
         language=lang,
+        profile=account_state.profile(),
         settings={
             "effects": theme.effect_level,
             "animations": theme.animations_enabled,
             "treeMode": theme.tree_view_mode
-        }
+        },
+        parent=app
     )
+    account_state.changed.connect(lambda: preferences.replaceProfile(account_state.profile()))
 
     editor = Main(
         args.project,
         args.p1,
         args.p2,
         preferences=preferences,
+        profile_provider=account_state.profile_provider,
         enable_private_services=True,
         enable_cli_services=True
     )
