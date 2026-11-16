@@ -27,7 +27,7 @@ Item {
     readonly property real compactOpacity: Motion.clamp((modeAmount-.30)/.70)
     property var actions: [
         {key:"back",icon:"back_to_proj",tip:"Back to projects"},
-        {key:"settings",icon:"set_project",tip:"Project settings"},
+        {key:"settings",icon:"settings",tip:"Project settings"},
         {key:"layout",icon:"tree_mode",tip:"Toggle Layout / Split View"},
         {key:"terminal",icon:"terminal",tip:"Terminal"},
         {key:"android",icon:"android_tools",tip:"Android Tools"},

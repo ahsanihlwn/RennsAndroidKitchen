@@ -8,7 +8,13 @@ DialogWindow {
     objectName: "themePicker"
     Item {
         anchors.fill: parent
-        Image { sourceSize.width: width; sourceSize.height: height; x: 20; y: 17; width: 15; height: 15; source: picker.model.icon("set_project", picker.c.FG) }
+        WorkspaceNativeIcon {
+            x: 20; y: 17; width: 15; height: 15; iconSize: 15
+            iconKey: "theme"
+            strokeColor: picker.c.FG_BRIGHT
+            accentColor: picker.c.accentColor
+            isLight: (picker.c && picker.c.is_light !== undefined) ? picker.c.is_light : false
+        }
         RakLabel { x: 46; y: 16; height: 20; text: picker.s.thm_title; color: picker.c.FG_BRIGHT; font.pixelSize: 14; font.weight: Font.DemiBold }
         Flickable {
             id: scroll

@@ -22,8 +22,15 @@ DialogWindow {
     function setValue(section,key,value) {let next=JSON.parse(JSON.stringify(draft));next[section][key]=value;draft=next}
     Row {
         x: 16; y: 16; spacing: 8
-        Image { width: 18; height: 18; source: "image://icons/set_project"; sourceSize: Qt.size(15,15) }
-        RakLabel { text: dialog.s.main_project_settings; color: dialog.c.FG; font.pixelSize: 14; font.weight: Font.DemiBold }
+        WorkspaceNativeIcon {
+            width: 18; height: 18; iconSize: 18
+            iconKey: "settings"
+            strokeColor: dialog.c.FG
+            accentColor: dialog.c.accentColor
+            isLight: (dialog.c && dialog.c.is_light !== undefined) ? dialog.c.is_light : false
+            anchors.verticalCenter: parent.verticalCenter
+        }
+        RakLabel { text: dialog.s.main_project_settings; color: dialog.c.FG; font.pixelSize: 14; font.weight: Font.DemiBold; anchors.verticalCenter: parent.verticalCenter }
     }
     SmoothRectangle { x: 16; y: 46; width: parent.width-32; height: 1; color: dialog.c.b07 }
     Flickable {

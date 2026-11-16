@@ -1523,7 +1523,7 @@ class AppUI(AppFeatures, QWidget):
         self.btn_settings = bind_text(QPushButton(), lambda: t("btn_settings"))
         yield
         self.btn_settings.setLayoutDirection(Qt.LeftToRight)
-        bind_icon(self.btn_settings, lambda: tint_icon("settings_octagon", _th.FG2, 15))
+        bind_icon(self.btn_settings, lambda: tint_icon("settings", _th.FG2, 15))
         self.btn_settings.setIconSize(QSize(15, 15))
         self.btn_settings.clicked.connect(
             lambda: self._show_page(self.page_settings)
@@ -1950,7 +1950,7 @@ class AppUI(AppFeatures, QWidget):
         self.btn_settings_create = bind_text(QPushButton(), lambda: t("btn_settings"))
         yield
         self.btn_settings_create.setLayoutDirection(Qt.LeftToRight)
-        bind_icon(self.btn_settings_create, lambda: tint_icon("settings_octagon", _th.FG2, 15))
+        bind_icon(self.btn_settings_create, lambda: tint_icon("settings", _th.FG2, 15))
         self.btn_settings_create.setIconSize(QSize(15, 15))
         self.btn_settings_create.clicked.connect(
             lambda: self._show_page(self.page_settings)

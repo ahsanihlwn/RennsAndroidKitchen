@@ -19,7 +19,7 @@ Item {
     signal historyRequested(var target)
 
     property var actions: [
-        {key: "settings", icon: "set_project", tip: "Project settings"},
+        {key: "settings", icon: "settings", tip: "Project settings"},
         {key: "layout", icon: "tree_mode", tip: "Toggle Layout / Split View"},
         {key: "terminal", icon: "terminal", tip: "Terminal"},
         {key: "android", icon: "android_tools", tip: "Android Tools"},

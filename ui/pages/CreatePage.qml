@@ -106,7 +106,7 @@ Item {
             objectName: "createSettingsButton"
             actionVisible: !page.model.hasProjects
             width: 120; height: 32; colors: page.c; text: page.s.btn_settings
-            iconSource: page.model.icon("settings_octagon", page.c.FG2); iconWidth: 15; iconHeight: 15
+            iconKey: "settings"; iconWidth: 15; iconHeight: 15
             animatePress: page.model.settings.animations; onClicked: page.model.navigate("settings")
         }
         ActionButton {

@@ -197,7 +197,7 @@ class ThemePickerDialog(QDialog):
         hdr.setSpacing(8)
 
         ic = QLabel()
-        bind_pixmap(ic, lambda: QIcon(icon("set_project")).pixmap(15, 15))
+        bind_pixmap(ic, lambda: QIcon(icon("theme")).pixmap(15, 15))
         ic.setFixedSize(18, 18)
         ic.setAlignment(Qt.AlignVCenter)
         hdr.addWidget(ic)
