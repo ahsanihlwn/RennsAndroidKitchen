@@ -19,19 +19,74 @@ RakButton {
     readonly property color fgHoverColor: preferences && preferences.colors && preferences.colors.FG_BRIGHT ? preferences.colors.FG_BRIGHT : (isLight ? "#090a0c" : "#ffffff")
     readonly property color accentColor: preferences && preferences.colors && (preferences.colors.accent_hex || preferences.colors.FG_BLUE) ? (preferences.colors.accent_hex || preferences.colors.FG_BLUE) : "#3ecf8e"
 
+    // Semantic Base Color per iconKey:
+    // Soft-tone semantic hues harmonized with the active theme
+    readonly property color semanticBaseColor: {
+        const key = button.iconKey;
+        if (!key) return accentColor;
+        switch (key) {
+            case "back":
+            case "back_to_proj":
+                // Soft Sky Blue
+                return Qt.color("#38bdf8");
+            case "settings":
+            case "set_project":
+                // Soft Mechanical Gear Steel / Slate Gray
+                return Qt.color("#94a3b8");
+            case "layout":
+            case "tree_mode":
+                // Soft Ice Cyan / Teal
+                return Qt.color("#2dd4bf");
+            case "terminal":
+                // Soft Mint / Emerald Green
+                return Qt.color("#34d399");
+            case "android":
+            case "android_tools":
+                // Soft Android Lime / Pistachio
+                return Qt.color("#a3e635");
+            case "import":
+            case "import_project":
+                // Soft Periwinkle / Indigo
+                return Qt.color("#818cf8");
+            case "agent":
+            case "agentInbox":
+            case "sparkle":
+            case "send":
+                // Soft Purple / Lilac
+                return Qt.color("#c084fc");
+            case "automation":
+                // Soft Electric Yellow / Gold
+                return Qt.color("#facc15");
+            case "compare":
+                // Soft Coral / Rose
+                return Qt.color("#fb7185");
+            case "drive":
+            case "project_disk":
+            case "storage":
+                return Qt.color("#38bdf8");
+            case "folder":
+            case "project_folder":
+            case "folder_project":
+                return Qt.color("#fbbf24");
+            default:
+                return accentColor;
+        }
+    }
+
     // Refined theme tone:
-    // - Dark BG: Cerah (luminous soft-tinted, tidak menusuk mata / tidak strong)
-    // - Light BG: Lebih gelap (deep refined tone dengan undertone tema, kontras tinggi)
+    // Blends semantic base with 30% soft luminous tint (dark) or crisp deep tint (light)
+    // and 15% theme accent, so it is softly pastel, never clashes, and naturally fits the active theme.
     readonly property color refinedThemeColor: {
         if (tint.a > 0) return tint;
+        const base = semanticBaseColor;
         if (isLight) {
-            return Qt.rgba(0.78 * 0.13 + 0.22 * accentColor.r,
-                           0.78 * 0.15 + 0.22 * accentColor.g,
-                           0.78 * 0.18 + 0.22 * accentColor.b, 1.0);
+            return Qt.rgba(0.55 * base.r + 0.30 * 0.12 + 0.15 * accentColor.r,
+                           0.55 * base.g + 0.30 * 0.14 + 0.15 * accentColor.g,
+                           0.55 * base.b + 0.30 * 0.17 + 0.15 * accentColor.b, 1.0);
         } else {
-            return Qt.rgba(0.72 * 0.92 + 0.28 * accentColor.r,
-                           0.72 * 0.93 + 0.28 * accentColor.g,
-                           0.72 * 0.95 + 0.28 * accentColor.b, 1.0);
+            return Qt.rgba(0.55 * base.r + 0.30 * 0.94 + 0.15 * accentColor.r,
+                           0.55 * base.g + 0.30 * 0.95 + 0.15 * accentColor.g,
+                           0.55 * base.b + 0.30 * 0.97 + 0.15 * accentColor.b, 1.0);
         }
     }
 
@@ -40,10 +95,10 @@ RakButton {
     cornerRadius: circular ? width / 2 : 6
     edgeWidth: 1
     edgeColor: "transparent"
-    hoverEdgeColor: Qt.rgba(accentColor.r, accentColor.g, accentColor.b, 0.24)
+    hoverEdgeColor: Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.28)
     fillColor: "transparent"
-    hoverFillColor: isLight ? Qt.rgba(0, 0, 0, 0.05) : Qt.rgba(255, 255, 255, 0.08)
-    downFillColor: isLight ? Qt.rgba(0, 0, 0, 0.10) : Qt.rgba(255, 255, 255, 0.14)
+    hoverFillColor: isLight ? Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.08) : Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.12)
+    downFillColor: isLight ? Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.15) : Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.20)
     labelColor: useAccentColor ? refinedThemeColor : fgColor
     hoverLabelColor: isLight ? "#090a0c" : "#ffffff"
     disabledLabelColor: preferences && preferences.colors && preferences.colors.FG_DISABLED2 ? preferences.colors.FG_DISABLED2 : "#555555"

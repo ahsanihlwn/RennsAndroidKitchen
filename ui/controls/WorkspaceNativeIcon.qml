@@ -15,6 +15,7 @@ Item {
     property alias color: root.strokeColor
     property color accentColor: "#38bdf8"
     property color fillColor: "transparent"
+    property color secondaryColor: "transparent"
     property int layoutMode: 2
     property bool collapsed: false
 
@@ -88,7 +89,7 @@ Item {
 
         // ========================================================
         // 3. TREE_MODE / LAYOUT (Dynamic 3-State Rounded Panes)
-        //    State 1: Single Tree (Left 100%, Right 50% opacity)
+        //    State 1: Single Tree Mode (Kotak Persegi Rounded 100%)
         //    State 2: Side-by-Side Dual Tree (Left & Right 100%)
         //    State 3: Top-Bottom Dual Tree (Top & Bottom 100%)
         // ========================================================
@@ -96,10 +97,24 @@ Item {
             anchors.fill: parent
             visible: root.iconKey === "tree_mode" || root.iconKey === "layout"
 
-            // State 1 & 2: Vertical Left Pane
+            // State 1: Single Panel Mode (Kotak Persegi Rounded)
             Shape {
                 anchors.fill: parent
-                visible: root.layoutMode !== 3
+                visible: root.layoutMode === 1
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    fillColor: root.finalColor
+                    strokeColor: "transparent"
+                    PathSvg {
+                        path: "M 6.50 3.50 L 17.50 3.50 C 19.16 3.50 20.50 4.84 20.50 6.50 L 20.50 17.50 C 20.50 19.16 19.16 20.50 17.50 20.50 L 6.50 20.50 C 4.84 20.50 3.50 19.16 3.50 17.50 L 3.50 6.50 C 3.50 4.84 4.84 3.50 6.50 3.50 Z"
+                    }
+                }
+            }
+
+            // State 2: Vertical Left Pane
+            Shape {
+                anchors.fill: parent
+                visible: root.layoutMode === 2 || (root.layoutMode !== 1 && root.layoutMode !== 3)
                 preferredRendererType: Shape.CurveRenderer
                 ShapePath {
                     fillColor: root.finalColor
@@ -110,11 +125,10 @@ Item {
                 }
             }
 
-            // State 1 & 2: Vertical Right Pane (50% opacity in State 1, 100% in State 2)
+            // State 2: Vertical Right Pane
             Shape {
                 anchors.fill: parent
-                visible: root.layoutMode !== 3
-                opacity: root.layoutMode === 1 ? 0.50 : 1.0
+                visible: root.layoutMode === 2 || (root.layoutMode !== 1 && root.layoutMode !== 3)
                 preferredRendererType: Shape.CurveRenderer
                 ShapePath {
                     fillColor: root.finalColor
@@ -125,7 +139,7 @@ Item {
                 }
             }
 
-            // State 3: Horizontal Top & Bottom Stacked Panes (both 100%)
+            // State 3: Horizontal Top & Bottom Stacked Panes
             Shape {
                 anchors.fill: parent
                 visible: root.layoutMode === 3
@@ -134,7 +148,14 @@ Item {
                     fillColor: root.finalColor
                     strokeColor: "transparent"
                     PathSvg {
-                        path: "M 6.50 3.50 L 17.50 3.50 C 19.16 3.50 20.50 4.84 20.50 6.50 L 20.50 8.00 C 20.50 9.66 19.16 11.00 17.50 11.00 L 6.50 11.00 C 4.84 11.00 3.50 9.66 3.50 8.00 L 3.50 6.50 C 3.50 4.84 4.84 3.50 6.50 3.50 Z M 6.50 13.00 L 17.50 13.00 C 19.16 13.00 20.50 14.34 20.50 16.00 L 20.50 17.50 C 20.50 19.16 19.16 20.50 17.50 20.50 L 6.50 20.50 C 4.84 20.50 3.50 19.16 3.50 17.50 L 3.50 16.00 C 3.50 14.34 4.84 13.00 6.50 13.00 Z"
+                        path: "M 6.50 3.50 L 17.50 3.50 C 19.16 3.50 20.50 4.84 20.50 6.50 L 20.50 8.00 C 20.50 9.66 19.16 11.00 17.50 11.00 L 6.50 11.00 C 4.84 11.00 3.50 9.66 3.50 8.00 L 3.50 6.50 C 3.50 4.84 4.84 3.50 6.50 3.50 Z"
+                    }
+                }
+                ShapePath {
+                    fillColor: root.finalColor
+                    strokeColor: "transparent"
+                    PathSvg {
+                        path: "M 6.50 13.00 L 17.50 13.00 C 19.16 13.00 20.50 14.34 20.50 16.00 L 20.50 17.50 C 20.50 19.16 19.16 20.50 17.50 20.50 L 6.50 20.50 C 4.84 20.50 3.50 19.16 3.50 17.50 L 3.50 16.00 C 3.50 14.34 4.84 13.00 6.50 13.00 Z"
                     }
                 }
             }
@@ -193,15 +214,34 @@ Item {
         // ========================================================
         // 7. AGENT / AGENTINBOX / SPARKLE (Dual AI Sparkle Stars Rounded)
         // ========================================================
-        Shape {
+        Item {
             anchors.fill: parent
             visible: root.iconKey === "send" || root.iconKey === "agentInbox" || root.iconKey === "agent" || root.iconKey === "sparkle"
-            preferredRendererType: Shape.CurveRenderer
-            ShapePath {
-                fillColor: root.finalColor
-                strokeColor: "transparent"
-                PathSvg {
-                    path: "M 8.65 3.85 C 9.46 2.50 10.54 2.50 11.35 3.85 C 11.35 7.15 12.85 8.65 16.15 8.65 C 17.50 9.46 17.50 10.54 16.15 11.35 C 12.85 11.35 11.35 12.85 11.35 16.15 C 10.54 17.50 9.46 17.50 8.65 16.15 C 8.65 12.85 7.15 11.35 3.85 11.35 C 2.50 10.54 2.50 9.46 3.85 8.65 C 7.15 8.65 8.65 7.15 8.65 3.85 Z M 17.20 14.80 C 17.68 14.00 18.32 14.00 18.80 14.80 C 18.80 16.36 19.44 17.00 21.00 17.00 C 21.80 17.48 21.80 18.12 21.00 18.60 C 19.44 18.60 18.80 19.24 18.80 20.80 C 18.32 21.60 17.68 21.60 17.20 20.80 C 17.20 19.24 16.56 18.60 15.00 18.60 C 14.20 18.12 14.20 17.48 15.00 17.00 C 16.56 17.00 17.20 16.36 17.20 14.80 Z"
+
+            // Primary Sparkle Star (100% Solid)
+            Shape {
+                anchors.fill: parent
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    fillColor: root.finalColor
+                    strokeColor: "transparent"
+                    PathSvg {
+                        path: "M 8.65 3.85 C 9.46 2.50 10.54 2.50 11.35 3.85 C 11.35 7.15 12.85 8.65 16.15 8.65 C 17.50 9.46 17.50 10.54 16.15 11.35 C 12.85 11.35 11.35 12.85 11.35 16.15 C 10.54 17.50 9.46 17.50 8.65 16.15 C 8.65 12.85 7.15 11.35 3.85 11.35 C 2.50 10.54 2.50 9.46 3.85 8.65 C 7.15 8.65 8.65 7.15 8.65 3.85 Z"
+                    }
+                }
+            }
+
+            // Satellite Sparkle Star (50% Opacity)
+            Shape {
+                anchors.fill: parent
+                opacity: 0.50
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    fillColor: root.finalColor
+                    strokeColor: "transparent"
+                    PathSvg {
+                        path: "M 17.20 14.80 C 17.68 14.00 18.32 14.00 18.80 14.80 C 18.80 16.36 19.44 17.00 21.00 17.00 C 21.80 17.48 21.80 18.12 21.00 18.60 C 19.44 18.60 18.80 19.24 18.80 20.80 C 18.32 21.60 17.68 21.60 17.20 20.80 C 17.20 19.24 16.56 18.60 15.00 18.60 C 14.20 18.12 14.20 17.48 15.00 17.00 C 16.56 17.00 17.20 16.36 17.20 14.80 Z"
+                    }
                 }
             }
         }
@@ -225,16 +265,36 @@ Item {
         // ========================================================
         // 9. COMPARE (Dual Split Panes + Panah Bolong Tebal > <)
         // ========================================================
-        Shape {
+        Item {
             anchors.fill: parent
             visible: root.iconKey === "compare"
-            preferredRendererType: Shape.CurveRenderer
-            ShapePath {
-                fillColor: root.finalColor
-                strokeColor: "transparent"
-                fillRule: ShapePath.OddEvenFill
-                PathSvg {
-                    path: "M 7.50 3.50 L 10.40 3.50 C 10.84 3.50 11.20 3.86 11.20 4.30 L 11.20 19.70 C 11.20 20.14 10.84 20.50 10.40 20.50 L 7.50 20.50 C 5.29 20.50 3.50 18.71 3.50 16.50 L 3.50 7.50 C 3.50 5.29 5.29 3.50 7.50 3.50 Z M 13.60 3.50 L 16.50 3.50 C 18.71 3.50 20.50 5.29 20.50 7.50 L 20.50 16.50 C 20.50 18.71 18.71 20.50 16.50 20.50 L 13.60 20.50 C 13.16 20.50 12.80 20.14 12.80 19.70 L 12.80 4.30 C 12.80 3.86 13.16 3.50 13.60 3.50 Z M 6.80 7.50 L 9.30 11.10 C 9.70 11.60 9.70 12.40 9.30 12.90 L 6.80 16.50 C 6.35 17.00 5.60 17.00 5.15 16.50 C 4.70 16.05 4.70 15.30 5.15 14.85 L 7.20 12.00 L 5.15 9.15 C 4.70 8.70 4.70 7.95 5.15 7.50 C 5.60 7.00 6.35 7.00 6.80 7.50 Z M 17.20 7.50 L 14.70 11.10 C 14.30 11.60 14.30 12.40 14.70 12.90 L 17.20 16.50 C 17.65 17.00 18.40 17.00 18.85 16.50 C 19.30 16.05 19.30 15.30 18.85 14.85 L 16.80 12.00 L 18.85 9.15 C 19.30 8.70 19.30 7.95 18.85 7.50 C 18.40 7.00 17.65 7.00 17.20 7.50 Z"
+
+            // Left Pane (100% Solid)
+            Shape {
+                anchors.fill: parent
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    fillColor: root.finalColor
+                    strokeColor: "transparent"
+                    fillRule: ShapePath.OddEvenFill
+                    PathSvg {
+                        path: "M 7.50 3.50 L 10.40 3.50 C 10.84 3.50 11.20 3.86 11.20 4.30 L 11.20 19.70 C 11.20 20.14 10.84 20.50 10.40 20.50 L 7.50 20.50 C 5.29 20.50 3.50 18.71 3.50 16.50 L 3.50 7.50 C 3.50 5.29 5.29 3.50 7.50 3.50 Z M 6.80 7.50 L 9.30 11.10 C 9.70 11.60 9.70 12.40 9.30 12.90 L 6.80 16.50 C 6.35 17.00 5.60 17.00 5.15 16.50 C 4.70 16.05 4.70 15.30 5.15 14.85 L 7.20 12.00 L 5.15 9.15 C 4.70 8.70 4.70 7.95 5.15 7.50 C 5.60 7.00 6.35 7.00 6.80 7.50 Z"
+                    }
+                }
+            }
+
+            // Right Pane (50% Opacity)
+            Shape {
+                anchors.fill: parent
+                opacity: 0.50
+                preferredRendererType: Shape.CurveRenderer
+                ShapePath {
+                    fillColor: root.finalColor
+                    strokeColor: "transparent"
+                    fillRule: ShapePath.OddEvenFill
+                    PathSvg {
+                        path: "M 13.60 3.50 L 16.50 3.50 C 18.71 3.50 20.50 5.29 20.50 7.50 L 20.50 16.50 C 20.50 18.71 18.71 20.50 16.50 20.50 L 13.60 20.50 C 13.16 20.50 12.80 20.14 12.80 19.70 L 12.80 4.30 C 12.80 3.86 13.16 3.50 13.60 3.50 Z M 17.20 7.50 L 14.70 11.10 C 14.30 11.60 14.30 12.40 14.70 12.90 L 17.20 16.50 C 17.65 17.00 18.40 17.00 18.85 16.50 C 19.30 16.05 19.30 15.30 18.85 14.85 L 16.80 12.00 L 18.85 9.15 C 19.30 8.70 19.30 7.95 18.85 7.50 C 18.40 7.00 17.65 7.00 17.20 7.50 Z"
+                    }
                 }
             }
         }
