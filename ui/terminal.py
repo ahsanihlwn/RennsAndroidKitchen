@@ -66,13 +66,43 @@ class TerminalSession(QObject):
 
     @Slot("QVariantMap")
     def applyTheme(self, colors):
-        background = colors.get("BG", "#121417")
-        self._theme = {"theme": {"background": background,
-                                 "foreground": colors.get("FG", "#e2e8f0"),
-                                 "cursor": colors.get("accent_hex", colors.get("ACCENT", "#38bdf8")),
-                                 "cursorAccent": background,
-                                 "selectionBackground": "rgba(56, 189, 248, 0.35)"},
-                       "bg": background, "fontSize": 15}
+        is_light = bool(colors.get("is_light", False))
+        background = colors.get("BG", "#ffffff" if is_light else "#121417")
+        foreground = colors.get("FG", "#1a1a1a" if is_light else "#e2e8f0")
+        accent = colors.get("accent_hex", colors.get("ACCENT", "#0284c7" if is_light else "#38bdf8"))
+        selection_bg = colors.get("BG_SELECTED", "rgba(2, 132, 199, 0.35)" if is_light else "rgba(56, 189, 248, 0.35)")
+
+        if is_light:
+            ansi = {
+                "black": "#1e293b", "red": "#dc2626", "green": "#16a34a", "yellow": "#ca8a04",
+                "blue": "#2563eb", "magenta": "#9333ea", "cyan": "#0891b2", "white": "#475569",
+                "brightBlack": "#64748b", "brightRed": "#ef4444", "brightGreen": "#22c55e",
+                "brightYellow": "#eab308", "brightBlue": "#3b82f6", "brightMagenta": "#a855f7",
+                "brightCyan": "#06b6d4", "brightWhite": "#0f172a",
+            }
+        else:
+            ansi = {
+                "black": "#1e293b", "red": "#ef4444", "green": "#22c55e", "yellow": "#eab308",
+                "blue": "#3b82f6", "magenta": "#a855f7", "cyan": "#06b6d4", "white": "#f8fafc",
+                "brightBlack": "#475569", "brightRed": "#f87171", "brightGreen": "#4ade80",
+                "brightYellow": "#fde047", "brightBlue": "#60a5fa", "brightMagenta": "#c084fc",
+                "brightCyan": "#22d3ee", "brightWhite": "#ffffff",
+            }
+
+        self._theme = {
+            "theme": {
+                "background": background,
+                "foreground": foreground,
+                "cursor": accent,
+                "cursorAccent": background,
+                "selectionBackground": selection_bg,
+                **ansi
+            },
+            "bg": background,
+            "fg": foreground,
+            "is_light": is_light,
+            "fontSize": 15
+        }
         self._send_theme()
 
     def _send_theme(self):

@@ -232,6 +232,8 @@ class Terminal(QWidget):
 
         # Connect terminal ready signal
         self.bridge.terminalReady.connect(self._on_terminal_ready)
+        _th().on_change(self._sync_theme)
+        self.destroyed.connect(lambda: _th().remove_listener(self._sync_theme))
 
         # Load local HTML file with robust fallback resolution
         html_file = self._resolve_terminal_html()
@@ -270,18 +272,46 @@ class Terminal(QWidget):
 
         try:
             th = _th()
-            bg = getattr(th, "BG", "#121417")
-            fg = getattr(th, "FG", "#e2e8f0")
-            accent = getattr(th, "ACCENT", "#38bdf8")
+            is_light = getattr(th, "is_light", False)
+            bg = getattr(th, "BG", "#ffffff" if is_light else "#121417")
+            fg = getattr(th, "FG", "#1a1a1a" if is_light else "#e2e8f0")
+            accent = getattr(th, "ACCENT", "#0284c7" if is_light else "#38bdf8")
+            selection_bg = getattr(th, "BG_SELECTED", "rgba(2, 132, 199, 0.35)" if is_light else "rgba(56, 189, 248, 0.35)")
+
+            if is_light:
+                ansi = {
+                    "black": "#1e293b", "red": "#dc2626", "green": "#16a34a", "yellow": "#ca8a04",
+                    "blue": "#2563eb", "magenta": "#9333ea", "cyan": "#0891b2", "white": "#475569",
+                    "brightBlack": "#64748b", "brightRed": "#ef4444", "brightGreen": "#22c55e",
+                    "brightYellow": "#eab308", "brightBlue": "#3b82f6", "brightMagenta": "#a855f7",
+                    "brightCyan": "#06b6d4", "brightWhite": "#0f172a",
+                }
+            else:
+                ansi = {
+                    "black": "#1e293b", "red": "#ef4444", "green": "#22c55e", "yellow": "#eab308",
+                    "blue": "#3b82f6", "magenta": "#a855f7", "cyan": "#06b6d4", "white": "#f8fafc",
+                    "brightBlack": "#475569", "brightRed": "#f87171", "brightGreen": "#4ade80",
+                    "brightYellow": "#fde047", "brightBlue": "#60a5fa", "brightMagenta": "#c084fc",
+                    "brightCyan": "#22d3ee", "brightWhite": "#ffffff",
+                }
+
+            if hasattr(self, "view") and self.view:
+                self.view.setStyleSheet(f"background: {bg};")
+                if hasattr(self.view, "page") and self.view.page():
+                    self.view.page().setBackgroundColor(QColor(bg))
+
             theme_data = {
                 "theme": {
                     "background": bg,
                     "foreground": fg,
                     "cursor": accent,
                     "cursorAccent": bg,
-                    "selectionBackground": "rgba(56, 189, 248, 0.35)",
+                    "selectionBackground": selection_bg,
+                    **ansi
                 },
                 "bg": bg,
+                "fg": fg,
+                "is_light": is_light,
                 "fontSize": 15
             }
             self.bridge.themeChanged.emit(json.dumps(theme_data))

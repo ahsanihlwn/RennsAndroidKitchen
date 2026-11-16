@@ -11,9 +11,19 @@ Item {
         id: row
         anchors.verticalCenter: parent.verticalCenter
         x: caption.button.leftAligned ? 0 : (parent.width-width)/2
-        spacing: caption.button.iconSource.toString().length && caption.button.text.length ? caption.button.spacing : 0
+        spacing: ((caption.button.iconKey && caption.button.iconKey.length > 0) || (caption.button.iconSource.toString().length > 0)) && caption.button.text.length ? caption.button.spacing : 0
+        WorkspaceNativeIcon {
+            visible: caption.button.iconKey && caption.button.iconKey.length > 0
+            iconKey: caption.button.iconKey || ""
+            iconSize: caption.button.iconWidth || 16
+            color: !caption.button.enabled ? caption.button.disabledLabelColor : caption.button.visualHovered ? caption.button.hoverLabelColor : caption.button.labelColor
+            hovered: caption.button.visualHovered
+            down: caption.button.down
+            enabled: caption.button.enabled
+            anchors.verticalCenter: parent.verticalCenter
+        }
         Image {
-            visible: caption.button.iconSource.toString().length>0
+            visible: (!caption.button.iconKey || caption.button.iconKey.length === 0) && caption.button.iconSource.toString().length > 0
             source: caption.button.iconSource
             width: visible ? caption.button.iconWidth : 0
             height: caption.button.iconHeight

@@ -16,51 +16,155 @@ def _detect_language(filepath: str) -> str:
     # Special filenames (no extension)
     _name_map = {
         "makefile": "makefile",
+        "gnumakefile": "makefile",
+        "android.mk": "makefile",
+        "cleanspec.mk": "makefile",
         "dockerfile": "dockerfile",
+        "containerfile": "dockerfile",
+        "cmakelists.txt": "cmake",
+        "gemfile": "ruby",
+        "rakefile": "ruby",
+        "android.bp": "blueprint",
+        "kconfig": "kconfig",
+        "defconfig": "kconfig",
+        ".config": "kconfig",
+        "build.gradle": "groovy",
+        "settings.gradle": "groovy",
+        "file_contexts": "selinux",
+        "property_contexts": "selinux",
+        "service_contexts": "selinux",
+        "hwservice_contexts": "selinux",
+        "vndservice_contexts": "selinux",
+        "vimrc": "vimscript",
+        ".vimrc": "vimscript",
     }
-    if name.lower() in _name_map:
-        return _name_map[name.lower()]
+    nl = name.lower()
+    if nl in _name_map:
+        return _name_map[nl]
+    if nl.endswith("defconfig"):
+        return "kconfig"
 
     return {
         ".py"    : "python",
+        ".pyw"   : "python",
         ".js"    : "javascript",
         ".ts"    : "typescript",
         ".jsx"   : "javascript",
         ".tsx"   : "typescript",
+        ".mjs"   : "javascript",
+        ".cjs"   : "javascript",
         ".json"  : "json",
+        ".jsonc" : "json",
         ".xml"   : "xml",
+        ".svg"   : "xml",
         ".html"  : "html",
         ".htm"   : "html",
         ".css"   : "css",
+        ".scss"  : "css",
+        ".less"  : "css",
+        ".qss"   : "css",
         ".java"  : "java",
         ".kt"    : "kotlin",
+        ".kts"   : "kotlin",
         ".cpp"   : "cpp",
         ".cc"    : "cpp",
         ".cxx"   : "cpp",
         ".c"     : "c",
         ".h"     : "cpp",
         ".hpp"   : "cpp",
+        ".hxx"   : "cpp",
+        ".hh"    : "cpp",
+        ".cs"    : "csharp",
         ".rs"    : "rust",
         ".go"    : "go",
+        ".s"     : "asm",
+        ".asm"   : "asm",
+        ".inc"   : "asm",
+        ".nasm"  : "asm",
+        ".a51"   : "asm",
+        ".smali" : "smali",
+        ".lua"   : "lua",
+        ".php"   : "php",
+        ".phtml" : "php",
+        ".php3"  : "php",
+        ".php4"  : "php",
+        ".php5"  : "php",
+        ".rb"    : "ruby",
+        ".rake"  : "ruby",
+        ".gemspec": "ruby",
+        ".swift" : "swift",
+        ".dart"  : "dart",
         ".sh"    : "shell",
         ".bash"  : "shell",
         ".zsh"   : "shell",
+        ".fish"  : "shell",
+        ".ksh"   : "shell",
+        ".bat"   : "bat",
+        ".cmd"   : "bat",
+        ".ps1"   : "powershell",
+        ".psm1"  : "powershell",
+        ".psd1"  : "powershell",
+        ".mk"    : "makefile",
+        ".mak"   : "makefile",
+        ".cmake" : "cmake",
+        ".sql"   : "sql",
         ".md"    : "markdown",
+        ".markdown": "markdown",
+        ".qml"   : "qml",
         ".yaml"  : "yaml",
         ".yml"   : "yaml",
-        ".toml"  : "ini",
+        ".toml"  : "toml",
         ".ini"   : "ini",
         ".cfg"   : "ini",
         ".conf"  : "ini",
-        ".php"   : "php",
-        ".rb"    : "ruby",
-        ".swift" : "swift",
-        ".smali" : "java",
+        ".prop"  : "ini",
+        ".properties": "ini",
+        ".inf"   : "ini",
+        ".diff"  : "diff",
+        ".patch" : "diff",
+        ".pl"    : "perl",
+        ".pm"    : "perl",
+        ".t"     : "perl",
+        ".r"     : "r",
+        ".graphql": "graphql",
+        ".gql"   : "graphql",
+        ".dts"   : "dts",
+        ".dtsi"  : "dts",
+        ".kconfig": "kconfig",
+        ".te"    : "selinux",
+        ".cil"   : "selinux",
+        ".bp"    : "blueprint",
+        ".aidl"  : "aidl",
+        ".hal"   : "aidl",
+        ".gradle": "groovy",
+        ".groovy": "groovy",
+        ".gvy"   : "groovy",
+        ".zig"   : "zig",
+        ".zon"   : "zig",
+        ".proto" : "protobuf",
+        ".m"     : "objective-c",
+        ".mm"    : "objective-c",
+        ".wat"   : "wat",
+        ".wast"  : "wat",
+        ".scala" : "scala",
+        ".sc"    : "scala",
+        ".ex"    : "elixir",
+        ".exs"   : "elixir",
+        ".erl"   : "erlang",
+        ".hrl"   : "erlang",
+        ".hs"    : "haskell",
+        ".lhs"   : "haskell",
+        ".clj"   : "clojure",
+        ".cljs"  : "clojure",
+        ".cljc"  : "clojure",
+        ".edn"   : "clojure",
+        ".nim"   : "nim",
+        ".nims"  : "nim",
+        ".nimble": "nim",
+        ".vim"   : "vimscript",
         ".rc"    : "plaintext",
         ".txt"   : "plaintext",
         ".log"   : "plaintext",
-        ".prop"  : "ini",
-        ".mk"    : "makefile",
     }.get(ext, "plaintext")
 
 
@@ -218,12 +322,42 @@ class EditorBridge(QObject):
             ".zsh": "icon_zsh",
             ".fish": "icon_fish",
             ".cob": "icon_cobol", ".cbl": "icon_cobol", ".cobol": "icon_cobol",
-            ".asm": "icon_asm", ".s": "icon_asm",
+            ".asm": "icon_asm", ".s": "icon_asm", ".inc": "icon_asm", ".nasm": "icon_asm", ".a51": "icon_asm",
+            ".bat": "icon_sh", ".cmd": "icon_sh",
+            ".ps1": "icon_sh", ".psm1": "icon_sh",
+            ".mk": "icon_sh", ".mak": "icon_sh",
+            ".cmake": "icon_sh",
+            ".lua": "icon_js",
+            ".dart": "icon_kt",
+            ".rb": "icon_py",
+            ".sql": "icon_json",
+            ".toml": "icon_cfg",
+            ".yaml": "icon_cfg", ".yml": "icon_cfg",
+            ".diff": "txt", ".patch": "txt",
+            ".dts": "icon_cfg", ".dtsi": "icon_cfg",
+            ".kconfig": "icon_cfg",
+            ".te": "icon_rc", ".cil": "icon_rc",
+            ".bp": "icon_json",
+            ".aidl": "icon_java", ".hal": "icon_java",
+            ".gradle": "icon_java", ".groovy": "icon_java",
+            ".zig": "icon_c", ".zon": "icon_c",
+            ".proto": "icon_xml",
+            ".m": "icon_c", ".mm": "icon_cpp",
+            ".wat": "icon_asm", ".wast": "icon_asm",
+            ".scala": "icon_java", ".sc": "icon_java",
+            ".ex": "icon_py", ".exs": "icon_py",
+            ".erl": "icon_py", ".hrl": "icon_py",
+            ".hs": "icon_py",
+            ".clj": "icon_java", ".cljs": "icon_java",
+            ".nim": "icon_py",
+            ".vim": "icon_sh",
             ".txt": "txt", ".text": "txt", ".log": "txt",
             ".md": "txt", ".markdown": "txt",
         }
-        if name in ("makefile", "dockerfile"):
+        if name in ("makefile", "gnumakefile", "android.mk", "cleanspec.mk", "dockerfile", "containerfile", "cmakelists.txt", "vimrc", ".vimrc"):
             return "icon_sh"
+        if name in ("android.bp", "build.gradle", "settings.gradle", "file_contexts", "property_contexts", "service_contexts", "kconfig", "defconfig", ".config") or name.endswith("defconfig"):
+            return "icon_cfg"
         return _map.get(ext, "file")
 
     @staticmethod
@@ -388,8 +522,20 @@ class EditorBridge(QObject):
     def get_active_file(self):
         return self._active
 
+    def _find_tab(self, filepath: str):
+        if not filepath:
+            return None, None
+        if filepath in self._tabs:
+            return filepath, self._tabs[filepath]
+        norm = os.path.normcase(os.path.normpath(filepath))
+        for key, tab in self._tabs.items():
+            if os.path.normcase(os.path.normpath(key)) == norm:
+                return key, tab
+        return None, None
+
     def is_unsaved(self, filepath: str) -> bool:
-        return self._tabs.get(filepath, {}).get("unsaved", False)
+        _, tab = self._find_tab(filepath)
+        return tab.get("unsaved", False) if tab else False
 
     def tab_count(self) -> int:
 
@@ -553,6 +699,24 @@ class EditorBridge(QObject):
             del self._tabs[filepath]
         self._active = None
         self._selections.pop(filepath,None)
+
+    def update_selection(self, filepath: str, data: dict):
+        key, tab = self._find_tab(filepath)
+        target = key or filepath
+        names = ('startLineNumber', 'startColumn', 'endLineNumber', 'endColumn')
+        try:
+            position = {name: max(1, int(data.get(name, 1))) for name in names}
+            position['text'] = str(data.get('text', ''))[:8192]
+        except (ValueError, KeyError, TypeError):
+            return
+        self._selections[target] = position
+        if filepath and filepath != target:
+            self._selections[filepath] = position
+        self.selectionChanged.emit(target, position)
+
+    def get_selection(self, filepath: str) -> dict:
+        key, tab = self._find_tab(filepath)
+        return self._selections.get(key) or self._selections.get(filepath) or {}
 
     @Slot(str,str)
     def on_selection_changed(self,filepath,payload):

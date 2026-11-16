@@ -242,7 +242,7 @@ class WorkspaceAgentChat(QObject):
     def show(self,origin='',paths=()):
         if not self.available:self.refreshBackends();return
         if origin or paths or self._data.get('attachment') is None:
-            if not self.draft.strip() or self._data.get('attachment') is None:self._data['attachment']=self.inbox.capture(origin,paths)
+            self._data['attachment']=self.inbox.capture(origin,paths)
         self._open=True;self.inbox.setShowing(True);self.openChanged.emit();self.changed.emit();self._schedule_save()
         if self._transport is None and not self.busy:self.connectBackend()
 

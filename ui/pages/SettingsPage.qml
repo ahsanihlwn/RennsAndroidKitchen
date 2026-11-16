@@ -28,7 +28,14 @@ Item {
         property string text: ""
         property string iconName: ""
         x: 14; y: 12; width: parent.width - 28; height: 20
-        Image { anchors.verticalCenter: parent.verticalCenter; sourceSize.width: width; sourceSize.height: height; width: 20; height: 20; source: page.model.icon(parent.iconName, "") }
+        WorkspaceNativeIcon {
+            anchors.verticalCenter: parent.verticalCenter
+            iconKey: parent.iconName
+            iconSize: 20
+            strokeColor: page.c.FG_LABEL
+            accentColor: page.c.accentColor
+            isLight: (page.c && page.c.is_light !== undefined) ? page.c.is_light : false
+        }
         RakLabel { x: 28; height: parent.height; text: parent.text; color: page.c.FG_LABEL; font.pixelSize: 14; font.weight: Font.DemiBold }
     }
     component SmallButton: ActionButton {
@@ -53,7 +60,7 @@ Item {
     Flickable {
         id: scroll
         objectName: "settingsScroll"
-        x: 16; y: 77; width: parent.width - 32; height: Math.max(0, parent.height - 155)
+        x: 16; y: 77; width: parent.width - 32; height: Math.max(0, parent.height - 77 - 16)
         clip: !page.glassChrome; contentHeight: content.height + 32; boundsBehavior: Flickable.StopAtBounds
         Column {
             id: content
@@ -189,7 +196,14 @@ Item {
                         required property var modelData
                         required property int index
                         x: 14; y: 12 + index * 43; width: parent.width - 28; height: 26
-                        Image { sourceSize.width: width; sourceSize.height: height; width: 20; height: 20; y: 3; source: page.model.icon(parent.modelData.icon, "") }
+                        WorkspaceNativeIcon {
+                            y: 3
+                            iconKey: parent.modelData.icon
+                            iconSize: 20
+                            strokeColor: page.c.FG
+                            accentColor: page.c.accentColor
+                            isLight: (page.c && page.c.is_light !== undefined) ? page.c.is_light : false
+                        }
                         RakLabel { x: 30; height: 26; text: parent.modelData.title || ""; color: page.c.FG; font.weight: Font.DemiBold }
                         SmallButton { anchors.right: parent.right; width: 55; height: 26; text: page.s.btn_view; onClicked: page.model.dispatch(parent.modelData.action, {}) }
                     }
@@ -197,19 +211,16 @@ Item {
             }
         }
     }
-    PageRevealMask { anchors.fill: parent; motion: page.presentationMotion; page: page; topInset: headerGlass.height; bottomInset: footer.height }
+    PageRevealMask { anchors.fill: parent; motion: page.presentationMotion; page: page; topInset: headerGlass.height; bottomInset: 0 }
     }
     GlassBand { id: headerGlass; objectName: "settingsHeaderGlass"; z: 1; width: parent.width; height: 77; model: page.model; backdropSource: settingsSurface; origin: Qt.point(0,0) }
-    GlassBand { objectName: "settingsFooterGlass"; z: 1; y: parent.height-80; width: parent.width; height: 80; model: page.model; backdropSource: settingsSurface; origin: Qt.point(0,y) }
     PageFooter {
         id: footer
-        z: 2
-        width: parent.width; anchors.bottom: parent.bottom; model: page.model; showProfile: false
-        ActionButton {
-            objectName: "settingsBackButton"
-            width: 99; height: 32; colors: page.c; text: page.s.btn_back
-            iconSource: page.model.icon("arrow_right", page.c.FG2); iconWidth: 15; iconHeight: 15
-            animatePress: page.model.settings.animations; onClicked: page.model.back()
-        }
+        visible: false
+        height: 0
+        width: parent.width
+        anchors.bottom: parent.bottom
+        model: page.model
+        showProfile: false
     }
 }

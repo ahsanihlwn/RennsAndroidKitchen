@@ -4,6 +4,7 @@ import sys
 
 # Use this family in QSS and QFont.
 POPPINS_FAMILY = "Poppins"
+JETBRAINS_MONO_FAMILY = "JetBrains Mono"
 
 _LOADED = False
 
@@ -41,17 +42,21 @@ def load_fonts() -> str:
 
     families = set()
     loaded = 0
-    for fname in os.listdir(fonts_dir):
-        if not fname.lower().endswith(".ttf"):
+    for root_dir, _, files in os.walk(fonts_dir):
+        norm_root = root_dir.replace("\\", "/").lower()
+        if "variable" in norm_root or "webfonts" in norm_root:
             continue
-        path = os.path.join(fonts_dir, fname)
-        fid = QFontDatabase.addApplicationFont(path)
-        if fid == -1:
-            print(f"[FONTS] gagal load: {fname}")
-            continue
-        loaded += 1
-        for fam in QFontDatabase.applicationFontFamilies(fid):
-            families.add(fam)
+        for fname in sorted(files):
+            if not fname.lower().endswith(".ttf"):
+                continue
+            path = os.path.join(root_dir, fname)
+            fid = QFontDatabase.addApplicationFont(path)
+            if fid == -1:
+                print(f"[FONTS] gagal load: {fname}")
+                continue
+            loaded += 1
+            for fam in QFontDatabase.applicationFontFamilies(fid):
+                families.add(fam)
 
     if not loaded:
         print("[FONTS] tidak ada TTF yang termuat")
@@ -62,7 +67,7 @@ def load_fonts() -> str:
     family = POPPINS_FAMILY if POPPINS_FAMILY in families else (
         sorted(families)[0] if families else POPPINS_FAMILY
     )
-    print(f"[FONTS] {loaded} TTF Poppins termuat (family='{family}')")
+    print(f"[FONTS] {loaded} TTF termuat (family='{family}', jetbrains={'JetBrains Mono' in families})")
     return family
 
 

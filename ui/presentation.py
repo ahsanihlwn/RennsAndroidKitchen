@@ -80,6 +80,17 @@ class LauncherModel(QObject):
         self.drivesChanged.connect(lambda: self._drive_rows.replace(self._drives))
         self.colorsChanged.connect(self.panelBorderChanged.emit)
         self.settingsChanged.connect(self.panelBorderChanged.emit)
+        theme.on_change(self._on_global_theme_changed)
+        self.destroyed.connect(lambda: theme.remove_listener(self._on_global_theme_changed))
+
+    def _on_global_theme_changed(self):
+        if theme.name in _PALETTES and theme.name != self._palette_name:
+            self._palette_name = theme.name
+            self._color_cache = None
+            self._string_cache = None
+            self.colorsChanged.emit()
+            self.stringsChanged.emit()
+            self.changed.emit()
 
     def _sync_projects(self):
         self._project_rows.replace(self.projects, animate=self._animate_rows)
@@ -182,6 +193,7 @@ class LauncherModel(QObject):
             return self._color_cache
         palette = _PALETTES[self._palette_name]
         result = {key: value for key, value in palette.items() if isinstance(value, str)}
+        result['is_light'] = bool(palette.get('_is_light', False))
         result['treeArrow'] = palette['FG'] if palette.get('_is_light',False) else '#ffffff'
         neutral = QColor(*palette["_border_rgb"]).name()
         result['menuBorder']=color_alpha(neutral,45/255)

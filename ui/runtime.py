@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MPL-2.0
 """Load native QML windows and original icon assets."""
 from pathlib import Path
+import re
 from urllib.parse import unquote, urlsplit, parse_qs
 
-from PySide6.QtCore import QUrl, Qt, QObject, Property, Signal, Slot, QTimer, QPointF, QMetaObject, QEvent
+from PySide6.QtCore import QUrl, Qt, QObject, Property, Signal, Slot, QTimer, QPointF, QMetaObject, QEvent, QByteArray
 from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
 from PySide6.QtQuick import QQuickImageProvider
@@ -28,6 +29,13 @@ def initialize_quick_runtime(*, webengine=False):
         from ui.input_regions import ContentInputRegion
         qmlRegisterType(ContentInputRegion, "Renns.Input", 1, 0, "ContentInputRegion")
         _input_regions_registered = True
+    if not globals().get("_quill_registered", False):
+        try:
+            from ui.quill_editor import NativeEditor
+            qmlRegisterType(NativeEditor, "Quill.Native", 1, 0, "NativeEditor")
+            globals()["_quill_registered"] = True
+        except Exception:
+            pass
     if webengine:
         from PySide6.QtWebEngineQuick import QtWebEngineQuick
         QtWebEngineQuick.initialize()
@@ -105,10 +113,12 @@ class FirstFramePresenter(QObject):
 class IconProvider(QQuickImageProvider):
     def __init__(self):
         super().__init__(QQuickImageProvider.Image)
+        self._svg_cache = {}
 
     def requestImage(self, identifier, size, requested_size):
         from icons.handler import icon
         from PySide6.QtSvg import QSvgRenderer
+        from main_ext.class_ThemeUi import theme
         parsed = urlsplit(identifier)
         path = icon(unquote(parsed.path))
         width = requested_size.width() if requested_size.width() > 0 else 24
@@ -117,17 +127,54 @@ class IconProvider(QQuickImageProvider):
         image.fill(Qt.transparent)
         painter = QPainter(image)
         painter.setRenderHints(QPainter.Antialiasing|QPainter.SmoothPixmapTransform|QPainter.TextAntialiasing)
+
+        query = parse_qs(parsed.query)
+        color_tint = query.get("color", [""])[0] or query.get("tint", [""])[0]
+
         if path.lower().endswith(".svg"):
-            QSvgRenderer(path).render(painter)
+            theme_mode = query.get("theme", [""])[0]
+            is_light = (theme_mode == "light") if theme_mode else theme._palette.get("_is_light", False)
+            fg = query.get("fg", [""])[0] or (getattr(theme, "FG", "#24292f") if is_light else getattr(theme, "FG", "#c9d1d9"))
+            accent = query.get("accent", [""])[0] or (getattr(theme, "accent_hex", "") or getattr(theme, "FG_BLUE", "#3ecf8e"))
+
+            cache_key = (path, is_light, fg, accent)
+            svg_bytes = self._svg_cache.get(cache_key)
+            if svg_bytes is None:
+                try:
+                    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                        raw_svg = f.read()
+
+                    has_ui_tokens = any(tok in raw_svg for tok in ("#D7E3FF", "#d7e3ff", "#8AB4F8", "#8ab4f8", ".main", ".accent"))
+                    has_white_stroke = any(tok in raw_svg for tok in ('stroke="#FFFFFF"', 'stroke="#ffffff"', 'fill="#FFFFFF"', 'fill="#ffffff"', 'fill="#fff"'))
+
+                    if has_ui_tokens or has_white_stroke:
+                        if is_light:
+                            raw_svg = re.sub(r'#D7E3FF|#d7e3ff', fg, raw_svg)
+                            raw_svg = re.sub(r'(stroke|fill)="(#FFFFFF|#ffffff|#fff)"', rf'\1="{fg}"', raw_svg)
+                            raw_svg = re.sub(r'#8AB4F8|#8ab4f8', accent, raw_svg)
+                            raw_svg = raw_svg.replace('fill-opacity="0.10"', 'fill-opacity="0.08"')
+                        else:
+                            raw_svg = re.sub(r'#8AB4F8|#8ab4f8', accent, raw_svg)
+
+                    svg_bytes = raw_svg.encode("utf-8")
+                    if len(self._svg_cache) > 512:
+                        self._svg_cache.clear()
+                    self._svg_cache[cache_key] = svg_bytes
+                except Exception:
+                    svg_bytes = None
+
+            if svg_bytes:
+                QSvgRenderer(QByteArray(svg_bytes)).render(painter)
+            else:
+                QSvgRenderer(path).render(painter)
         else:
-            # QPainter's minification samples too few source texels for photos
-            # (the credit portrait is 1024px). Use Qt's area resampler first.
-            raster=QImage(path).scaled(width,height,Qt.IgnoreAspectRatio,Qt.SmoothTransformation)
-            painter.drawImage(0,0,raster)
-        tint = parse_qs(parsed.query).get("color", [""])[0]
-        if tint and QColor(tint).isValid():
+            raster = QImage(path).scaled(width, height, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            painter.drawImage(0, 0, raster)
+
+        if color_tint and QColor(color_tint).isValid():
             painter.setCompositionMode(QPainter.CompositionMode_SourceIn)
-            painter.fillRect(image.rect(), QColor(tint))
+            painter.fillRect(image.rect(), QColor(color_tint))
+
         painter.end()
         size.setWidth(width)
         size.setHeight(height)

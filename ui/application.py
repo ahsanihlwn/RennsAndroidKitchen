@@ -379,6 +379,9 @@ class LauncherApplication(QObject):
         self.model.refreshPreferences(theme.name, ui_lang._current_lang, self._settings())
         self._update_drives()
         self._refresh_profile()
+        if getattr(self, "_standby_worker", None) is not None:
+            self._kill_standby_worker()
+            QTimer.singleShot(0, self._spawn_standby_worker)
 
     def _refresh_profile(self):
         self.model.replaceProfile(self.accounts.profile())
@@ -674,8 +677,29 @@ class LauncherApplication(QObject):
             completion,self._deferred_completion = self._deferred_completion,None
             self._complete_job(*completion)
 
+    def _permanently_delete_project(self, path, record=None):
+        import shutil
+        import stat
+        def _rm_readonly(func, subpath, _exc):
+            try:
+                os.chmod(subpath, stat.S_IWRITE)
+                if sys.platform == "win32":
+                    import ctypes
+                    ctypes.windll.kernel32.SetFileAttributesW(subpath, 0x80)
+            except OSError:
+                pass
+            func(subpath)
+
+        if os.path.isdir(path):
+            shutil.rmtree(path, onerror=_rm_readonly)
+        if record:
+            self.store.trash._remove_active(record)
+        else:
+            self.store.remove_from_list(path)
+
     def _complete_job(self, callback, ok, result):
         deleting = bool(self.model.deletingPath) and ok
+        delete_path = self.model.deletingPath
         self.model.setDeletingPath("")
         self._reload()
         # Keep deletion input blocked through the overlapping exit/reflow.
@@ -687,6 +711,20 @@ class LauncherApplication(QObject):
         if self._quitting:
             return
         if not ok:
+            if getattr(result, "code", "") == "RecycleError" and delete_path and os.path.exists(delete_path):
+                project_name = os.path.basename(delete_path)
+                rec = None
+                try:
+                    rec = self._project(delete_path)
+                    project_name = rec.get("project_name", project_name)
+                except Exception:
+                    pass
+                msg = str(result) + "\n\n" + ui_lang.t("dlg_delete_msg", name=project_name)
+                msg = re.sub("<[^>]*>", "", msg.replace("<br>", "\n"))
+                self._message(msg, ui_lang.t("dlg_delete_title"),
+                              confirmation=lambda: self._permanently_delete_project(delete_path, rec),
+                              delete_path=delete_path, danger=True)
+                return
             self._message(result)
         elif callback is not None:
             callback(result)

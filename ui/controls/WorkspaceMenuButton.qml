@@ -24,6 +24,13 @@ RakButton {
     hoverLabelColor: row.danger?c.RED_LIGHTER:c.FG_BRIGHT
     disabledLabelColor: header?c.FG_MUTED:mounted?c.FG_DIM:Qt.rgba(foreground.r,foreground.g,foreground.b,128/255)
     animatePress: preferences.settings.animations && !separator && !header
+    Text {
+        anchors.right: parent.right; anchors.rightMargin: 12; anchors.verticalCenter: parent.verticalCenter
+        text: button.row.shortcut || ""
+        visible: !button.row.children && !!button.row.shortcut
+        font.pixelSize: 11
+        color: button.enabled ? button.c.FG_MUTED : Qt.rgba(button.foreground.r,button.foreground.g,button.foreground.b,90/255)
+    }
     Image {
         anchors.right: parent.right; anchors.rightMargin: 10; anchors.verticalCenter: parent.verticalCenter
         width: 12; height: 12; source: "image://icons/arrow_right?color="+encodeURIComponent(button.c.treeArrow)

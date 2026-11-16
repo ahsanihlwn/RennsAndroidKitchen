@@ -29,9 +29,9 @@ T.ScrollBar {
     policy: T.ScrollBar.AsNeeded
     visible: policy===T.ScrollBar.AlwaysOn || (policy===T.ScrollBar.AsNeeded && size<.9999)
     contentItem: SmoothRectangle {
-        implicitWidth: control.orientation === Qt.Vertical ? 4 : 20
-        implicitHeight: control.orientation === Qt.Horizontal ? 4 : 20
-        radius: 2
+        implicitWidth: control.orientation === Qt.Vertical ? (control.width > 0 ? control.width : 4) : 20
+        implicitHeight: control.orientation === Qt.Horizontal ? (control.height > 0 ? control.height : 4) : 20
+        radius: control.orientation === Qt.Vertical ? Math.min(control.width > 0 ? control.width / 2 : 2, 4) : Math.min(control.height > 0 ? control.height / 2 : 2, 4)
         color: control.pressed ? control.downColor : control.hovered ? control.hoverColor : control.handleColor
     }
 }

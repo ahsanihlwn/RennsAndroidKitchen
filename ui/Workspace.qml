@@ -32,6 +32,7 @@ Window {
     readonly property string agentFocusArea: !active?"inactive":nativeDialogActive?"dialog":fileSearch.visible?"search":
         focusInside(agentPane)?"agent":focusInside(editorCard)?"editor":terminalFocused?"terminal":focusInside(firstTree)?"tree0":focusInside(secondTree)?"tree1":"workspace"
     onAgentFocusAreaChanged: workspace.setFocusArea(agentFocusArea)
+    readonly property var contextMenu: contextMenu
     property bool managedClose: true
     property bool firstFrameReady: false
     width: 1080; height: 700; minimumWidth: 550; minimumHeight: 400
@@ -67,10 +68,30 @@ Window {
             signature: workspace.layoutMode+":"+workspace.hasTabs+":"+workspace.terminalOpen+":"+workspace.agentChat.opened
             animationsEnabled: window.visible && window.preferences.settings.animations
         }
+        WorkspaceSidePanel {
+            id: sidePanel
+            anchors.left: parent.left
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.margins: 11
+            workspace: window.workspace
+            preferences: window.preferences
+            hostWindow: window
+            z: 5
+            onHistoryRequested: target => taskHistory.showAt(target)
+        }
         C.SplitView {
             id: mainSplit
             objectName: "workspaceMainSplit"
-            anchors.fill: parent; anchors.margins: 11; orientation: Qt.Horizontal
+            anchors.left: sidePanel.right
+            anchors.right: parent.right
+            anchors.top: parent.top
+            anchors.bottom: parent.bottom
+            anchors.topMargin: 11
+            anchors.bottomMargin: 11
+            anchors.rightMargin: 11
+            anchors.leftMargin: 8
+            orientation: Qt.Horizontal
             enabled: !layoutMotion.running
             opacity: layoutMotion.running?0:1
             Behavior on opacity { NumberAnimation { duration: window.preferences.settings.animations?100:0 } }
@@ -83,7 +104,7 @@ Window {
                 C.SplitView {
                     id: trees
                     objectName: "workspaceTreeSplit"
-                    y: 80; width: parent.width; height: parent.height-y
+                    y: 0; width: parent.width; height: parent.height
                     orientation: workspace.layoutMode===2?Qt.Horizontal:Qt.Vertical
                     handle: WorkspaceSplitter { objectName: "workspaceTreeDivider"; preferences: window.preferences; horizontal: trees.orientation===Qt.Vertical }
                     Item {
@@ -108,7 +129,7 @@ Window {
                 C.SplitView {
                     id: editorSplit
                     objectName: "workspaceEditorSplit"
-                    anchors.fill: parent; anchors.topMargin: 6; anchors.rightMargin: 6
+                    anchors.fill: parent
                     orientation: Qt.Vertical
                     handle: WorkspaceSplitter { objectName: "workspaceEditorDivider"; preferences: window.preferences; horizontal: true; implicitHeight: window.editorGap }
                     Item {
@@ -139,13 +160,6 @@ Window {
         WorkspaceMotionPane {
             id: leftPane
             layoutTarget: left; motion: layoutMotion; z: 3
-            WorkspaceToolbar { id: toolbar; anchors.top: parent.top; width: parent.width; height: 60; workspace: window.workspace; preferences: window.preferences; hostWindow: window }
-            WorkspaceStatusBar {
-                id: statusBar
-                y: 60; width: parent.width
-                workspace: window.workspace; preferences: window.preferences
-                onHistoryRequested: target => taskHistory.showAt(target)
-            }
         }
         WorkspaceMotionPane {
             id: firstTreePane
@@ -222,13 +236,22 @@ Window {
                     visible: workspace.agentChat.available
                     preferences: window.preferences;iconKey: "send";toolTip: "Send to agent"
                     SmoothRectangle {visible: workspace.agentInbox.notificationCount>0;x: parent.width-7;y: 3;width: 5;height: 5;radius: 2.5;color: window.c.accent_hex}
-                    onClicked: workspace.dispatch("agentSend",{origin:"editor"})
+                    onClicked: {
+                        var qEd = monaco.findQuillEditor()
+                        if (qEd) {
+                            monaco.session.setSelection(qEd.filePath || workspace.activeTab, qEd.selectionRange)
+                            workspace.dispatch("agentSend", {origin: "editor", path: qEd.filePath || workspace.activeTab, selection: qEd.selectionRange})
+                        } else {
+                            workspace.dispatch("agentSend", {origin: "editor"})
+                        }
+                    }
                 }
                 // Keep a single Monaco alive while auxiliary viewers are selected.
                 EditorPane {
                     id: monaco
                     x: window.cardInset; y: window.headerInset+34; width: parent.width-2*window.cardInset; height: Math.max(1,parent.height-y-window.cardInset)
-                    session: workspace.editor; fillColor: c.BG3; visible: workspace.activeKind==="editor"; nativeTabs: true
+                    session: workspace.editor; fillColor: c.BG3; colors: c; preferences: window.preferences; hostWindow: window; visible: workspace.activeKind==="editor"; nativeTabs: true; findOverlay: editorFind
+                    contextMenu: contextMenu
                 }
                 Repeater {
                     model: workspace.tabs
@@ -237,7 +260,8 @@ Window {
                         required property var modelData
                         x: window.cardInset; y: window.headerInset+34; width: editorCard.width-2*window.cardInset; height: Math.max(1,editorCard.height-y-window.cardInset)
                         active: modelData.kind!=="editor"
-                        visible: modelData.path===workspace.activeTab
+                        visible: active && modelData.path===workspace.activeTab
+                        enabled: visible
                         sourceComponent: WorkspaceViewer {
                             workspace: window.workspace; preferences: window.preferences; details: viewerSlot.modelData
                         }
@@ -297,8 +321,16 @@ Window {
             }
         }
     }
+    WorkspaceEditorFind {
+        id: editorFind
+        objectName: "workspaceEditorFind"
+        preferences: window.preferences
+        hostWindow: window
+        editorPane: monaco
+        z: 20
+    }
     SmoothRectangle {
-        anchors.fill: parent; z: 30; color: "#96000000"
+        anchors.fill: parent; z: 30; color: "#96000000" 
         opacity: window.nativeDialogActive?1:0
         visible: opacity>0
         Behavior on opacity { NumberAnimation { duration: window.preferences.settings.animations?180:0; easing.type: Easing.OutCubic } }
@@ -369,7 +401,7 @@ Window {
             else if(kind==="permissions")permissionDialog.showPermissions(data)
             else if(kind==="find")fileSearch.showAt(workspace.activeTreeId===0?firstTree.view:secondTree.view)
             else if(kind==="openWith")openWithDialog.showPicker(data)
-            else if(kind==="history")taskHistory.showAt(statusBar.historyButton)
+            else if(kind==="history")taskHistory.showAt(sidePanel.historyButton)
             else if(kind==="neobranchCreate")branchCreate.showCreate(data)
             else if(kind==="neobranchPicker")branchPicker.showPicker(data)
             else if(kind==="makeFilesystem")makeFilesystem.showFolder(data)

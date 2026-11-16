@@ -316,8 +316,8 @@ Item {
             objectName: "importButton"
             width: 95; height: 32; colors: page.c; primary: false
             text: page.s.btn_import_project || "Import"
-            iconSource: page.model.icon("import", page.c.FG2)
-            iconWidth: 14; iconHeight: 14
+            iconKey: "import"
+            iconWidth: 15; iconHeight: 15
             animatePress: page.model.settings.animations
             onClicked: page.model.dispatch("importProject", {})
         }
@@ -325,7 +325,8 @@ Item {
             id: newProject
             objectName: "createButton"
             width: 121; height: 32; colors: page.c; text: page.s.btn_create_project
-            iconSource: page.model.icon("plus", page.c.FG2); iconWidth: 15; iconHeight: 15
+            iconKey: "plus"
+            iconWidth: 15; iconHeight: 15
             animatePress: page.model.settings.animations
             onClicked: page.model.dispatch("newProject", {})
         }

@@ -54,5 +54,7 @@ def preview(row):
     icon='folder' if kind=='folder' else 'image' if kind=='image' else file_icon(path)
     size=row.get('size',0)
     caption=(f'{size/1048576:.1f} MB' if size>=1048576 else f'{size/1024:.0f} KB' if size>=1024 else f'{size} B') if size else ''
+    if row.get('label') and ' · line' in row['label']:
+        caption = row['label'].split(' · ')[1]
     return {**row,'name':row.get('name') or Path(path).name or path,'kind':kind,'icon':'image://rak/'+icon,'sizeLabel':caption,
         'previewUrl':QUrl.fromLocalFile(path).toString() if kind=='image' and local and os.path.isfile(path) else ''}

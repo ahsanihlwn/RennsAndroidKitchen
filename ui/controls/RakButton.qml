@@ -19,6 +19,7 @@ T.Button {
     property color disabledLabelColor: labelColor
     property real cornerRadius: 7
     property real edgeWidth: 1
+    property string iconKey: ""
     property url iconSource: ""
     property int iconWidth: 16
     property int iconHeight: 16

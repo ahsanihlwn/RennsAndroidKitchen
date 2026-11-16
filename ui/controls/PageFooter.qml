@@ -18,7 +18,7 @@ Item {
             const button=actionRow.children[i]
             if (button.actionVisible===false || button.width<=0) continue
             result.push({rect:button.parent.mapToItem(host,button.x,button.y,button.width,button.height), text:button.text,
-                         icon:button.iconSource,iconWidth:button.iconWidth,iconHeight:button.iconHeight,font:button.font,
+                         icon:button.iconSource,iconKey:button.iconKey || "",iconWidth:button.iconWidth,iconHeight:button.iconHeight,font:button.font,
                          fill:button.enabled?button.fillColor:button.disabledFillColor,edge:button.enabled?button.edgeColor:button.disabledEdgeColor,
                          color:button.enabled?button.labelColor:button.disabledLabelColor})
         }

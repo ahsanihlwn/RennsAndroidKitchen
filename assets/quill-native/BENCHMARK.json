@@ -1,0 +1,67 @@
+{
+  "platform": "Linux-6.18.57-x86_64-with-glibc2.41",
+  "python": "3.12.14",
+  "renderer": "offscreen/software",
+  "ui": [
+    {
+      "bytes": 67,
+      "lines": 4,
+      "cached_layouts": 4,
+      "visible_rows": 4,
+      "paint_count": 2,
+      "prepare_count": 1,
+      "language": "Python",
+      "editor_core": "floem-editor-core/0.2.0",
+      "history": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "first_frame_ms": 168.2,
+      "observation_ms": 955.0,
+      "backend": "software",
+      "rss_mib": 86.98,
+      "child_processes": 0,
+      "case": "small_python",
+      "input_mib": 0.0
+    },
+    {
+      "bytes": 11200000,
+      "lines": 160001,
+      "cached_layouts": 29,
+      "visible_rows": 29,
+      "paint_count": 2,
+      "prepare_count": 1,
+      "language": "Rust",
+      "editor_core": "floem-editor-core/0.2.0",
+      "history": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "first_frame_ms": 286.2,
+      "observation_ms": 1111.2,
+      "backend": "software",
+      "rss_mib": 98.47,
+      "child_processes": 0,
+      "case": "10_mib_rust",
+      "input_mib": 10.68
+    }
+  ],
+  "core": {
+    "file_mib": 10.68,
+    "lines": 160001,
+    "stream_load_ms": 33.382,
+    "edit_count": 1000,
+    "insert_p50_ms": 0.0186,
+    "insert_p95_ms": 0.0491,
+    "notes": "Backend insertion timings include PyO3 call, rope edit and history bookkeeping. They exclude UI layout/paint, coloring, disk I/O and undo timing. One warmed process; no cross-editor comparison."
+  },
+  "caveats": [
+    "RSS includes shared mapped libraries and differs across OS/GPU/backend.",
+    "Headless/software results do not predict Windows GPU memory usage.",
+    "first_frame_ms measures initialization through first frame, observation_ms includes an intentional 800 ms settling timer."
+  ]
+}

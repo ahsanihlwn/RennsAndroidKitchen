@@ -1,0 +1,25 @@
+[build-system]
+requires = ["maturin>=1.7,<2"]
+build-backend = "maturin"
+
+[project]
+name = "quill-native"
+version = "0.3.0"
+description = "A small native Rust + PySide6 Qt Quick code editor"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["PySide6-Essentials>=6.8,<6.11"]
+license = {text = "MIT"}
+
+[project.scripts]
+quill-native = "quill_native.app:main"
+
+[tool.maturin]
+manifest-path = "native/Cargo.toml"
+python-source = "python"
+module-name = "quill_native._engine"
+features = ["pyo3/extension-module"]
+include = ["python/quill_native/*.qml", "python/quill_native/licenses/**/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

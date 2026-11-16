@@ -6,6 +6,11 @@
     <title>RAK Terminal</title>
     <link rel="stylesheet" href="xterm.css">
     <style>
+        :root {
+            --term-bg: #121417;
+            --scrollbar-thumb: rgba(255, 255, 255, 0.15);
+            --scrollbar-thumb-hover: rgba(255, 255, 255, 0.28);
+        }
         * {
             box-sizing: border-box;
             margin: 0;
@@ -15,7 +20,7 @@
             width: 100%;
             height: 100%;
             overflow: hidden;
-            background-color: #121417;
+            background-color: var(--term-bg);
         }
         body {
             padding: 4px 6px;
@@ -27,6 +32,10 @@
             padding: 0;
             overflow: hidden;
             position: relative;
+            background-color: transparent;
+        }
+        .xterm, .xterm .xterm-viewport, .xterm .xterm-screen {
+            background-color: transparent !important;
         }
         /* Custom scrollbar matching RAK theme */
         .xterm .xterm-viewport::-webkit-scrollbar {
@@ -36,11 +45,11 @@
             background: transparent;
         }
         .xterm .xterm-viewport::-webkit-scrollbar-thumb {
-            background: rgba(255, 255, 255, 0.15);
+            background: var(--scrollbar-thumb);
             border-radius: 4px;
         }
         .xterm .xterm-viewport::-webkit-scrollbar-thumb:hover {
-            background: rgba(255, 255, 255, 0.28);
+            background: var(--scrollbar-thumb-hover);
         }
     </style>
     <script src="qwebchannel.js"></script>
@@ -237,7 +246,7 @@
                         try {
                             const th = JSON.parse(themeJson);
                             if (th.theme) {
-                                term.options.theme = th.theme;
+                                term.options.theme = Object.assign({}, th.theme);
                             }
                             if (th.fontFamily) {
                                 term.options.fontFamily = th.fontFamily;
@@ -246,7 +255,21 @@
                                 term.options.fontSize = th.fontSize;
                             }
                             if (th.bg) {
+                                document.documentElement.style.setProperty('--term-bg', th.bg);
+                                document.documentElement.style.backgroundColor = th.bg;
                                 document.body.style.backgroundColor = th.bg;
+                                const container = document.getElementById('terminal-container');
+                                if (container) container.style.backgroundColor = th.bg;
+                            }
+                            if (th.is_light) {
+                                document.documentElement.style.setProperty('--scrollbar-thumb', 'rgba(0, 0, 0, 0.20)');
+                                document.documentElement.style.setProperty('--scrollbar-thumb-hover', 'rgba(0, 0, 0, 0.35)');
+                            } else {
+                                document.documentElement.style.setProperty('--scrollbar-thumb', 'rgba(255, 255, 255, 0.15)');
+                                document.documentElement.style.setProperty('--scrollbar-thumb-hover', 'rgba(255, 255, 255, 0.28)');
+                            }
+                            if (term && term.rows > 0) {
+                                term.refresh(0, term.rows - 1);
                             }
                             window.requestFit();
                         } catch (err) {

@@ -36,6 +36,11 @@ Item {
     readonly property var s: model.strings
     readonly property bool anims: model.settings.animations
     readonly property bool showProfile: !!model.privateEnabled && !!model.profile.name
+    readonly property bool isLight: (c && c.is_light !== undefined) ? c.is_light : false
+    readonly property color accentColor: Qt.color(c && c.accent_hex ? c.accent_hex : "#3ecf8e")
+    readonly property color refinedTone: isLight
+        ? Qt.rgba(0.78 * 0.13 + 0.22 * accentColor.r, 0.78 * 0.15 + 0.22 * accentColor.g, 0.78 * 0.18 + 0.22 * accentColor.b, 1.0)
+        : Qt.rgba(0.72 * 0.92 + 0.28 * accentColor.r, 0.72 * 0.93 + 0.28 * accentColor.g, 0.72 * 0.95 + 0.28 * accentColor.b, 1.0)
 
     // ── Sequenced States & Transitions ────────────────────────────────────────
     states: [
@@ -276,14 +281,19 @@ Item {
                 }
 
                 // ICON IS TOTALLY PINNED AT fixedIconX (NO MOVEMENT)
-                Image {
+                WorkspaceNativeIcon {
                     id: projIcon
+                    objectName: "projIcon"
                     x: panel.fixedIconX
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 18; height: 18
-                    source: sidebar.model.icon("project_list",
-                        sidebar.model.page === "projects" ? sidebar.c.accent_hex : sidebar.c.FG2)
-                    sourceSize: Qt.size(18, 18)
+                    iconKey: "project_list"
+                    iconSize: 18
+                    isLight: sidebar.isLight
+                    hovered: navProjHov.hovered
+                    strokeColor: (sidebar.model.page === "projects" || navProjHov.hovered)
+                        ? (sidebar.isLight ? "#090a0c" : "#ffffff")
+                        : sidebar.refinedTone
+                    accentColor: sidebar.accentColor
                 }
 
                 RakLabel {
@@ -333,16 +343,19 @@ Item {
                 }
 
                 // ICON IS TOTALLY PINNED AT fixedIconX (NO MOVEMENT)
-                Image {
+                WorkspaceNativeIcon {
                     id: setIcon
+                    objectName: "setIcon"
                     x: panel.fixedIconX
                     anchors.verticalCenter: parent.verticalCenter
-                    width: 18; height: 18
-                    source: sidebar.model.icon("settings_octagon",
-                        sidebar.model.page === "settings"
-                        ? sidebar.c.accent_hex
-                        : navSetHov.hovered ? sidebar.c.FG2 : sidebar.c.FG_MUTED)
-                    sourceSize: Qt.size(18, 18)
+                    iconKey: "settings"
+                    iconSize: 18
+                    isLight: sidebar.isLight
+                    hovered: navSetHov.hovered
+                    strokeColor: (sidebar.model.page === "settings" || navSetHov.hovered)
+                        ? (sidebar.isLight ? "#090a0c" : "#ffffff")
+                        : sidebar.refinedTone
+                    accentColor: sidebar.accentColor
                 }
 
                 RakLabel {
@@ -389,68 +402,72 @@ Item {
                     id: driveDelegate
                     required property var modelData
                     required property int index
+                    readonly property bool isWsl: Boolean(modelData.distro || (modelData.key && modelData.key.indexOf("WSL") === 0))
                     width: driveColumn.width
                     height: 42
 
                     SmoothRectangle {
                         anchors.fill: parent; radius: 8
                         color: driveHover.hovered ? sidebar.c.b06 : (modelData.active ? sidebar.c.b03 : "transparent")
-                        border.color: modelData.active ? (modelData.distro ? sidebar.c.a30 : sidebar.c.b08) : "transparent"
-                    }
-
-                    // ── CIRCULAR PROGRESS RING (Animated sweep 0 -> target% on collapse) ────
-                    Item {
-                        id: ringArea
-                        x: panel.fixedIconX - 9
-                        anchors.verticalCenter: parent.verticalCenter
-                        width: 36; height: 36
-                        opacity: sidebar.ringProgress
-                        visible: opacity > 0.01
-
-                        Shape {
-                            anchors.fill: parent
-                            layer.enabled: true
-                            layer.samples: 4
-
-                            // Background circular track
-                            ShapePath {
-                                strokeColor: sidebar.c.b10
-                                strokeWidth: 2.2
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-                                PathAngleArc {
-                                    centerX: 18; centerY: 18
-                                    radiusX: 13.5; radiusY: 13.5
-                                    startAngle: -90
-                                    sweepAngle: 360
-                                }
-                            }
-
-                            // Dynamic arc that sweeps from 0 to full fraction with ringFill!
-                            ShapePath {
-                                strokeColor: modelData.barColor || sidebar.c.accent_hex
-                                strokeWidth: 2.2
-                                fillColor: "transparent"
-                                capStyle: ShapePath.RoundCap
-                                PathAngleArc {
-                                    centerX: 18; centerY: 18
-                                    radiusX: 13.5; radiusY: 13.5
-                                    startAngle: -90
-                                    sweepAngle: 360 * Math.max(0.01, Math.min(1.0, modelData.fraction)) * sidebar.ringFill
-                                }
-                            }
-                        }
+                        border.color: modelData.distro ? (modelData.active ? sidebar.c.a30 : sidebar.c.a12) : "transparent"
                     }
 
                     // ── DRIVE DISK ICON IS TOTALLY PINNED AT fixedIconX (NO MOVEMENT) ──
-                    Image {
+                    WorkspaceNativeIcon {
                         id: diskIcon
                         x: panel.fixedIconX
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 18; height: 18
-                        source: sidebar.model.icon("project_disk", modelData.distro ? sidebar.c.accent_hex : "")
-                        sourceSize: Qt.size(18, 18)
+                        anchors.verticalCenterOffset: sidebar.collapsed ? -4 : 0
+                        iconKey: driveDelegate.isWsl ? "linux" : "project_disk"
+                        iconSize: 18
+                        isLight: sidebar.isLight
+                        strokeColor: modelData.distro ? sidebar.c.accent_hex : ((modelData.active || driveHover.hovered) ? (sidebar.isLight ? "#090a0c" : "#ffffff") : sidebar.refinedTone)
+                        accentColor: sidebar.accentColor
                         opacity: modelData.active ? 1 : 0.4
+
+                        Behavior on anchors.verticalCenterOffset {
+                            NumberAnimation { duration: 180; easing.type: Easing.InOutCubic }
+                        }
+                    }
+
+                    // ── COLLAPSED DRIVE LETTER & VERTICAL GAUGE (Konsep 3) ──────────────────
+                    RakLabel {
+                        id: driveLetterCollapsed
+                        x: diskIcon.x + Math.round((diskIcon.width - width) / 2)
+                        y: diskIcon.y + diskIcon.height + 2
+                        width: implicitWidth
+                        height: implicitHeight
+                        text: driveDelegate.isWsl ? "WSL" : (modelData.key ? modelData.key.replace(":", "") : ((modelData.name || "").charAt(0)))
+                        font.pixelSize: 8; font.weight: Font.Bold
+                        color: modelData.fraction > 0.90 ? "#ef4444" : (modelData.active ? sidebar.c.FG_BRIGHT : sidebar.refinedTone)
+                        opacity: sidebar.ringProgress
+                        visible: opacity > 0.01
+                    }
+
+                    // Vertical capacity gauge on right of disk icon
+                    Item {
+                        id: collapsedGaugeArea
+                        anchors.right: parent.right; anchors.rightMargin: 6
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 3; height: 22
+                        opacity: sidebar.ringProgress
+                        visible: opacity > 0.01
+
+                        // Background Track
+                        SmoothRectangle {
+                            anchors.fill: parent; radius: 1.5
+                            color: sidebar.c.b10
+                        }
+
+                        // Vertical progress fill (anchored to bottom)
+                        SmoothRectangle {
+                            anchors.bottom: parent.bottom
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            width: parent.width
+                            height: Math.max(2, parent.height * Math.max(0.05, Math.min(1.0, modelData.fraction)) * sidebar.ringFill)
+                            radius: 1.5
+                            color: modelData.fraction > 0.90 ? "#ef4444" : (modelData.barColor || sidebar.c.accent_hex)
+                        }
                     }
 
                     // ── EXPANDED DRIVE DETAILS (Animated fill 0% -> target% on expand) ───────
@@ -466,18 +483,18 @@ Item {
                             width: parent.width; height: 14
                             RakLabel {
                                 anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
-                                text: modelData.name || modelData.key
-                                font.pixelSize: 10; font.weight: Font.DemiBold
+                                text: driveDelegate.isWsl ? (modelData.distro || (modelData.key ? modelData.key.replace(/^WSL:?/i, "") : "WSL")) : (modelData.name || modelData.key)
+                                font.pixelSize: 11; font.weight: Font.DemiBold
                                 color: modelData.active ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
                             }
                             RakLabel {
                                 anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
                                 text: (modelData.used / 1073741824).toFixed(0) + " / " + (modelData.total / 1073741824).toFixed(0) + " GB"
-                                font.pixelSize: 9; color: sidebar.c.FG_MUTED
+                                font.pixelSize: 10; color: sidebar.c.FG_MUTED
                             }
                         }
 
-                        // Horizontal capacity bar with barFill dynamic sweep animation!
+                        // Horizontal capacity bar with status-aware color & barFill dynamic sweep
                         SmoothRectangle {
                             width: parent.width
                             height: 3; radius: 1.5
@@ -485,7 +502,7 @@ Item {
                             SmoothRectangle {
                                 width: parent.width * Math.max(0, Math.min(1, modelData.fraction)) * sidebar.barFill
                                 height: parent.height; radius: parent.radius
-                                color: modelData.barColor || sidebar.c.accent_hex
+                                color: modelData.fraction > 0.90 ? "#ef4444" : (modelData.barColor || sidebar.c.accent_hex)
                             }
                         }
                     }
@@ -521,57 +538,15 @@ Item {
                 border.color: toggleHov.hovered ? sidebar.c.b08 : "transparent"
             }
 
-            // Custom sidebar logo: App window outline with left sidebar partition
-            Item {
+            WorkspaceNativeIcon {
                 anchors.centerIn: parent
-                width: 17; height: 14
-
-                // Outer window frame
-                SmoothRectangle {
-                    anchors.fill: parent
-                    radius: 3
-                    color: "transparent"
-                    border.color: toggleHov.hovered ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
-                    border.width: 1.4
-
-                    // Vertical partition line separating sidebar from main canvas
-                    SmoothRectangle {
-                        x: 5.5
-                        anchors.top: parent.top
-                        anchors.bottom: parent.bottom
-                        width: 1.4
-                        color: toggleHov.hovered ? sidebar.c.FG_BRIGHT : sidebar.c.FG_MUTED
-                    }
-
-                    // Miniature sidebar panel fill: illuminates with accent when expanded
-                    SmoothRectangle {
-                        x: 1.2; y: 1.2
-                        width: 4.3
-                        height: parent.height - 2.4
-                        radius: 1.5
-                        color: sidebar.collapsed
-                            ? (toggleHov.hovered ? sidebar.c.b08 : "transparent")
-                            : (toggleHov.hovered ? sidebar.c.accent_hex : sidebar.c.a35)
-                    }
-
-                    // Content hints in the right partition (subtle horizontal bars)
-                    Column {
-                        anchors.left: parent.left; anchors.leftMargin: 8
-                        anchors.right: parent.right; anchors.rightMargin: 2
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 2
-                        opacity: toggleHov.hovered ? 0.9 : 0.6
-
-                        SmoothRectangle {
-                            width: Math.max(3, parent.width - 2); height: 1.2; radius: 0.6
-                            color: toggleHov.hovered ? sidebar.c.FG_MUTED : sidebar.c.FG3
-                        }
-                        SmoothRectangle {
-                            width: Math.max(2, parent.width - 4); height: 1.2; radius: 0.6
-                            color: toggleHov.hovered ? sidebar.c.FG_MUTED : sidebar.c.FG3
-                        }
-                    }
-                }
+                iconKey: "sidebar"
+                iconSize: 18
+                collapsed: sidebar.collapsed
+                isLight: sidebar.isLight
+                hovered: toggleHov.hovered
+                strokeColor: toggleHov.hovered ? (sidebar.isLight ? "#090a0c" : "#ffffff") : sidebar.refinedTone
+                accentColor: sidebar.accentColor
             }
 
             HoverHandler { id: toggleHov; cursorShape: Qt.PointingHandCursor }

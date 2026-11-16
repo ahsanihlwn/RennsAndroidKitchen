@@ -69,10 +69,14 @@ class WorkspaceInbox(QObject):
         docs={row['path']:row for row in context.get('documents',[])}
         rows=[]
         for path in context.get('paths',[]):
-            doc=docs.get(path,{})
+            doc=docs.get(path) or next((d for d in context.get('documents',[]) if os.path.normcase(os.path.normpath(d.get('path',''))) == os.path.normcase(os.path.normpath(path))), {})
             selection=doc.get('selection',{})
             caption=path.replace('\\','/').rsplit('/',1)[-1]
-            if selection.get('text'):caption+=' · lines '+str(selection['startLineNumber'])+'–'+str(selection['endLineNumber'])
+            if selection.get('text'):
+                if selection.get('startLineNumber') == selection.get('endLineNumber'):
+                    caption += ' · line ' + str(selection['startLineNumber'])
+                else:
+                    caption += ' · lines ' + str(selection['startLineNumber']) + '–' + str(selection['endLineNumber'])
             if doc.get('unsaved'):caption+=' · unsaved'
             rows.append({'path':path,'label':caption})
         return rows
@@ -85,9 +89,18 @@ class WorkspaceInbox(QObject):
         paths=list(dict.fromkeys(str(path) for path in paths if path))[:20]
         documents=[];remaining=32768
         for doc in snapshot['documents']:
-            if doc['path'] not in paths:continue
+            doc_path = doc['path']
+            doc_doc_path = doc.get('document_path', '')
+            matched = any(p == doc_path or p == doc_doc_path or
+                          os.path.normcase(os.path.normpath(p)) == os.path.normcase(os.path.normpath(doc_doc_path)) or
+                          os.path.normcase(os.path.normpath(p)) == os.path.normcase(os.path.normpath(doc_path))
+                          for p in paths)
+            if not matched and paths:
+                continue
             doc=deepcopy(doc)
-            tab=self.owner.editor.bridge._tabs.get(doc['document_path'],{})
+            tab=self.owner.editor.bridge._tabs.get(doc_doc_path) or self.owner.editor.bridge._tabs.get(doc_path,{})
+            if not doc.get('selection') or not doc['selection'].get('text'):
+                doc['selection']=deepcopy(self.owner.editor.bridge.get_selection(doc_doc_path) or self.owner.editor.bridge.get_selection(doc_path) or {})
             doc['content']=tab.get('content','')[:remaining];doc['truncated']=len(tab.get('content',''))>remaining
             remaining-=len(doc['content'])
             if doc.get('selection'):doc['selection']['text']=doc['selection'].get('text','')[:2048]

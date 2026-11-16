@@ -33,9 +33,31 @@ _WSTR = ct.c_wchar_p
 _FAIL = -2147467259
 
 
+_HRESULT_MESSAGES = {
+    0x80270000: "Windows Recycle Bin operation was cancelled.",
+    0x80270001: "Windows Recycle Bin operation was cancelled by system engine.",
+    0x80270021: "Access denied to project folder or files. The folder or a file inside it may be locked, open in another program, or have restricted permissions.",
+    0x80270027: "Project folder or a file inside it is currently open in another program.",
+    0x80270028: "Sharing violation occurred during Recycle Bin operation.",
+    0x80270036: "Windows Recycle Bin is unavailable for this item.",
+    0x80270037: "The project folder is too large for the Windows Recycle Bin.",
+    0x80270038: "The folder path is too long for the Windows Recycle Bin.",
+    0x8027003A: "Windows Recycle Bin was not found on this drive.",
+    0x8027003F: "The project folder or files cannot be recycled because they are marked as read-only.",
+    0x80070005: "Access denied to project folder or files.",
+    0x80070020: "Project folder or a file inside it is currently in use by another process.",
+    0x80070002: "Project folder was not found.",
+    0x80070003: "Project path was not found.",
+}
+
+
 def _check(hr):
     if hr < 0:
-        raise RecycleError(f"Windows Recycle Bin operation failed (0x{hr & 0xffffffff:08X}).")
+        code = hr & 0xffffffff
+        msg = _HRESULT_MESSAGES.get(code)
+        if msg:
+            raise RecycleError(f"{msg} (0x{code:08X})")
+        raise RecycleError(f"Windows Recycle Bin operation failed (0x{code:08X}).")
 
 
 def _call(pointer, slot, argtypes, *args):
@@ -253,7 +275,53 @@ def recycle(path, *, on_recycled=None):
         raise RecycleError("Windows Recycle Bin is unavailable for this drive. The project was kept.")
     if not os.path.isdir(path) or os.path.islink(path):
         raise RecycleError("The project folder is missing or is a symbolic link.")
-    return _operate("recycle", path, on_recycled=on_recycled)
+    try:
+        return _operate("recycle", path, on_recycled=on_recycled)
+    except RecycleError as err:
+        err_msg = str(err)
+        if any(code in err_msg for code in ("0x80270021", "0x8027003F", "0x80070005", "0x80270001")):
+            _sanitize_source_attributes(path)
+            return _operate("recycle", path, on_recycled=on_recycled)
+        raise
+
+
+def _sanitize_source_attributes(path):
+    if sys.platform != "win32" or not os.path.exists(path):
+        return
+    import stat
+    import subprocess
+    user = os.environ.get("USERNAME")
+    if user:
+        try:
+            subprocess.run(["icacls", path, "/remove:d", user, "/t", "/c", "/q"],
+                           capture_output=True, timeout=5)
+            subprocess.run(["icacls", path, "/grant:r", f"{user}:(OI)(CI)F", "/t", "/c", "/q"],
+                           capture_output=True, timeout=5)
+        except Exception:
+            pass
+    kernel = ct.WinDLL("kernel32")
+    SetFileAttributesW = kernel.SetFileAttributesW
+    SetFileAttributesW.argtypes = [_WSTR, _DWORD]
+    SetFileAttributesW.restype = ct.c_int32
+
+    # 0x80 = FILE_ATTRIBUTE_NORMAL
+    for root, dirs, files in os.walk(path):
+        for name in files + dirs:
+            p = os.path.join(root, name)
+            try:
+                mode = os.stat(p).st_mode
+                if not (mode & stat.S_IWRITE):
+                    os.chmod(p, mode | stat.S_IWRITE)
+                SetFileAttributesW(p, 0x80)
+            except OSError:
+                pass
+    try:
+        mode = os.stat(path).st_mode
+        if not (mode & stat.S_IWRITE):
+            os.chmod(path, mode | stat.S_IWRITE)
+        SetFileAttributesW(path, 0x80)
+    except OSError:
+        pass
 
 
 def restore(handle, original_path):

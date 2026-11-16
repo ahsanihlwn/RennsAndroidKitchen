@@ -14,5 +14,10 @@ def menu_metrics(rows,kind='single'):
         if row.get('separator'):continue
         font=QFont('Poppins');font.setPixelSize(10 if row.get('header') else 12)
         font.setHintingPreference(QFont.PreferVerticalHinting)
-        width=max(width,QFontMetrics(font).size(Qt.TextShowMnemonic,row.get('label','')).width()+left+right+8)
+        label_w=QFontMetrics(font).size(Qt.TextShowMnemonic,row.get('label','')).width()
+        shortcut_w=0
+        if row.get('shortcut'):
+            sfont=QFont('Poppins');sfont.setPixelSize(11)
+            shortcut_w=QFontMetrics(sfont).size(Qt.TextShowMnemonic,row.get('shortcut','')).width()+24
+        width=max(width,label_w+shortcut_w+left+right+8)
     return {'width':max(8,width),'height':height,'left':left,'right':right}

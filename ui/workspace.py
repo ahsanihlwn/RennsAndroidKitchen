@@ -258,10 +258,12 @@ class WorkspaceSession(QObject):
     def activeTab(self): return self._active_tab
     @Property(str, notify=tabsChanged)
     def activeKind(self):
-        return next((tab["kind"] for tab in self._tab_data if tab["path"] == self._active_tab), "editor")
+        tab = self._find_tab(self._active_tab)
+        return tab["kind"] if tab else "editor"
     @Property("QVariantMap", notify=tabsChanged)
     def activeDetails(self):
-        return dict(next((tab for tab in self._tab_data if tab["path"] == self._active_tab), {}))
+        tab = self._find_tab(self._active_tab)
+        return dict(tab) if tab else {}
     @Property(bool,notify=tabsChanged)
     def activeRunnable(self):
         from main_ext.file_run_commands import is_runnable_file
@@ -437,12 +439,27 @@ class WorkspaceSession(QObject):
             destination.write_text(json.dumps(associations,indent=2),encoding='utf-8')
         self.openAs(path,{'so':'elf','bin':'hex'}.get(kind,kind))
 
+    def _find_tab(self, path):
+        if not path:
+            return None
+        norm = os.path.normcase(os.path.normpath(path))
+        for tab in self._tab_data:
+            if tab.get("key") == path or tab.get("path") == path:
+                return tab
+            tpath = tab.get("path")
+            if tpath and os.path.normcase(os.path.normpath(tpath)) == norm:
+                return tab
+            dpath = tab.get("documentPath")
+            if dpath and os.path.normcase(os.path.normpath(dpath)) == norm:
+                return tab
+        return None
+
     @Slot(str, str)
     def openAs(self, path, kind):
         path = os.path.normpath(path)
-        existing = next((tab for tab in self._tab_data if tab["path"] == path), None)
+        existing = self._find_tab(path)
         if existing is not None:
-            self.selectTab(path)
+            self.selectTab(existing["path"])
             return
         directory=next((directory for directory in self.directories if directory.base and
                         os.path.commonpath([os.path.abspath(path),directory.base])==directory.base),None)
@@ -480,9 +497,11 @@ class WorkspaceSession(QObject):
 
     @Slot(str)
     def selectTab(self, path):
-        if not any(tab["path"] == path for tab in self._tab_data): return
-        self._active_tab = path
-        if self.activeKind == "editor": self._editor.openFile(self.activeDetails["documentPath"])
+        tab = self._find_tab(path)
+        if not tab: return
+        self._active_tab = tab["path"]
+        if tab.get("kind") == "editor":
+            self._editor.openFile(tab["documentPath"])
         self.tabsChanged.emit()
 
     @Slot(str,str,'QStringList',bool)
@@ -492,23 +511,28 @@ class WorkspaceSession(QObject):
 
     @Slot(str)
     def closeTab(self, path):
-        document=next((tab["documentPath"] for tab in self._tab_data if tab["path"]==path),path)
-        if self._editor.bridge.is_unsaved(document) or any(tab['path']==path and tab.get('viewerDirty') for tab in self._tab_data):
+        tab = self._find_tab(path)
+        document = tab["documentPath"] if tab else path
+        tab_path = tab["path"] if tab else path
+        if self._editor.bridge.is_unsaved(document) or (tab and tab.get('viewerDirty')):
             self.message(ui_lang.t("utc_unsaved_msg", filename=os.path.basename(path)), "Close Tab",
-                         confirm=lambda: self._close_tab(path), danger=True,
+                         confirm=lambda: self._close_tab(tab_path), danger=True,
                          accept=ui_lang.t("utc_btn_close"))
-        else: self._close_tab(path)
+        else: self._close_tab(tab_path)
 
     def _close_tab(self, path):
-        document=next((tab["documentPath"] for tab in self._tab_data if tab["path"]==path),path)
+        tab = self._find_tab(path)
+        document = tab["documentPath"] if tab else path
+        tab_path = tab["path"] if tab else path
         if document in self._editor.bridge._tabs:
             self._editor.closeFile(document)
-        else: self._tab_closed(path)
+        else: self._tab_closed(tab_path)
 
     def _tab_closed(self, path):
-        index = next((i for i, tab in enumerate(self._tab_data) if tab["path"] == path or tab["documentPath"]==path), -1)
+        tab = self._find_tab(path)
+        index = self._tab_data.index(tab) if (tab and tab in self._tab_data) else -1
         if index < 0: return
-        closed=self._tab_data.pop(index)
+        closed = self._tab_data.pop(index)
         if self._active_tab == closed["path"]:
             self._active_tab = ""
             if self._tab_data: self.selectTab(self._tab_data[min(index, len(self._tab_data)-1)]["path"])
@@ -523,7 +547,7 @@ class WorkspaceSession(QObject):
 
     @Slot(str,bool)
     def setViewerUnsaved(self,path,dirty):
-        tab=next((tab for tab in self._tab_data if tab['path']==path),None)
+        tab = self._find_tab(path)
         if tab is not None and bool(tab.get('viewerDirty'))!=dirty:
             tab['viewerDirty']=dirty;self._refresh_tabs()
 
@@ -824,6 +848,8 @@ class WorkspaceSession(QObject):
             else:
                 self._agent.chat.show(data.get('origin',''),data.get('paths') or ([data['path']] if data.get('path') else []))
         elif action in ('agentSend','agentShow'):
+            if data.get('path') and data.get('selection'):
+                self.editor.bridge.update_selection(data['path'], data['selection'])
             self._agent.chat.show(data.get('origin',''),data.get('paths') or ([data['path']] if data.get('path') else []))
         elif action == 'agentAnswer':self._agent.answer(data['id'],bool(data.get('accepted')),data.get('values',{}))
         elif action == 'fatalDismissed':

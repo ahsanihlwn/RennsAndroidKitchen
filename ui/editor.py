@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Lazy Monaco session for the Qt Quick WebEngineView."""
+"""Editor session powered exclusively by Quill Native (Rust Floem-core)."""
 import os
+import logging
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QUrl
 
 from core.editor_document import EditorBridge
-from core.editor_html import _build_html
-from core.monaco_assets import resolve_monaco_vs
 
 
 class EditorSession(QObject):
@@ -14,14 +13,30 @@ class EditorSession(QObject):
     reloadRequested = Signal()
     saved = Signal(str)
     warningRaised = Signal(str, str)
+    openFileRequested = Signal(str)
+    closeFileRequested = Signal(str)
+    saveRequested = Signal()
+    currentPathChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._bridge = EditorBridge(self)
         self._active = False
+        self._current_path = ""
+        self._backend = "quill"
+        self._bridge._ready = True
+        logging.info("Editor session initialized with backend: %s", self._backend)
         self._bridge.viewRequested.connect(self.prepare)
         self._bridge.fileSaved.connect(self.saved)
         self._bridge.warningRaised.connect(self.warningRaised)
+
+    @Property(str, constant=True)
+    def backend(self):
+        return self._backend
+
+    @Property(str, notify=currentPathChanged)
+    def currentPath(self):
+        return self._current_path
 
     @Property(QObject, constant=True)
     def bridge(self):
@@ -33,62 +48,80 @@ class EditorSession(QObject):
 
     @Property(str, notify=reloadRequested)
     def html(self):
-        return _build_html()
+        return ""
 
     @Property(QUrl, constant=True)
     def baseUrl(self):
-        return QUrl.fromLocalFile(str(resolve_monaco_vs().parent) + os.sep)
+        return QUrl()
 
     @Slot()
     def prepare(self):
         if not self._active:
-            self._queue_buffers()
             self._active = True
+            self._bridge._ready = True
             self.activeChanged.emit()
 
     @Slot()
     def suspend(self):
         if self._active:
-            self._bridge._ready = False
             self._active = False
             self.activeChanged.emit()
 
     @Slot(str, result=bool)
     def openFile(self, path):
-        tab=self._bridge._tabs.get(path)
+        self._current_path = path
+        self.prepare()
+        self.currentPathChanged.emit()
+        self.openFileRequested.emit(path)
+        tab = self._bridge._tabs.get(path)
         if tab and tab.get('virtual'):
-            self._bridge._active=path
-            self._bridge._emit_or_queue_file_loaded(path,tab['content'],tab['language'],self._bridge._resolve_icon_b64(path),bool(tab.get('read_only')))
+            self._bridge._active = path
             return True
-        return self._bridge.open_file(path)
+        result = self._bridge.open_file(path)
+        return result
 
     @Slot(str)
     def closeFile(self, path):
+        if self._current_path == path:
+            self._current_path = ""
+            self.currentPathChanged.emit()
+        self.closeFileRequested.emit(path)
         self._bridge.close_file(path)
 
     @Slot()
     def saveCurrent(self):
-        path = self._bridge.get_active_file()
+        self.saveRequested.emit()
+
+    @Slot(str, bool)
+    def setDirty(self, path, dirty):
+        key, tab = self._bridge._find_tab(path)
+        if tab is not None and tab.get("unsaved") != dirty:
+            tab["unsaved"] = dirty
+            if dirty:
+                self._bridge.fileUnsaved.emit(key)
+            else:
+                self._bridge.fileSaved.emit(key)
+
+    @Slot(str, "QVariantMap")
+    def setSelection(self, path, selection):
+        self._bridge.update_selection(path, selection)
+
+    @Slot(str, str)
+    def setContent(self, path, content):
+        key, tab = self._bridge._find_tab(path)
+        if tab is not None and tab.get("content") != content:
+            self._bridge.on_content_changed(path, content)
+
+    @Slot(str)
+    def notifySaved(self, path):
         tab = self._bridge._tabs.get(path)
         if tab is not None:
-            self._bridge.save_file(path, tab["content"])
+            tab["unsaved"] = False
+            self._bridge.fileSaved.emit(path)
+        self.saved.emit(path)
 
     @Slot()
     def reloadTheme(self):
-        # Preserve unsaved buffers while the web presentation is recreated.
-        self._queue_buffers()
+        # Native editor styling is reactive via QML bindings.
         if self._active:
             self.reloadRequested.emit()
-
-    def _queue_buffers(self):
-        self._bridge._ready = False
-        paths = list(self._bridge._tabs)
-        active = self._bridge.get_active_file()
-        if active in paths:
-            paths.remove(active)
-            paths.append(active)
-        self._bridge._pending_emits = [
-            (path, tab["content"], tab["language"],
-             self._bridge._resolve_icon_b64(path), bool(tab.get("read_only")))
-            for path in paths for tab in (self._bridge._tabs[path],)
-        ]

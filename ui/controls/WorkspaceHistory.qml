@@ -24,9 +24,15 @@ MorphPopup {
     function showAt(target) {
         sourceItem=target
         const point=target.mapToItem(parent,target.width,0)
-        x=Math.max(8,Math.min(parent.width-width-8,point.x-width))
-        y=Math.max(8,Math.min(parent.height-height-8,point.y-height-6))
-        upward=y+height<=point.y
+        if(point.x < 120) {
+            x = Math.max(8, Math.min(parent.width-width-8, point.x + 8))
+            y = Math.max(8, Math.min(parent.height-height-8, point.y - height + target.height))
+            upward = true
+        } else {
+            x=Math.max(8,Math.min(parent.width-width-8,point.x-width))
+            y=Math.max(8,Math.min(parent.height-height-8,point.y-height-6))
+            upward=y+height<=point.y
+        }
         open()
     }
     Item {

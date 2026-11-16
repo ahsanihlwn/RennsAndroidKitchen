@@ -139,6 +139,11 @@ def run_workspace_worker():
         palette = cmd.get("palette") or theme.name
         lang = cmd.get("lang") or ui_lang._current_lang
 
+        if palette and palette != theme.name:
+            theme.set(palette)
+        if lang and lang != ui_lang._current_lang:
+            ui_lang.set_lang(lang)
+
         preferences = LauncherModel(
             palette=palette,
             language=lang,

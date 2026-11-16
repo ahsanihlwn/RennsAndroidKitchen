@@ -33,7 +33,7 @@ INCLUDE_MODULES = [
 THIRD_PARTY_PACKAGES = [
     "requests", "urllib3", "charset_normalizer", "idna", "certifi", "websockets",
     "cryptography", "elftools", "capstone", "lief", "psutil", "py7zr", "rarfile",
-    "lz4", "brotli", "numpy", "zstandard", "google.protobuf", "rak_native", "winpty",
+    "lz4", "brotli", "numpy", "zstandard", "google.protobuf", "rak_native", "winpty", "quill_native",
 ]
 NUITKA_EXCLUDES = [
     "torch", "torchvision", "torchaudio", "tensorflow", "pyiceberg", "hive_metastore",
@@ -42,7 +42,7 @@ NUITKA_EXCLUDES = [
     "rennsproject.updater",
 ]
 ASSET_DIRS = [
-    "icons", "textures", "learning_contexts", "fonts", "assets/monaco",
+    "icons", "textures", "learning_contexts", "fonts",
     "core/flashable_assets", "app_ext/dependency_registry", "licenses",
 ]
 TERMINAL_ASSETS = [

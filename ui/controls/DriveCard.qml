@@ -9,6 +9,7 @@ RakCard {
     property bool interactive: true
     property real usageProgress: 1
     readonly property var c: model.colors
+    readonly property bool isWsl: Boolean(modelData.distro || (modelData.key && modelData.key.indexOf("WSL") === 0))
     readonly property bool active: modelData.active && !drive.trash
     readonly property bool transformed: Math.abs(feedback.value-1)>.0001
     objectName: "drive_" + modelData.key
@@ -34,8 +35,15 @@ RakCard {
         onPressedChanged: if (pressed) { drive.forceActiveFocus(Qt.MouseFocusReason); feedback.press() } else feedback.release()
         onTapped: drive.model.dispatch("toggleDrive", {key: drive.modelData.key})
     }
-    Image { x: 8; y: 12; width: 20; height: 20; sourceSize.width: width; sourceSize.height: height; source: drive.model.icon("project_disk", drive.modelData.distro ? drive.c.accent_hex : ""); opacity: drive.active ? 1 : .38 }
-    RakLabel { x: 35; y: 4; width: 85; height: 12; text: drive.modelData.name; font.pixelSize: 10; font.weight: Font.DemiBold; color: drive.active ? (drive.modelData.distro ? drive.c.accent_hex : drive.c.FG_BRIGHT) : drive.c.FG_MUTED; elide: Text.ElideRight; transformed: drive.transformed }
+    WorkspaceNativeIcon {
+        x: 8; y: 12; iconSize: 20
+        iconKey: drive.isWsl ? "linux" : "project_disk"
+        isLight: (drive.c && drive.c.is_light !== undefined) ? drive.c.is_light : false
+        strokeColor: drive.modelData.distro ? drive.c.accent_hex : (drive.active ? drive.c.FG : drive.c.FG_MUTED)
+        accentColor: drive.c.accentColor
+        opacity: drive.active ? 1 : 0.38
+    }
+    RakLabel { x: 35; y: 4; width: 85; height: 12; text: drive.isWsl ? (drive.modelData.distro || (drive.modelData.key ? drive.modelData.key.replace(/^WSL:?/i, "") : "WSL")) : drive.modelData.name; font.pixelSize: 10; font.weight: Font.DemiBold; color: drive.active ? (drive.modelData.distro ? drive.c.accent_hex : drive.c.FG_BRIGHT) : drive.c.FG_MUTED; elide: Text.ElideRight; transformed: drive.transformed }
     RakLabel { x: 35; y: 17; width: 85; height: 11; text: (drive.modelData.used * drive.usageProgress / 1073741824).toFixed(0) + "/" + (drive.modelData.total / 1073741824).toFixed(0) + " GB"; font.pixelSize: 9; color: drive.active ? drive.c.FG3 : drive.c.FG_DISABLED; elide: Text.ElideRight; transformed: drive.transformed }
     SmoothRectangle {
         x: 35; y: 32; width: 57; height: 4; radius: 2; color: drive.c.b10

@@ -45,9 +45,14 @@ RakCard {
         onPressedChanged: if (!pressed || point.position.x<card.width-90) card.cardPressed=pressed
         onTapped: if (!card.trash) card.model.dispatch("openProject", {"path": card.modelData.path})
     }
-    Image { sourceSize.width: width; sourceSize.height: height;
+    WorkspaceNativeIcon {
         x: 22; y: 17; width: 32; height: 32
-        source: card.model.icon(card.modelData.icon || "project_list", "")
+        iconKey: "project_folder"
+        iconSize: 32
+        strokeColor: card.c.accent_hex
+        accentColor: card.c.accent_hex
+        hovered: cardHover.hovered
+        isLight: card.model.theme === "light"
     }
     RakLabel {
         transformed: card.transformed
@@ -66,7 +71,14 @@ RakCard {
     Item {
         anchors.right: parent.right; anchors.rightMargin: card.trash?59:93
         y: 17; width: 96; height: 33
-        Image { sourceSize.width: width; sourceSize.height: height; x: 0; y: 1; width: 12; height: 12; source: card.model.icon("project_disk", "") }
+        WorkspaceNativeIcon {
+            x: 0; y: 1; width: 12; height: 12
+            iconKey: "project_disk"
+            iconSize: 12
+            strokeColor: card.c.FG3
+            accentColor: card.c.FG3
+            isLight: card.model.theme === "light"
+        }
         ScrollingPath {
             id: pathCaption
             objectName: "projectPath_"+card.modelData.path

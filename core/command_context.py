@@ -46,6 +46,8 @@ def failure_from_exception(error):
     labels = {FileNotFoundError: 'Path not found', FileExistsError: 'Destination already exists',
               IsADirectoryError: 'Expected a file, found a directory',
               NotADirectoryError: 'Parent is not a directory', PermissionError: 'Access denied'}
+    if type(error).__name__ == 'RecycleError':
+        labels[type(error)] = 'Recycle Bin error'
     label = labels.get(type(error), type(error).__name__)
     reason = str(error)
     text = label + (': ' + reason if reason else '')

@@ -29,15 +29,15 @@ class FakePty:
 class QuickSessionTests(unittest.TestCase):
     def test_editor_reload_keeps_unsaved_buffers_and_active_tab(self):
         session = EditorSession()
+        self.assertEqual(session.backend, "quill")
         with patch.object(session.bridge, "_resolve_icon_b64", return_value=""):
             session.bridge.open_virtual("first.prop", "first", icon_b64="fixture")
             session.bridge.open_virtual("second.prop", "second", icon_b64="fixture")
-            session.bridge.on_editor_ready()
             session.bridge.on_active_changed("first.prop")
             session.bridge.on_content_changed("first.prop", "unsaved buffer")
             session.reloadTheme()
         self.assertTrue(session.bridge.is_unsaved("first.prop"))
-        self.assertEqual(session.bridge._pending_emits[-1][:2], ("first.prop", "unsaved buffer"))
+        self.assertEqual(session.bridge._tabs["first.prop"]["content"], "unsaved buffer")
         session.suspend()
         self.assertFalse(session.active)
 

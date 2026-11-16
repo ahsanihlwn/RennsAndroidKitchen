@@ -119,33 +119,78 @@ Item {
             readonly property var next: modelData.next
             readonly property var source: old || next
             readonly property var destination: next || old
+            readonly property bool enteringOnly: !old && Boolean(next)
+            readonly property bool exitingOnly: Boolean(old) && !next
+            readonly property bool morphing: Boolean(old) && Boolean(next)
             readonly property rect geometry: Motion.rect(source.rect,destination.rect,scene.footerProgress)
             visible: clock.elapsed<280
+
+            // Staggered slide + scale-up for entering buttons
+            readonly property real enterDelay: pair.index * 25
+            readonly property real enterElapsed: Math.max(0, clock.elapsed - enterDelay)
+            readonly property real enterProgress: Motion.outCubic(Motion.clamp(enterElapsed / 220))
+            readonly property real enterSlideX: enteringOnly ? (1.0 - enterProgress) * 22 : 0
+            readonly property real enterScale: enteringOnly ? (0.86 + 0.14 * enterProgress) : 1.0
+
+            // Exit animation for leaving buttons
+            readonly property real exitSlideX: exitingOnly ? scene.footerProgress * 16 : 0
+            readonly property real exitScale: exitingOnly ? (1.0 - 0.10 * scene.footerProgress) : 1.0
+
             SmoothRectangle {
                 objectName: "footerOldSurface_"+pair.index
-                x: pair.geometry.x; y: pair.geometry.y; width: pair.geometry.width; height: pair.geometry.height; radius: 7
+                x: pair.exitingOnly ? (pair.source.rect.x + pair.exitSlideX) : pair.geometry.x
+                y: pair.geometry.y
+                width: pair.geometry.width
+                height: pair.geometry.height
+                radius: 7
+                scale: pair.exitingOnly ? pair.exitScale : 1.0
+                transformOrigin: Item.Center
                 color: pair.source.fill; border.color: pair.source.edge
-                opacity: pair.old ? 1-scene.footerProgress : 0
+                opacity: pair.old ? (1 - scene.footerProgress) : 0
             }
             SmoothRectangle {
                 objectName: "footerNewSurface_"+pair.index
-                x: pair.geometry.x; y: pair.geometry.y; width: pair.geometry.width; height: pair.geometry.height; radius: 7
+                x: pair.enteringOnly ? (pair.destination.rect.x + pair.enterSlideX) : pair.geometry.x
+                y: pair.enteringOnly ? pair.destination.rect.y : pair.geometry.y
+                width: pair.enteringOnly ? pair.destination.rect.width : pair.geometry.width
+                height: pair.enteringOnly ? pair.destination.rect.height : pair.geometry.height
+                radius: 7
+                scale: pair.enteringOnly ? pair.enterScale : 1.0
+                transformOrigin: Item.Center
                 color: pair.destination.fill; border.color: pair.destination.edge
-                opacity: pair.next ? scene.footerProgress : 0
+                opacity: pair.enteringOnly ? pair.enterProgress : (pair.next ? scene.footerProgress : 0)
             }
             RakButton {
                 objectName: "footerOldCaption_"+pair.index
-                x: pair.source.rect.x; y: pair.source.rect.y; width: pair.source.rect.width; height: pair.source.rect.height
-                text: pair.source.text; iconSource: pair.source.icon; iconWidth: pair.source.iconWidth; iconHeight: pair.source.iconHeight
+                x: pair.source.rect.x + (pair.exitingOnly ? pair.exitSlideX : 0)
+                y: pair.source.rect.y
+                width: pair.source.rect.width
+                height: pair.source.rect.height
+                scale: pair.exitingOnly ? pair.exitScale : 1.0
+                transformOrigin: Item.Center
+                text: pair.source.text
+                iconKey: pair.source.iconKey || ""
+                iconSource: pair.source.icon
+                iconWidth: pair.source.iconWidth
+                iconHeight: pair.source.iconHeight
                 labelColor: pair.source.color; font: pair.source.font; enabled: false; disabledLabelColor: labelColor
-                opacity: pair.old ? (pair.next ? Motion.opacity(scene.footerProgress,1,0,[[.45,0]]) : 1-scene.footerProgress) : 0
+                opacity: pair.old ? (pair.next ? Motion.opacity(scene.footerProgress,1,0,[[.45,0]]) : (1 - scene.footerProgress)) : 0
             }
             RakButton {
                 objectName: "footerNewCaption_"+pair.index
-                x: pair.destination.rect.x; y: pair.destination.rect.y; width: pair.destination.rect.width; height: pair.destination.rect.height
-                text: pair.destination.text; iconSource: pair.destination.icon; iconWidth: pair.destination.iconWidth; iconHeight: pair.destination.iconHeight
+                x: pair.destination.rect.x + (pair.enteringOnly ? pair.enterSlideX : 0)
+                y: pair.destination.rect.y
+                width: pair.destination.rect.width
+                height: pair.destination.rect.height
+                scale: pair.enteringOnly ? pair.enterScale : 1.0
+                transformOrigin: Item.Center
+                text: pair.destination.text
+                iconKey: pair.destination.iconKey || ""
+                iconSource: pair.destination.icon
+                iconWidth: pair.destination.iconWidth
+                iconHeight: pair.destination.iconHeight
                 labelColor: pair.destination.color; font: pair.destination.font; enabled: false; disabledLabelColor: labelColor
-                opacity: pair.next ? (pair.old ? Motion.opacity(scene.footerProgress,0,1,[[.25,0],[.65,1]]) : scene.footerProgress) : 0
+                opacity: pair.enteringOnly ? pair.enterProgress : (pair.next ? (pair.old ? Motion.opacity(scene.footerProgress,0,1,[[.25,0],[.65,1]]) : scene.footerProgress) : 0)
             }
         }
     }

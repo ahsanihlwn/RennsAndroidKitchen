@@ -26,7 +26,11 @@ C.Popup {
         if(row.paths)data.paths=row.paths
         if(row.tool){data.tool=row.tool;data.label=row.label}
         closeAll()
-        workspace.dispatch(row.key,data)
+        if (typeof row.callback === "function") {
+            row.callback()
+        } else {
+            workspace.dispatch(row.key,data)
+        }
     }
     function showSubmenu(button,rows) {
         if(subMenu.visible && subMenu.anchorButton===button)return

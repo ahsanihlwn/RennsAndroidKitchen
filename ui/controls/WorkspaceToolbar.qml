@@ -16,7 +16,7 @@ Item {
     readonly property color groupFill: Qt.rgba(baseColor.r*.45+raisedColor.r*.55,baseColor.g*.45+raisedColor.g*.55,baseColor.b*.45+raisedColor.b*.55,1)
     readonly property var profile: preferences.profile
     readonly property bool hasProfile: !!profile.name
-    readonly property real profileWidth: hasProfile?Math.max(name.implicitWidth,subtitle.implicitWidth)+54:0
+    readonly property real profileWidth: hasProfile?Math.max(name.implicitWidth + (toolbar.profile.badge ? 18 : 0), subtitle.implicitWidth)+54:0
     readonly property real groupX: hasProfile?profileWidth+29:19
     property bool compact: false
     property real modeAmount: 0
@@ -32,7 +32,7 @@ Item {
         {key:"terminal",icon:"terminal",tip:"Terminal"},
         {key:"android",icon:"android_tools",tip:"Android Tools"},
         {key:"import",icon:"import",tip:"Import files"}
-    ].concat(workspace.agentChat && workspace.agentChat.available?[{key:"agentInbox",icon:"send",tip:workspace.agentChat.opened?"Minimize agent":"Agent chat"}]:[]).concat(workspace.privateFeatures && workspace.privateFeatures.allowed?[
+    ].concat(workspace.agentChat && workspace.agentChat.available?[{key:"agentInbox",icon:"agent",tip:workspace.agentChat.opened?"Minimize agent":"Agent chat"}]:[]).concat(workspace.privateFeatures && workspace.privateFeatures.allowed?[
         {key:"automation",icon:"automation",tip:"Automation"},
         {key:"compare",icon:"compare",tip:"Compare FileSystem"}]:[])
     implicitHeight: 60
@@ -72,6 +72,21 @@ Item {
         visible: toolbar.hasProfile; x: 8; y: 8; width: toolbar.profileWidth; height: 46
         RoundedImage { x: 10; y: 9; width: 28; height: 28; source: toolbar.profile.avatar || ""; radius: 14 }
         RakLabel { id: name; x: 44; y: 8; text: toolbar.profile.name || ""; font.pixelSize: 12; font.weight: Font.DemiBold; color: c.FG_BRIGHT }
+        Image {
+            id: profileBadge
+            x: name.x + name.implicitWidth + 4
+            y: 9.5
+            width: 14; height: 14
+            visible: !!toolbar.profile.badge
+            source: visible ? toolbar.preferences.icon(toolbar.profile.badge, "") : ""
+            sourceSize: Qt.size(14, 14)
+
+            HoverHandler { id: badgeHover }
+            HoverTip {
+                label: "Verified (" + (toolbar.profile.verifiedLevel || "") + ")"
+                hovering: badgeHover.hovered
+            }
+        }
         RakLabel { id: subtitle; x: 44; y: 24; text: toolbar.profile.subtitle || ""; font.pixelSize: 10; color: c.FG_DIM }
     }
     SmoothRectangle { visible: toolbar.hasProfile; x: toolbar.profileWidth+18; y: 17; width: 1; height: 28; color: c.b12 }
@@ -91,7 +106,12 @@ Item {
                 x: (2+index*28)*(1-toolbar.modeAmount); y: 2*(1-toolbar.modeAmount)
                 opacity: toolbar.inlineOpacity
                 visible: opacity>0
-                preferences: toolbar.preferences; iconKey: modelData.icon; toolTip: modelData.tip
+                preferences: toolbar.preferences; iconKey: modelData.icon
+                toolTip: (modelData.key === "layout" && toolbar.workspace) ?
+                    (toolbar.workspace.layoutMode === 1 ? "Layout: Single Tree" :
+                     toolbar.workspace.layoutMode === 2 ? "Layout: Side-by-Side Split" :
+                     "Layout: Top-Bottom Split") : modelData.tip
+                layoutMode: (toolbar.workspace && toolbar.workspace.layoutMode !== undefined) ? toolbar.workspace.layoutMode : 2
                 fillColor: modelData.key==="agentInbox" && toolbar.workspace.agentChat.opened ? toolbar.preferences.colors.b08 : "transparent"
                 SmoothRectangle {visible: modelData.key==="agentInbox" && toolbar.workspace.agentInbox.notificationCount>0;x: parent.width-7;y: 3;width: 5;height: 5;radius: 2.5;color: toolbar.c.accent_hex}
                 enabled: !toolbar.compact && !toolbar.modeAnimating && (modelData.key!=="layout" || toolbar.workspace.prepared)
@@ -110,9 +130,17 @@ Item {
         edgeWidth: toolbar.modeAnimating?0:1; edgeColor: c.b06; hoverEdgeColor: c.b14
         property Component returnCaption: Component {
             Item {
-                Image {
-                    anchors.centerIn: parent; width: compactButton.iconWidth; height: compactButton.iconHeight
-                    source: compactButton.iconSource; sourceSize.width: width; sourceSize.height: height
+                WorkspaceNativeIcon {
+                    anchors.centerIn: parent
+                    iconKey: compactButton.iconKey
+                    iconSize: compactButton.iconWidth
+                    isLight: compactButton.isLight
+                    hovered: compactButton.visualHovered
+                    down: compactButton.down
+                    enabled: compactButton.enabled
+                    paletteName: (toolbar.preferences && toolbar.preferences.paletteName) ? toolbar.preferences.paletteName : "default"
+                    strokeColor: compactButton.labelColor
+                    accentColor: compactButton.accentColor
                 }
             }
         }
@@ -179,7 +207,12 @@ Item {
                         delegate: WorkspaceIconButton {
                             required property var modelData
                             objectName: "workspaceExpandedAction_"+modelData.key
-                            preferences: toolbar.preferences; iconKey: modelData.icon; toolTip: modelData.tip
+                            preferences: toolbar.preferences; iconKey: modelData.icon
+                            toolTip: (modelData.key === "layout" && toolbar.workspace) ?
+                                (toolbar.workspace.layoutMode === 1 ? "Layout: Single Tree" :
+                                 toolbar.workspace.layoutMode === 2 ? "Layout: Side-by-Side Split" :
+                                 "Layout: Top-Bottom Split") : modelData.tip
+                            layoutMode: (toolbar.workspace && toolbar.workspace.layoutMode !== undefined) ? toolbar.workspace.layoutMode : 2
                             fillColor: modelData.key==="agentInbox" && toolbar.workspace.agentChat.opened ? toolbar.preferences.colors.b08 : "transparent"
                             SmoothRectangle {visible: modelData.key==="agentInbox" && toolbar.workspace.agentInbox.notificationCount>0;x: parent.width-7;y: 3;width: 5;height: 5;radius: 2.5;color: toolbar.c.accent_hex}
                             enabled: popup.opening && (modelData.key!=="layout" || toolbar.workspace.prepared)
