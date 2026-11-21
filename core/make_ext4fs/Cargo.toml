@@ -1,0 +1,33 @@
+[package]
+name = "make_ext4fs_rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Ext4 filesystem and Android sparse image builder CLI tools"
+default-run = "make_ext4fs"
+
+[lib]
+name = "make_ext4fs_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "make_ext4fs"
+path = "src/bin/make_ext4fs.rs"
+
+[[bin]]
+name = "img2simg"
+path = "src/bin/img2simg.rs"
+
+[[bin]]
+name = "simg2img"
+path = "src/bin/simg2img.rs"
+
+[dependencies]
+crc32fast = "1.5"
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+regex = "1.13"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

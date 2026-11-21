@@ -8,25 +8,32 @@ import queue
 import threading
 
 from PySide6.QtCore import QObject, Signal
-from core import kitchen_process
+from core import agent_conpty, kitchen_process
 
 
 _log = logging.getLogger(__name__)
 
 
 def hidden_startup_options():
-    """Give CLI descendants an inherited hidden console on Windows.
-
-    CREATE_NO_WINDOW leaves the CLI without a console. A console application
-    it launches without that flag can then allocate a visible window. Starting
-    with a hidden console avoids that gap without intercepting provider tools.
-    Pipes remain the transport; this console is never an interactive shell.
-    """
+    """Fallback startup options when ConPTY hosting is unavailable."""
     if os.name!='nt':return {}
     startup=kitchen_process.STARTUPINFO()
     startup.dwFlags|=kitchen_process.STARTF_USESHOWWINDOW
     startup.wShowWindow=kitchen_process.SW_HIDE
     return {'creationflags':kitchen_process.CREATE_NEW_CONSOLE,'startupinfo':startup}
+
+
+def spawn_agent_process(command, **kwargs):
+    """Launch an agent process inside the dedicated background ConPTY session."""
+    if agent_conpty.is_supported():
+        try:
+            return agent_conpty.agent_terminal_service.spawn(command, **kwargs)
+        except OSError:
+            if agent_conpty.agent_terminal_service.is_active():
+                raise
+            _log.warning('Agent ConPTY host unavailable; falling back to hidden console', exc_info=True)
+    with kitchen_process.without_console():
+        return kitchen_process.Popen(command, **kwargs, **hidden_startup_options())
 
 
 class AgentProcess(QObject):
@@ -53,10 +60,11 @@ class AgentProcess(QObject):
                         with lock:
                             log.write(json.dumps({'channel': channel, 'text': text}, ensure_ascii=False) + '\n'); log.flush()
                     record('process', json.dumps({'command': argv, 'cwd': cwd}))
-                    with kitchen_process.without_console():
-                        process = kitchen_process.Popen(argv, cwd=cwd, env=environment, stdin=kitchen_process.PIPE,
-                            stdout=kitchen_process.PIPE, stderr=kitchen_process.PIPE, **hidden_startup_options(),
-                            text=True, encoding='utf-8', errors='replace', bufsize=1)
+                    process = spawn_agent_process(
+                        argv, cwd=cwd, env=environment, stdin=kitchen_process.PIPE,
+                        stdout=kitchen_process.PIPE, stderr=kitchen_process.PIPE,
+                        text=True, encoding='utf-8', errors='replace', bufsize=1,
+                    )
                     self._process = process
                     notify(('started', process.pid))
                     self._terminate_current()
@@ -94,7 +102,8 @@ class AgentProcess(QObject):
                     writer.join()
                     record('exit', str(code)); notify(('exit', code))
             except OSError as error:
-                _log.exception('Agent process could not start'); notify(('launch_error', str(error)))
+                _log.exception('Agent process could not start', extra={'fatal_suppress_ui': True})
+                notify(('launch_error', str(error)))
         threading.Thread(target=run, daemon=True, name='RAK-Agent-Process').start()
 
     def send(self, message):
@@ -123,6 +132,6 @@ class AgentProcess(QObject):
         try:process.terminate()
         except OSError as error:
             with self._process_lock:self._termination_started=False
-            _log.exception('Stopping owned agent process')
+            _log.exception('Stopping owned agent process', extra={'fatal_suppress_ui': True})
             try:self.event.emit(('control_error',str(error)))
             except RuntimeError:pass

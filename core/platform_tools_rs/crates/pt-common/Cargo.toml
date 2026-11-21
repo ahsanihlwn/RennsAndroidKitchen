@@ -1,0 +1,10 @@
+[package]
+name = "pt-common"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared version metadata and platform utilities for platform-tools-rust"
+
+[dependencies]

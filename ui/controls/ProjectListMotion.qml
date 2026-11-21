@@ -16,13 +16,34 @@ Item {
     clip: true
     visible: active
     function begin(before, after, animate, rowsOwner) {
-        if (!animate || !model.settings.animations || !parent.visible || model.startupActive) return
+        if (!animate || !model.settings.animations || !parent.visible || model.startupActive) {
+            if (active) cancel()
+            return
+        }
         // Unclipped rows remain visible behind the glass outside the list's
         // viewport. Keep them in the same scene instead of dropping them when
         // the native delegates hand over to their animated copies.
         const plan=Motion.projectScene(before,after,width,height,view.contentY,
                                        clip?0:Math.max(0,y),clip?0:Math.max(0,parent.height-y-height))
-        if (plan.duration<=0) return
+        if (plan.duration<=0) {
+            if (active) cancel()
+            return
+        }
+        // Capture current positions of any items currently animating on screen
+        // so that the new motion RELAYS seamlessly from their current positions!
+        let currentYMap = {}
+        if (active) {
+            for (let i = 0; i < repeater.count; ++i) {
+                const item = repeater.itemAt(i)
+                if (item && item.modelData && item.modelData.row) {
+                    const rowKey = item.modelData.row._trash_id ? ("trash:" + item.modelData.row._trash_id) : ("path:" + item.modelData.row.path)
+                    currentYMap[rowKey] = item.y
+                }
+            }
+            clock.seek(clock.duration)
+            const previous=owner; owner=null
+            if (previous && previous!==rowsOwner) previous.setAnimating(false)
+        }
         let offsets={}
         for (let i=0;i<view.count;++i) {
             const item=view.itemAtIndex(i)
@@ -33,6 +54,10 @@ Item {
             for (const key in record.row) data[key]=record.row[key]
             data._scrollOffset=offsets[record.row.path] || 0
             record.row=data
+            const rowKey = record.row._trash_id ? ("trash:" + record.row._trash_id) : ("path:" + record.row.path)
+            if (currentYMap.hasOwnProperty(rowKey)) {
+                record.sourceY = currentYMap[rowKey]
+            }
         }
         scene=plan.rows
         enterDelay=plan.enterDelay
@@ -62,6 +87,7 @@ Item {
     }
     WheelHandler { onWheel: event => { overlay.cancel(); event.accepted=false } }
     Repeater {
+        id: repeater
         model: overlay.scene
         delegate: Item {
             id: row

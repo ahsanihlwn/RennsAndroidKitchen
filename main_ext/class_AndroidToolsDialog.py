@@ -357,10 +357,10 @@ def _ss_fq_ghost():
 
 def _ss_close():
     return f"""
-        QPushButton {{ background:{_th.border_color(0.05)}; border:1px solid {_th.border_color(0.08)};
-            color:{_th.FG_BLUE_MUTED}; font-size:11px; font-weight:500; height:28px;
+        QPushButton {{ background:{_th.BTN_SEC_BG}; border:1px solid {_th.BTN_SEC_EDGE};
+            color:{_th.BTN_SEC_FG}; font-size:11px; font-weight:500; height:28px;
             padding:0 18px; border-radius:5px; }}
-        QPushButton:hover {{ background:{_th.border_color(0.10)}; color:{_th.FG}; }}
+        QPushButton:hover {{ background:{_th.BTN_SEC_HOVER}; border-color:{_th.BTN_SEC_EDGE_HOVER}; color:{_th.BTN_SEC_FG_HOVER}; }}
     """
 
 
@@ -374,10 +374,11 @@ def _ss_modal_input():
 
 def _ss_modal_ok():
     return f"""
-        QPushButton {{ background:{_th.accent(0.10)}; border:1px solid {_th.accent(0.25)};
-            color:{_th.accent_hex}; font-size:11px; font-weight:500; height:28px;
+        QPushButton {{ background:{_th.BTN_PRIMARY_BG}; border:1px solid {_th.BTN_PRIMARY_EDGE};
+            color:{_th.BTN_PRIMARY_FG}; font-size:11px; font-weight:600; height:28px;
             padding:0 14px; border-radius:5px; }}
-        QPushButton:hover {{ background:{_th.accent(0.22)}; }}
+        QPushButton:hover {{ background:{_th.BTN_PRIMARY_HOVER}; border-color:{_th.BTN_PRIMARY_EDGE_HOVER}; color:{_th.BTN_PRIMARY_FG_HOVER}; }}
+        QPushButton:pressed {{ background:{_th.BTN_PRIMARY_DOWN}; }}
     """
 
 

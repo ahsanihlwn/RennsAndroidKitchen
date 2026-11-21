@@ -22,10 +22,9 @@ RakButton {
         SmoothRectangle { x: 26; y: 17; width: 44; height: 3; radius: 1; color: tile.colors.FG; opacity: 65/255 }
         SmoothRectangle { x: 26; y: 24; width: 57; height: 2; radius: 1; color: tile.colors.FG; opacity: 35/255 }
         SmoothRectangle { x: 26; y: 30; width: 38; height: 2; radius: 1; color: tile.colors.FG; opacity: 35/255 }
-        SmoothRectangle { x: 26; y: 37; width: 28; height: 6; radius: 2; color: tile.colors.accent_hex; opacity: 210/255 }
+        SmoothRectangle { x: 26; y: 37; width: 28; height: 7; radius: 2.5; color: tile.colors.BTN_PRIMARY_BG || tile.colors.accent_hex; border.width: 1; border.color: tile.colors.BTN_PRIMARY_EDGE || "transparent" }
     }
-    SmoothRectangle { anchors.fill: parent; radius: 6; color: "transparent"; border.width: tile.selected ? 2.5 : 1; border.pixelAligned: !tile.selected; border.color: tile.selected ? tile.colors.accent_hex : tile.colors._is_light ? "#50000000" : "#1effffff" }
+    SmoothRectangle { anchors.fill: parent; radius: 6; color: "transparent"; border.width: tile.selected ? 2.5 : 1; border.pixelAligned: !tile.selected; border.color: tile.selected ? tile.colors.accent_hex : tile.visualHovered ? (tile.colors.a55 || tile.colors.accent_hex) : (tile.colors._is_light ? "#50000000" : "#1effffff") }
     contentItem: Item {}
-    HoverHandler { cursorShape: Qt.PointingHandCursor }
     onClicked: tile.chosen()
 }

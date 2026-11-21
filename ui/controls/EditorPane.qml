@@ -111,20 +111,22 @@ Item {
         NativeEditor {
             id: quillEditor
             objectName: "quickQuillView"
+            session: pane.session
             anchors.fill: parent
             focus: true
             activeFocusOnTab: true
             readonly property bool lightTheme: (pane.colors && pane.colors.is_light !== undefined) ? pane.colors.is_light : (pane.effectivePreferences.paletteName ? pane.effectivePreferences.paletteName.indexOf("light") >= 0 : false)
             readonly property color selectedBg: (pane.colors && pane.colors.BG_SELECTED) ? pane.colors.BG_SELECTED : (lightTheme ? "#f5e6d8" : "#264f78")
+            readonly property color accentBg: (pane.colors && pane.colors.accent_hex) ? pane.colors.accent_hex : (lightTheme ? "#4d8ef0" : "#3ecf8e")
             isLight: lightTheme
             fillColor: pane.fillColor
             gutterColor: pane.fillColor
             textColor: (pane.colors && pane.colors.FG) ? pane.colors.FG : (lightTheme ? "#2c2420" : "#d4d4d4")
             lineNumberColor: (pane.colors && pane.colors.FG_MUTED) ? pane.colors.FG_MUTED : (lightTheme ? "#9a8878" : "#6e7681")
             activeLineNumberColor: (pane.colors && pane.colors.FG) ? pane.colors.FG : (lightTheme ? "#100c08" : "#ffffff")
-            cursorColor: (pane.colors && pane.colors.accent_hex) ? pane.colors.accent_hex : "#3ecf8e"
-            selectionColor: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, lightTheme ? 0.45 : 0.25)
-            lineHighlightColor: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, lightTheme ? 0.35 : 0.08)
+            cursorColor: accentBg
+            selectionColor: Qt.rgba(accentBg.r, accentBg.g, accentBg.b, lightTheme ? 0.28 : 0.35)
+            lineHighlightColor: Qt.rgba(selectedBg.r, selectedBg.g, selectedBg.b, lightTheme ? 0.45 : 0.25)
             gutterDividerColor: (pane.colors && pane.colors.b18) ? pane.colors.b18 : (lightTheme ? Qt.rgba(0, 0, 0, 0.08) : Qt.rgba(255, 255, 255, 0.08))
 
             Component.onCompleted: {
@@ -149,8 +151,9 @@ Item {
                     quillEditor.closeFile(filePath)
                 }
                 function onSaveRequested() {
-                    quillEditor.saveCurrent()
-                    pane.session.notifySaved(quillEditor.filePath)
+                    if (quillEditor.saveCurrent()) {
+                        pane.session.notifySaved(quillEditor.filePath)
+                    }
                 }
             }
 
@@ -228,7 +231,7 @@ Item {
             handleColor: (pane.colors && pane.colors.BG_SCROLL) ? pane.colors.BG_SCROLL : Qt.rgba(1, 1, 1, 0.22)
             hoverColor: (pane.colors && pane.colors.b50) ? pane.colors.b50 : Qt.rgba(1, 1, 1, 0.45)
             downColor: (pane.colors && pane.colors.a55) ? pane.colors.a55 : Qt.rgba(1, 1, 1, 0.65)
-            Behavior on opacity { NumberAnimation { duration: 160 } }
+            Behavior on opacity { enabled: !pane.preferences || pane.preferences.settings.animations; NumberAnimation { duration: (!pane.preferences || pane.preferences.settings.animations) ? 160 : 0 } }
 
             Binding on position {
                 when: !vScrollBar.pressed
@@ -264,7 +267,7 @@ Item {
             handleColor: (pane.colors && pane.colors.BG_SCROLL) ? pane.colors.BG_SCROLL : Qt.rgba(1, 1, 1, 0.22)
             hoverColor: (pane.colors && pane.colors.b50) ? pane.colors.b50 : Qt.rgba(1, 1, 1, 0.45)
             downColor: (pane.colors && pane.colors.a55) ? pane.colors.a55 : Qt.rgba(1, 1, 1, 0.65)
-            Behavior on opacity { NumberAnimation { duration: 160 } }
+            Behavior on opacity { enabled: !pane.preferences || pane.preferences.settings.animations; NumberAnimation { duration: (!pane.preferences || pane.preferences.settings.animations) ? 160 : 0 } }
 
             Binding on position {
                 when: !hScrollBar.pressed

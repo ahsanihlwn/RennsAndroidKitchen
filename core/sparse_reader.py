@@ -198,6 +198,16 @@ def simg2img(src_path: str, dst_path: str):
     if src_path == dst_path:
         return False, "src_path and dst_path must differ"
 
+    if os.environ.get("RAK_NATIVE_BACKEND", "auto").lower() != "python":
+        try:
+            from core.native_backend import native_module_path, sparse_simg2img
+
+            if native_module_path("sparse_simg2img") is not None:
+                sparse_simg2img(src_path, dst_path)
+                return True, dst_path
+        except Exception as e:
+            return False, str(e)
+
     try:
         src_f = open(src_path, "rb")
     except Exception as e:

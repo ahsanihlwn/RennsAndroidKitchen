@@ -5,6 +5,14 @@
 function clamp(value) { return Math.max(0, Math.min(1, value)); }
 function mix(a, b, progress) { return a + (b - a) * progress; }
 function outCubic(progress) { return 1 - Math.pow(1 - clamp(progress), 3); }
+function remainingDuration(fullDuration, current, base, target) {
+    if (fullDuration <= 0) return 0;
+    const span = Math.abs(target - base);
+    if (span <= 0.00001) return 0;
+    const remaining = clamp(Math.abs(target - current) / span);
+    if (remaining <= 0.0001) return 0;
+    return Math.max(1, Math.round(fullDuration * Math.cbrt(remaining)));
+}
 function outQuint(progress) { return 1 - Math.pow(1 - clamp(progress), 5); }
 function inOutSine(progress) { return (1-Math.cos(Math.PI*clamp(progress)))/2; }
 function roundRect(r) { return Qt.rect(roundEven(r.x),roundEven(r.y),roundEven(r.width),roundEven(r.height)); }

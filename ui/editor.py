@@ -71,12 +71,14 @@ class EditorSession(QObject):
     def openFile(self, path):
         self._current_path = path
         self.prepare()
+        key, tab = self._bridge._find_tab(path)
+        if tab and tab.get('virtual'):
+            self._bridge._active = key
+            self.currentPathChanged.emit()
+            self.openFileRequested.emit(key)
+            return True
         self.currentPathChanged.emit()
         self.openFileRequested.emit(path)
-        tab = self._bridge._tabs.get(path)
-        if tab and tab.get('virtual'):
-            self._bridge._active = path
-            return True
         result = self._bridge.open_file(path)
         return result
 
@@ -110,7 +112,9 @@ class EditorSession(QObject):
     def setContent(self, path, content):
         key, tab = self._bridge._find_tab(path)
         if tab is not None and tab.get("content") != content:
-            self._bridge.on_content_changed(path, content)
+            if not tab.get("unsaved") and tab.get("content", "").replace("\r\n", "\n") == content:
+                return
+            self._bridge.on_content_changed(key, content)
 
     @Slot(str)
     def notifySaved(self, path):

@@ -11,10 +11,10 @@ MorphPopup {
     readonly property bool canCreate: name.text.trim().length > 0 && port1.text.trim().length > 0 && (portMode === 1 || port2.text.trim().length > 0)
     objectName: "createProjectPopup"
     popupType: C.Popup.Item
-    width: Math.min(440, parent.width - 16)
-    height: Math.min(500, parent.height - 24)
-    x: Math.max(8, parent.width - 36 - width)
-    y: parent.height - 8 - height
+    width: Math.min(440, parent.width - 32)
+    height: Math.min(560, parent.height - 40)
+    x: Math.max(16, parent.width - 16 - width)
+    y: Math.max(16, parent.height - 20 - height)
     padding: 0; focus: true
     modal: true; dim: true
     C.Overlay.modal: SmoothRectangle {
@@ -67,8 +67,8 @@ MorphPopup {
             id: scroll
             objectName: "popupCreateScroll"
             x: 0; y: header.height + 1; width: parent.width
-            height: Math.max(1, parent.height - header.height - 76)
-            contentHeight: form.height + 38; clip: true; boundsBehavior: Flickable.StopAtBounds
+            height: Math.max(1, parent.height - header.height - footer.height - 2)
+            contentHeight: form.height + 28; clip: true; boundsBehavior: Flickable.StopAtBounds
             C.ScrollBar.vertical: RakScrollBar { handleColor: popup.c.BG_SCROLL }
             Column {
                 id: form
@@ -107,15 +107,15 @@ MorphPopup {
         SmoothRectangle { anchors.bottom: footer.top; width: parent.width; height: 1; color: popup.c.b07 }
         Item {
             id: footer
-            anchors.bottom: parent.bottom; width: parent.width; height: 74
+            anchors.bottom: parent.bottom; width: parent.width; height: 56
             Row {
-                anchors.right: parent.right; anchors.rightMargin: 16; y: 19; spacing: 8
-                ActionButton { objectName: "popupBackProject"; width: 99; height: 34; colors: popup.c; text: popup.s.btn_back; iconSource: popup.model.icon("arrow_right", popup.c.FG2); iconWidth: 15; iconHeight: 15; animatePress: popup.model.settings.animations; onClicked: popup.close() }
+                anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter; spacing: 8
+                ActionButton { objectName: "popupBackProject"; width: 99; height: 34; colors: popup.c; text: popup.s.btn_back; iconSource: popup.model.icon("arrow_right", popup.c.BTN_SEC_FG || popup.c.FG); iconWidth: 15; iconHeight: 15; animatePress: popup.model.settings.animations; onClicked: popup.close() }
                 ActionButton {
                     objectName: "popupConfirmProject"
                     width: 116; height: 34; colors: popup.c; primary: true
                     text: popup.s.btn_confirm_project; enabled: popup.canCreate && !popup.model.busy
-                    iconSource: popup.model.icon("check_white", enabled ? popup.c.FG_BLUE : popup.c.a30); iconWidth: 15; iconHeight: 15
+                    iconSource: popup.model.icon("check_white", enabled ? (popup.c.BTN_PRIMARY_FG || popup.c.FG_BRIGHT) : (popup.c.BTN_PRIMARY_DISABLED_FG || popup.c.a30)); iconWidth: 15; iconHeight: 15
                     animatePress: popup.model.settings.animations
                     onClicked: popup.model.dispatch("createProject", {name: name.text.trim(), port1: port1.text.trim(), port2: popup.portMode === 2 ? port2.text.trim() : "", mode: popup.portMode})
                 }

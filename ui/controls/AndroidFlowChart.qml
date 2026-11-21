@@ -53,27 +53,29 @@ Item {
     }
     Repeater {
         model: chart.layout.nodes
-        delegate: Item {
+        delegate: RakButton {
             id: node
             required property var modelData
             objectName: "androidNode_"+modelData.name
             readonly property color stateColor: modelData.state==="flashing"?"#edaa4b":modelData.state==="done"?"#4dc47b":modelData.state==="error"?"#e95761":chart.c.accent_hex
-            readonly property bool highlighted: mouse.containsMouse || drop.containsDrag || modelData.state!=="idle" || modelData.active
-            x: modelData.x; y: modelData.y; width: 112; height: 50
+            readonly property bool nodeHighlighted: node.visualHovered || drop.containsDrag || modelData.state!=="idle" || modelData.active
+            x: modelData.x+3; y: modelData.y+3; width: 106; height: 44; implicitWidth: 106; implicitHeight: 44
+            leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+            cornerRadius: 7; edgeWidth: 1
+            animatePress: chart.preferences.settings.animations
+            fillColor: modelData.state==="flashing"?"#1e1a14":modelData.state==="done"?"#131d14":modelData.state==="error"?"#1d1213":chart.c.BG4
+            hoverFillColor: fillColor; downFillColor: fillColor
+            edgeColor: node.nodeHighlighted?Qt.rgba(node.stateColor.r,node.stateColor.g,node.stateColor.b,node.visualHovered?.75:.5):Qt.rgba(chart.purple.r,chart.purple.g,chart.purple.b,.28)
+            hoverEdgeColor: Qt.rgba(node.stateColor.r,node.stateColor.g,node.stateColor.b,.75)
             opacity: chart.progress>=1 || chart.flowY>=modelData.centerY+26?1:0
             Behavior on opacity { NumberAnimation { duration: chart.preferences.settings.animations?135:0 } }
-            SmoothRectangle {
-                id: panel
-                x: 3; y: 3; width: 106; height: 44; radius: 7
-                color: modelData.state==="flashing"?"#1e1a14":modelData.state==="done"?"#131d14":modelData.state==="error"?"#1d1213":chart.c.BG4
-                border.width: 1
-                border.color: node.highlighted?Qt.rgba(node.stateColor.r,node.stateColor.g,node.stateColor.b,mouse.containsMouse?.75:.5):Qt.rgba(chart.purple.r,chart.purple.g,chart.purple.b,.28)
-                layer.enabled: node.highlighted && chart.preferences.settings.effects!=="low"
-                layer.effect: MultiEffect { shadowEnabled: true; shadowColor: node.stateColor; shadowOpacity: .18; shadowBlur: .4; shadowHorizontalOffset: 0; shadowVerticalOffset: 0 }
-                RakLabel { x: 5; y: 8; width: 96; height: 14; text: modelData.name.length>14?modelData.name.slice(0,12)+"…":modelData.name; font.pixelSize: 10; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; color: chart.c.FG }
-                RakLabel { x: 5; y: 23; width: 96; height: 12; text: modelData.image?"← "+modelData.image:modelData.size; elide: Text.ElideRight; font.pixelSize: 9; horizontalAlignment: Text.AlignHCenter; color: modelData.image?chart.c.FG2:chart.c.FG3 }
+            layer.enabled: node.nodeHighlighted && chart.preferences.settings.effects!=="low"
+            layer.effect: MultiEffect { shadowEnabled: true; shadowColor: node.stateColor; shadowOpacity: .18; shadowBlur: .4; shadowHorizontalOffset: 0; shadowVerticalOffset: 0 }
+            onClicked: chart.backend.assign(modelData.name,"","")
+            contentItem: Item {
+                RakLabel { x: 5; y: 8; width: 96; height: 14; text: node.modelData.name.length>14?node.modelData.name.slice(0,12)+"…":node.modelData.name; font.pixelSize: 10; font.weight: Font.DemiBold; horizontalAlignment: Text.AlignHCenter; color: chart.c.FG; transformed: node.transformed }
+                RakLabel { x: 5; y: 23; width: 96; height: 12; text: node.modelData.image?"← "+node.modelData.image:node.modelData.size; elide: Text.ElideRight; font.pixelSize: 9; horizontalAlignment: Text.AlignHCenter; color: node.modelData.image?chart.c.FG2:chart.c.FG3; transformed: node.transformed }
             }
-            MouseArea { id: mouse; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: chart.backend.assign(modelData.name,"","") }
             DropArea {
                 id: drop; anchors.fill: parent; keys: ["application/x-rak-image"]
                 onDropped: event => {const value=event.getDataAsString("application/x-rak-image").split("\n");if(value.length>1){chart.backend.assign(modelData.name,value[0],value.slice(1).join("\n"));event.acceptProposedAction()}}

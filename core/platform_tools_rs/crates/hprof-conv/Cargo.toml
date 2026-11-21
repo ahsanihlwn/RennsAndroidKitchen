@@ -1,0 +1,19 @@
+[package]
+name = "hprof-conv"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Convert Android HPROF 1.0.3 heap dumps to standard Java HPROF 1.0.2 format"
+
+[[bin]]
+name = "hprof-conv"
+path = "src/main.rs"
+
+[dependencies]
+pt-common = { path = "../pt-common" }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

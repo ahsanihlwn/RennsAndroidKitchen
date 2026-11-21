@@ -11,6 +11,7 @@ SmoothRectangle {
     required property string activeKey
     property var workspace: null
     property bool terminal: false
+    readonly property real contentWidth: tabs.width
     signal selected(string key)
     signal closed(string key)
     readonly property var c: preferences.colors
@@ -118,14 +119,14 @@ SmoothRectangle {
                         anchors.fill: parent; acceptedButtons: Qt.LeftButton|Qt.MiddleButton
                         onClicked: mouse => mouse.button===Qt.MiddleButton?bar.closed(tab.key):bar.selected(tab.key)
                     }
-                    RakButton {
+                    WorkspaceIconButton {
                         objectName: "closeWorkspaceTab_"+tab.key
-                        anchors.right: parent.right; anchors.rightMargin: 4; anchors.verticalCenter: parent.verticalCenter
-                        width: 16; height: 16; implicitWidth: 16; implicitHeight: 16; leftPadding: 0; rightPadding: 0
-                        text: "×"; font.pixelSize: 13; font.bold: true
-                        cornerRadius: 3; edgeWidth: 0; labelColor: c.GRAY_MID; hoverLabelColor: c.RED_STRONG
+                        anchors.right: parent.right; anchors.rightMargin: 6; anchors.verticalCenter: parent.verticalCenter
+                        width: 18; height: 18; implicitWidth: 18; implicitHeight: 18
+                        preferences: bar.preferences; iconKey: "close_rounded"; iconWidth: 13; iconHeight: 13
+                        cornerRadius: 5; edgeWidth: 0; hoverEdgeColor: "transparent"
+                        tint: c.GRAY_MID; hoverLabelColor: c.RED_STRONG
                         hoverFillColor: c.red18; downFillColor: c.red32
-                        animatePress: bar.preferences.settings.animations
                         onClicked: bar.closed(tab.key)
                     }
                     onActiveChanged: if (active) ensureVisible.restart()

@@ -126,8 +126,8 @@ def _input_style():
 def _combo_style():
     return f"""
         QComboBox {{
-            background: {_th.BG2};
-            border: 1px solid {_th.border_color(0.10)};
+            background: transparent;
+            border: none;
             border-radius: 4px;
             color: {_th.FG};
             padding: 2px 8px;
@@ -135,7 +135,8 @@ def _combo_style():
             min-height: 22px;
         }}
         QComboBox:hover {{
-            border-color: {_th.border_color(0.18)};
+            background: {_th.border_color(0.06)};
+            border: none;
         }}
         QComboBox::drop-down {{
             border: none;

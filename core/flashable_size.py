@@ -76,18 +76,8 @@ def _size_zst(path):
 
 
 def _size_br(path):
-
-    import brotli
-    total = 0
-    dec = brotli.Decompressor()
-    with open(path, "rb") as f:
-        while True:
-            buf = f.read(1 << 20)
-            if not buf:
-                break
-            out = dec.process(buf)
-            total += len(out)
-    return total
+    from core.native_backend import brotli_decompressed_size
+    return brotli_decompressed_size(path)
 
 
 def _size_dat(path):

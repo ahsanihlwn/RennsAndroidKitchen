@@ -47,35 +47,38 @@ def main():
     with tempfile.TemporaryDirectory(prefix='rak-device-ui-') as temporary:
         root=Path(temporary);port=root/'PORT';port.mkdir();(root/'STOCK').mkdir()
         image=build_fixture(port)
-        endpoint=root/'private-ipc.json';helper=root/'cli.py';release_flash=root/'continue-flash'
+        endpoint=root/'private-ipc.json';helper=root/'cli.py';release_flash=threading.Event()
         helper.write_text('import sys\nsys.path.insert(0,'+repr(str(repo))+')\nfrom core import rak_cli\n'
             'rak_cli._ipc_file_path=lambda:'+repr(str(endpoint))+'\nrak_cli._main_cli()\n',encoding='utf-8')
-        device=root/'device.py'
-        device.write_text('''import sys,time
-from pathlib import Path
-release=Path(sys.argv[1]);protocol=sys.argv[2];args=sys.argv[3:]
-if args==['getvar','all']:
- print('< waiting for any device >');sys.exit(1)
-elif args==['devices']:
- print('List of devices attached')
-elif args and args[0]=='flash':
- print("Sending sparse 1/2",flush=True);print("Writing OKAY",flush=True)
- if args[1]=='vendor':
-  print('FAILED (AdbWriteEndpointSync failed: The semaphore timeout period has expired. (121))',flush=True);sys.exit(1)
- while not release.exists():time.sleep(.02)
- print("Sending sparse 2/2",flush=True);print("Writing OKAY",flush=True)
-''',encoding='utf-8')
         prefs=LauncherModel(settings={'animations':False,'effects':'low','treeMode':'single_dir'},profile={})
         release_file=threading.Event()
         with patch.object(rak_cli,'_ipc_file_path',return_value=str(endpoint)):
             workspace=QuickWorkspace(str(root),'PORT','STOCK',preferences=prefs,settings_path=str(root/'settings.json'),
                 terminal_factory=lambda cwd=None,**kwargs:TerminalSession(manager=FakePty(cwd),**kwargs),enable_private_services=False)
             window,session=workspace.window,workspace.session
-            backend=session._android_tools;original_launch=backend._launch;calls=[]
-            def launch(program,args,callback,**options):
-                calls.append(list(args))
-                return original_launch(sys.executable,[str(device),str(release_flash),Path(program).stem,*args],callback,**options)
-            backend._launch=launch
+            backend=session._android_tools;calls=[]
+            def fixture_run_native(tool,args,*,cwd=None,timeout_ms=None,cancel=None,on_output=None,on_progress=None):
+                arg_list=list(args);calls.append(arg_list);buf=[]
+                def emit(text):
+                    buf.append(text)
+                    if on_output:on_output(text)
+                if arg_list==['getvar','all']:
+                    emit('< waiting for any device >\n')
+                    return {'exit_code':1,'stdout':''.join(buf),'stderr':'','output':''.join(buf)}
+                if arg_list==['devices']:
+                    emit('List of devices attached\n')
+                    return {'exit_code':0,'stdout':''.join(buf),'stderr':'','output':''.join(buf)}
+                if arg_list and arg_list[0]=='flash':
+                    emit('Sending sparse 1/2\n');emit('Writing OKAY\n')
+                    if arg_list[1]=='vendor':
+                        emit('FAILED (AdbWriteEndpointSync failed: The semaphore timeout period has expired. (121))\n')
+                        return {'exit_code':1,'stdout':'','stderr':''.join(buf),'output':''.join(buf)}
+                    while not release_flash.is_set() and not (cancel is not None and cancel.is_cancelled()):
+                        time.sleep(.02)
+                    emit('Sending sparse 2/2\n');emit('Writing OKAY\n')
+                    return {'exit_code':0,'stdout':''.join(buf),'stderr':'','output':''.join(buf)}
+                return {'exit_code':0,'stdout':'OKAY\n','stderr':'','output':'OKAY\n'}
+            backend._run_native=fixture_run_native
             def cli(*args,ok=True):
                 with tempfile.TemporaryFile() as output:
                     process=subprocess.Popen([sys.executable,str(helper),*args],cwd=repo,stdout=output,stderr=subprocess.STDOUT,creationflags=CREATE_NO_WINDOW)
@@ -123,7 +126,7 @@ elif args and args[0]=='flash':
                 wait(lambda:pane.property('contentReady'))
                 artifacts=repo/'build/qtquick_migration/device_activity';artifacts.mkdir(parents=True,exist_ok=True)
                 window.grabWindow().save(str(artifacts/'main_flash_progress.png'))
-                release_flash.write_text('continue');wait(lambda:not backend.running)
+                release_flash.set();wait(lambda:not backend.running)
 
                 backend.assign('vendor','vendor.img',str(image));backend.flashAll()
                 wait(lambda:not backend.running and normal.property('opened'))
@@ -154,7 +157,7 @@ elif args and args[0]=='flash':
                 (artifacts/'report.json').write_text(json.dumps(report,indent=2),encoding='utf-8')
                 print(json.dumps(report),flush=True)
             finally:
-                release_file.set();release_flash.write_text('continue')
+                release_file.set();release_flash.set()
                 rak_cli.detach(workspace)
                 from core.threader import quit_when_idle
                 workspace.closed.connect(quit_when_idle);workspace._shutdown_and_quit=quit_when_idle

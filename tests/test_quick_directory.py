@@ -235,4 +235,45 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual((mirror/'contents.txt').read_text(),'decompiled');self.assertEqual(path.read_bytes(),b'fixture APK')
 
 
+    def test_streaming_magic_badges_do_not_block_root_ready_and_skip_child_folders(self):
+        import threading
+        from core import header_magic
+        boot = self.base / 'boot.img'; boot.write_bytes(b'ANDROID!' + b'\x00' * 120)
+        payload = self.base / 'payload.bin'; payload.write_bytes(b'CrAU' + b'\x00' * 124)
+        system_img = self.base / 'system.img'; system_img.write_bytes(b'\x00' * 1024 + b'\xe2\xe1\xf5\xe0' + b'\x00' * 120)
+        super_img = self.base / 'super.img'; super_img.write_bytes(b'\x00' * 4096 + b'\x00PLA' + b'\x00' * 120)
+        nested_dir = self.base / 'system' / 'nested'; nested_dir.mkdir(parents=True)
+        nested_img = nested_dir / 'vendor.img'; nested_img.write_bytes(b'ANDROID!' + b'\x00' * 120)
+        self.model.setDisplayMode('tree')
+        ready_fired = []
+        self.model.ready.connect(lambda: ready_fired.append(True))
+        gate = threading.Event()
+        seen_probes = []
+        badge_updates = []
+        orig_check_magic = header_magic.check_magic
+        def gated_magic(path):
+            seen_probes.append(path)
+            gate.wait(timeout=5.0)
+            return orig_check_magic(path)
+        with patch('core.header_magic.check_magic', side_effect=gated_magic):
+            self.model.load(str(self.base))
+            self.wait(lambda: bool(ready_fired))
+            self.assertFalse(gate.is_set())
+            self.assertFalse(self.model._magic_jobs._stopped)
+            for name, node in [(p.name, self.model._nodes[str(p)]) for p in (boot, payload, system_img, super_img)]:
+                pres = self.model._presentation_for(node)
+                pres.changed.connect(lambda n=name, p=pres: badge_updates.append((n, p.badge)) if p.badge else None)
+                self.assertEqual(pres.badge, '')
+            self.assertNotIn(str(nested_img), seen_probes)
+            gate.set()
+            self.wait(lambda: not self.model._magic_jobs._running and not self.model._magic_jobs._pending)
+        self.assertEqual(self.model._presentation_for(self.model._nodes[str(boot)]).badge, 'BOOT')
+        self.assertEqual(self.model._presentation_for(self.model._nodes[str(payload)]).badge, 'PAYLOAD')
+        self.assertEqual(self.model._presentation_for(self.model._nodes[str(system_img)]).badge, 'EROFS')
+        self.assertEqual(self.model._presentation_for(self.model._nodes[str(super_img)]).badge, 'SUPER')
+        self.assertEqual(len(badge_updates), 4)
+        self.assertNotIn(str(nested_img), seen_probes)
+        self.assertFalse(self.failures)
+
+
 if __name__=='__main__':unittest.main()

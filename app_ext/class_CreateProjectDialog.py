@@ -32,29 +32,27 @@ def _t(key):
         return key
 
 def _btn_ss(variant="normal"):
-    ac = _th.accent
-    bc = _th.border_color
     if variant == "primary":
         return f"""
             QPushButton {{
-                background: {ac(0.18)}; border: 1px solid {ac(0.38)};
-                border-radius: 7px; color: {_th.FG_BLUE};
+                background: {_th.BTN_PRIMARY_BG}; border: 1px solid {_th.BTN_PRIMARY_EDGE};
+                border-radius: 7px; color: {_th.BTN_PRIMARY_FG};
                 font-size: 12px; font-weight: 600;
                 padding: 0 14px; height: 34px;
             }}
-            QPushButton:hover {{ background: {ac(0.30)}; border-color: {ac(0.55)}; color: {_th.FG_BLUE_LIGHT}; }}
-            QPushButton:pressed {{ background: {ac(0.44)}; }}
-            QPushButton:disabled {{ background: {ac(0.07)}; border-color: {ac(0.12)}; color: {ac(0.30)}; }}
+            QPushButton:hover {{ background: {_th.BTN_PRIMARY_HOVER}; border-color: {_th.BTN_PRIMARY_EDGE_HOVER}; color: {_th.BTN_PRIMARY_FG_HOVER}; }}
+            QPushButton:pressed {{ background: {_th.BTN_PRIMARY_DOWN}; }}
+            QPushButton:disabled {{ background: {_th.BTN_PRIMARY_DISABLED_BG}; border-color: {_th.BTN_PRIMARY_DISABLED_EDGE}; color: {_th.BTN_PRIMARY_DISABLED_FG}; }}
         """
     return f"""
         QPushButton {{
-            background: {bc(0.05)}; border: 1px solid {bc(0.09)};
-            border-radius: 7px; color: {_th.FG_BLUE_MUTED};
+            background: {_th.BTN_SEC_BG}; border: 1px solid {_th.BTN_SEC_EDGE};
+            border-radius: 7px; color: {_th.BTN_SEC_FG};
             font-size: 12px; padding: 0 14px; height: 34px;
         }}
-        QPushButton:hover {{ background: {bc(0.09)}; border-color: {bc(0.15)}; color: {_th.FG_HOVER}; }}
-        QPushButton:pressed {{ background: {bc(0.13)}; }}
-        QPushButton:disabled {{ background: {bc(0.02)}; border-color: {bc(0.04)}; color: {_th.FG_DISABLED2}; }}
+        QPushButton:hover {{ background: {_th.BTN_SEC_HOVER}; border-color: {_th.BTN_SEC_EDGE_HOVER}; color: {_th.BTN_SEC_FG_HOVER}; }}
+        QPushButton:pressed {{ background: {_th.BTN_SEC_DOWN}; }}
+        QPushButton:disabled {{ background: {_th.BTN_SEC_DISABLED_BG}; border-color: {_th.BTN_SEC_DISABLED_EDGE}; color: {_th.BTN_SEC_DISABLED_FG}; }}
     """
 
 def _load_default_location():
@@ -432,8 +430,8 @@ class CreateProjectDialog(QDialog):
         self._btn_create = bind_text(QPushButton(), lambda: _t("btn_confirm_project"))
         self._btn_create.setLayoutDirection(Qt.LeftToRight)
         bind_icon(self._btn_create, lambda: create_themed_icon(
-            "check_white", _th.FG_BLUE, _th.FG_BLUE_LIGHT, 15,
-            disabled_color=with_alpha(_th.accent_hex, 0.30),
+            "check_white", _th.BTN_PRIMARY_FG, _th.BTN_PRIMARY_FG_HOVER, 15,
+            disabled_color=with_alpha("#ffffff", 0.45),
         ))
         self._btn_create.setIconSize(QSize(15, 15))
         self._btn_create.setCursor(Qt.PointingHandCursor)

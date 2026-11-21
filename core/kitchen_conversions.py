@@ -37,12 +37,9 @@ def publish_repack(actual,requested):
 
 
 def image_to_dat(path,*,brotli=False):
-    from core.img2simg import img2simg
-    from core.img2sdat import img2sdat
+    from core import native_backend
     folder=os.path.dirname(path);prefix=os.path.splitext(os.path.basename(path))[0]
-    with tempfile.TemporaryDirectory(prefix='.rak-convert-',dir=folder) as temporary:
-        sparse=checked(img2simg(path,os.path.join(temporary,'image.sparse')))
-        img2sdat.main(sparse,folder,VERSION=4,PREFIX=prefix)
+    native_backend.img2sdat(path, folder, version=4, prefix=prefix)
     output=os.path.join(folder,prefix+'.new.dat')
     if brotli:
         from core.brotli_tool import compress_to_br
@@ -63,7 +60,7 @@ def unpack_image(path):
 
 
 def dat_to_image(path,*,folder=False):
-    from core.sdat2img import sdat2img
+    from core import native_backend
     compressed=path.lower().endswith('.new.dat.br')
     suffix='.new.dat.br' if compressed else '.new.dat'
     if not path.lower().endswith(suffix):raise ValueError('Expected a .new.dat or .new.dat.br file')
@@ -73,7 +70,7 @@ def dat_to_image(path,*,folder=False):
     if compressed:
         from core.brotli_tool import decompress_from_br
         dat=checked(decompress_from_br(path,keep_source=True))
-    sdat2img.main(transfer,dat,output)
+    native_backend.sdat2img(transfer, dat, output)
     if compressed:os.remove(dat)
     if folder:
         result=unpack_image(output);os.remove(output);return result

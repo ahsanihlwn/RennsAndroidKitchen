@@ -12,15 +12,20 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         x: caption.button.leftAligned ? 0 : (parent.width-width)/2
         spacing: ((caption.button.iconKey && caption.button.iconKey.length > 0) || (caption.button.iconSource.toString().length > 0)) && caption.button.text.length ? caption.button.spacing : 0
-        WorkspaceNativeIcon {
-            visible: caption.button.iconKey && caption.button.iconKey.length > 0
-            iconKey: caption.button.iconKey || ""
-            iconSize: caption.button.iconWidth || 16
-            color: !caption.button.enabled ? caption.button.disabledLabelColor : caption.button.visualHovered ? caption.button.hoverLabelColor : caption.button.labelColor
-            hovered: caption.button.visualHovered
-            down: caption.button.down
-            enabled: caption.button.enabled
+        Loader {
+            active: !!(caption.button.iconKey && caption.button.iconKey.length > 0)
+            visible: active
+            width: active ? (caption.button.iconWidth || 16) : 0
+            height: active ? (caption.button.iconWidth || 16) : 0
             anchors.verticalCenter: parent.verticalCenter
+            sourceComponent: WorkspaceNativeIcon {
+                iconKey: caption.button.iconKey || ""
+                iconSize: caption.button.iconWidth || 16
+                color: !caption.button.enabled ? caption.button.disabledLabelColor : caption.button.visualHovered ? caption.button.hoverLabelColor : caption.button.labelColor
+                hovered: caption.button.visualHovered
+                down: caption.button.down
+                enabled: caption.button.enabled
+            }
         }
         Image {
             visible: (!caption.button.iconKey || caption.button.iconKey.length === 0) && caption.button.iconSource.toString().length > 0

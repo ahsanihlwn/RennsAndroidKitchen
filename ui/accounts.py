@@ -45,20 +45,56 @@ class ProfileModel(QObject):
         self._clear_timer = QTimer(self)
         self._clear_timer.setSingleShot(True)
         self._clear_timer.timeout.connect(lambda:self._status(""))
+        if hasattr(self.accounts, "changed"):
+            self.accounts.changed.connect(self.changed)
 
     @Property("QVariantMap", notify=changed)
     def draft(self):
         return self._draft
 
-    @Property("QVariantList", constant=True)
+    @Property("QVariantList", notify=changed)
     def avatars(self):
+        import os
         from rennsproject.avatar.handler import list_avatars, avatar_path
-        return [{"key": key, "url": QUrl.fromLocalFile(avatar_path(key)).toString()} for key in list_avatars()]
+        rows = []
+        for key in list_avatars(self.accounts.account):
+            path = avatar_path(key)
+            url = QUrl.fromLocalFile(path)
+            if os.path.isfile(path):
+                url.setQuery("v=" + str(os.stat(path).st_mtime_ns))
+            rows.append({"key": key, "url": url.toString()})
+        return rows
 
     @Property(str, notify=changed)
     def preview(self):
+        import os
         from rennsproject.avatar.handler import resolve_avatar_path
-        return QUrl.fromLocalFile(resolve_avatar_path(self._draft.get("avatar", "000"),self.accounts.account)).toString()
+        path = resolve_avatar_path(self._draft.get("avatar", "000"), self.accounts.account)
+        url = QUrl.fromLocalFile(path)
+        if os.path.isfile(path):
+            url.setQuery("v=" + str(os.stat(path).st_mtime_ns))
+        return url.toString()
+
+    @Property(str, notify=changed)
+    def previewHd(self):
+        import os
+        from rennsproject.avatar.handler import resolve_avatar_hd_path
+        path = resolve_avatar_hd_path(self._draft.get("avatar", "000"), self.accounts.account)
+        url = QUrl.fromLocalFile(path)
+        if os.path.isfile(path):
+            url.setQuery("v=" + str(os.stat(path).st_mtime_ns))
+        return url.toString()
+
+    @Property(str, notify=changed)
+    def googleBadgeUrl(self):
+        import os
+        from rennsproject.avatar.handler import avatar_asset_path
+        path = avatar_asset_path("google")
+        if not os.path.isfile(path):
+            return ""
+        url = QUrl.fromLocalFile(path)
+        url.setQuery("v=" + str(os.stat(path).st_mtime_ns))
+        return url.toString()
 
     @Slot()
     def begin(self):

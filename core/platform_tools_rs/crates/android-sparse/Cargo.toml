@@ -1,0 +1,16 @@
+[package]
+name = "android-sparse"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Android sparse image format reader, writer, CRC32, and splitter"
+
+[dependencies]
+bytes.workspace = true
+crc32fast.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

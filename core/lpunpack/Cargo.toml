@@ -1,0 +1,18 @@
+[package]
+name = "lp_tools"
+version = "1.0.0"
+edition = "2021"
+description = "Rust CLI tools and library for inspecting, unpacking, and building Android super partition images"
+license = "MIT"
+
+[lib]
+name = "lp_tools"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lpunpack"
+path = "src/bin/lpunpack.rs"
+
+[[bin]]
+name = "lpmake"
+path = "src/bin/lpmake.rs"

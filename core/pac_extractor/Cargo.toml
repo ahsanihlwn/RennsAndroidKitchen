@@ -1,0 +1,6 @@
+[package]
+name = "pac-extractor"
+version = "0.1.0"
+edition = "2024"
+description = "Spreadtrum/Unisoc PAC firmware archive parser, CRC-16 verifier, and extractor"
+license = "MIT"

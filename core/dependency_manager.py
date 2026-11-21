@@ -12,6 +12,7 @@ from enum import Enum
 from urllib.parse import urlparse
 from core.archive_safety import safe_extract_zip
 from core.app_paths import BIN_DIR
+from core.native_tools import NATIVE_BUILTIN_PACKAGES
 
 
 PROJECT_ROOT = os.path.abspath(
@@ -77,6 +78,8 @@ class DependencyManager:
 
         # 1️⃣ local dulu = sumber kebenaran
         for pkg_name, local_meta in self.local_cache.items():
+            if pkg_name in NATIVE_BUILTIN_PACKAGES:
+                continue
             result[pkg_name] = self._resolve_package(
                 pkg_name,
                 self.registry.get(pkg_name, {})  # bisa kosong
@@ -84,6 +87,8 @@ class DependencyManager:
 
         # 2️⃣ remote cuma nambah / update info
         for pkg_name, meta in self.registry.items():
+            if pkg_name in NATIVE_BUILTIN_PACKAGES:
+                continue
             if pkg_name not in result:
                 result[pkg_name] = self._resolve_package(pkg_name, meta)
 

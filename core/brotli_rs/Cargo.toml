@@ -1,0 +1,19 @@
+[package]
+name = "brotli-rs"
+version = "1.2.0"
+edition = "2021"
+description = "Faithful pure-Rust implementation of Google's Brotli (v1.2.0) compression and decompression library"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/ahsanihlwn/brotli-rs"
+homepage = "https://github.com/ahsanihlwn/brotli-rs"
+keywords = ["brotli", "compression", "decompression", "rfc7932", "pure-rust"]
+categories = ["compression"]
+
+[lib]
+name = "brotli_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "brotli"
+path = "src/bin/brotli.rs"

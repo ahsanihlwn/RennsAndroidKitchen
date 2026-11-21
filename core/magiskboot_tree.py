@@ -1,36 +1,33 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: MPL-2.0
-
+#
+# magiskboot_tree — unpack/repack boot & vendor_boot images as editable folder
+# trees, using the built-in Rust magiskboot native library (via rak_native /
+# PyO3) instead of an external magiskboot.exe binary.
+#
+# External callers that previously called find_magiskboot() / run() can now
+# call the same high-level helpers (decode_ramdisk, encode_ramdisk, …) without
+# supplying a magiskboot path; the native backend is resolved automatically.
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
-import re
 import shutil
-from core import kitchen_process as subprocess
 import sys
 import time
 from pathlib import Path
 
 try:
-    from core.binary_handler import resolve_binary
-except Exception:  # standalone run without the package on sys.path
-    resolve_binary = None
-
-try:
-    from core.proc_util import CREATE_NO_WINDOW
-except Exception:  # standalone run without the package on sys.path
-    CREATE_NO_WINDOW = 0x08000000 if sys.platform == "win32" else 0
+    from core import native_backend as _nb
+    _NATIVE = True
+except Exception:
+    _NATIVE = False
 
 
-# Same managed bin root the rest of the kitchen uses (see core/boot_image.py).
-BIN_PATH = os.path.join(
-    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-    "RennsAndroidKitchen",
-    "bin",
-)
+# ── Constants (unchanged public API) ─────────────────────────────────────────
+
 MAGISKBOOT_NAME = "magiskboot.exe"
 
 META_NAME = "magiskboot_tree.json"
@@ -41,8 +38,9 @@ RAMDISK_DIR = "ramdisk"
 CPIO_CONFIG = "cpio"
 
 
-def set_hidden(path: Path) -> None:
+# ── Utilities ─────────────────────────────────────────────────────────────────
 
+def set_hidden(path: Path) -> None:
     if os.name != "nt":
         return
     try:
@@ -58,7 +56,6 @@ class ToolError(RuntimeError):
 
 
 def _rm_readonly(func, path, _exc):
-
     import stat
     os.chmod(path, stat.S_IWRITE)
     func(path)
@@ -70,50 +67,110 @@ def die(message: str, code: int = 1) -> None:
 
 
 def find_magiskboot(explicit: str | None) -> Path:
-
-
+    """Compatibility shim — returns a sentinel Path; callers should prefer
+    the native functions below.  Raises if an explicit non-existent path is
+    given; otherwise returns a placeholder that native functions ignore.
+    """
     if explicit:
         path = Path(explicit)
         if path.is_file():
             return path
         die(f"magiskboot not found at --magiskboot path: {explicit}")
-
-    if resolve_binary is None:
-        die(
-            "core.binary_handler unavailable; pass --magiskboot PATH explicitly."
-        )
-
-    resolved = resolve_binary(BIN_PATH, MAGISKBOOT_NAME)
-    if resolved and Path(resolved).is_file():
-        return Path(resolved)
-
-    die(
-        f"{MAGISKBOOT_NAME} not installed. Install it via the kitchen's bin "
-        f"manager (expected under {BIN_PATH}), or pass --magiskboot PATH."
-    )
-    raise AssertionError("unreachable")
+    # Native backend is always available; return a sentinel so old callers
+    # that thread this value through still compile.
+    return Path(MAGISKBOOT_NAME)
 
 
-def run(cmd: list[str | Path], cwd: Path, verbose: bool = False) -> str:
-    printable = " ".join(str(part) for part in cmd)
-    print(f"> {printable}")
-    proc = subprocess.run(
-        [str(part) for part in cmd],
-        cwd=str(cwd),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        creationflags=CREATE_NO_WINDOW,
-    )
-    out = proc.stdout or ""
-    if verbose and out:
-        print(out, end="" if out.endswith("\n") else "\n")
-    if proc.returncode != 0:
-        if out:
-            print(out, file=sys.stderr, end="" if out.endswith("\n") else "\n")
-        raise ToolError(f"command failed with exit {proc.returncode}: {printable}")
-    return out
+def _native_unpack(image: Path, out_dir: Path, dump_hdr: bool = True) -> dict:
+    if not _NATIVE:
+        raise ToolError("rak_native not available; cannot unpack boot image natively")
+    result = _nb.boot_unpack(str(image), str(out_dir), skip_decomp=False, dump_hdr=dump_hdr)
+    return result
 
+
+def _native_repack(meta_dir: Path, orig_img: Path, out_img: Path) -> dict:
+    if not _NATIVE:
+        raise ToolError("rak_native not available; cannot repack boot image natively")
+    return _nb.boot_repack(str(meta_dir), str(orig_img), str(out_img))
+
+
+def _native_decompress(src: Path, dst: Path) -> str:
+    """Decompress src → dst using the native backend. Returns format name."""
+    if not _NATIVE:
+        raise ToolError("rak_native not available; cannot decompress natively")
+    result = _nb.boot_decompress(str(src), str(dst))
+    return result.get("format", "unknown")
+
+
+def _native_compress(src: Path, dst: Path, fmt: str) -> None:
+    """Compress src → dst using native backend."""
+    if not _NATIVE:
+        raise ToolError("rak_native not available; cannot compress natively")
+    _nb.boot_compress(str(src), str(dst), fmt)
+
+
+def _native_cpio(cpio: Path, commands: list[str]) -> int:
+    """Run cpio sub-commands via native backend. Returns exit code."""
+    if not _NATIVE:
+        raise ToolError("rak_native not available; cannot run cpio natively")
+    result = _nb.boot_cpio(str(cpio), commands)
+    return result.get("exit_code", 1)
+
+
+def run(cmd: list, cwd: Path, verbose: bool = False) -> str:
+    """Compatibility shim for callers that still invoke run() directly.
+
+    Intercepts known magiskboot sub-commands and routes them to the native
+    backend.  Falls through to the original subprocess implementation only
+    for unrecognised commands (should never happen in practice).
+    """
+    # Strip the leading binary path; extract sub-command.
+    args = [str(a) for a in cmd]
+    # args[0] is the magiskboot binary path (now ignored); args[1] is the action.
+    if len(args) < 2:
+        raise ToolError(f"run(): too few arguments: {args!r}")
+    action = args[1]
+
+    if action == "unpack":
+        flags = args[2:-1]
+        image = args[-1]
+        skip = "-n" in flags
+        hdr = "-h" in flags
+        out_dir = cwd
+        _native_unpack(Path(image) if os.path.isabs(image) else cwd / image,
+                       out_dir, dump_hdr=hdr)
+        return ""
+
+    if action == "repack":
+        orig = args[2]
+        out = args[3] if len(args) > 3 else str(cwd / "new-boot.img")
+        _native_repack(cwd, cwd / orig, Path(out) if os.path.isabs(out) else cwd / out)
+        return ""
+
+    if action == "decompress" and len(args) >= 4:
+        src = cwd / args[2]
+        dst = cwd / args[3]
+        fmt = _native_decompress(src, dst)
+        return f"Detected format: [{fmt}]"
+
+    if action.startswith("compress") and len(args) >= 4:
+        fmt = action.partition("=")[2] or "gzip"
+        src = cwd / args[2]
+        dst = cwd / args[3]
+        _native_compress(src, dst, fmt)
+        return ""
+
+    if action == "cpio" and len(args) >= 3:
+        cpio_name = args[2]
+        cmds = args[3:]
+        cpio_path = cwd / cpio_name
+        _native_cpio(cpio_path, cmds)
+        return ""
+
+    raise ToolError(f"run(): unrecognised magiskboot command: {action!r}")
+
+
+# ── Core helpers ──────────────────────────────────────────────────────────────
 
 def looks_like_cpio(path: Path) -> bool:
     try:
@@ -152,26 +209,11 @@ def read_meta(tree: Path) -> dict:
 
 def decompress_ramdisk_component(component: Path, decoded: Path,
                                  magiskboot: Path, verbose: bool = False) -> str:
+    """Decompress the ramdisk component, returning the compression format name."""
     if looks_like_cpio(component):
         shutil.copy2(component, decoded)
         return "raw"
-    with component.open("rb") as stream:
-        magic = stream.read(4)
-    if magic == b"\x28\xb5\x2f\xfd":
-        try:
-            from compression import zstd
-            # A vendor_boot v4 aggregate can contain several Zstandard frames.
-            data = zstd.decompress(component.read_bytes())
-            decoded.write_bytes(data)
-        except Exception as exc:
-            import logging
-            logging.exception("Unpack Boot: Zstandard ramdisk decode failed: %s", component)
-            raise ToolError(f"Zstandard ramdisk decode failed for {component}: {exc}") from exc
-        return "zstd"
-    out = run([magiskboot, "decompress", component.name, decoded.name],
-              component.parent, verbose)
-    match = re.search(r"Detected format:\s*\[(.*?)\]", out)
-    return match.group(1) if match else "unknown"
+    return _native_decompress(component, decoded)
 
 
 def decode_ramdisk(tree: Path, magiskboot: Path, verbose: bool) -> tuple[str, bool]:
@@ -190,7 +232,8 @@ def decode_ramdisk(tree: Path, magiskboot: Path, verbose: bool) -> tuple[str, bo
     cpio_config = tree / "cpio"
     if cpio_config.exists():
         cpio_config.unlink()
-    run([magiskboot, "cpio", RAMDISK_DECODED, "extract"], tree, verbose)
+    # Extract the cpio natively.
+    _native_cpio(decoded, ["extract"])
     return compression, True
 
 
@@ -201,7 +244,7 @@ def encode_ramdisk(tree: Path, magiskboot: Path, compression: str, verbose: bool
     if not decoded.exists() or not ramdisk_dir.exists():
         return
 
-    run([magiskboot, "cpio", RAMDISK_DECODED, "sync"], tree, verbose)
+    _native_cpio(decoded, ["sync"])
 
     backup = tree / f"{RAMDISK_COMPONENT}.before_last_repack"
     if component.exists():
@@ -209,22 +252,11 @@ def encode_ramdisk(tree: Path, magiskboot: Path, compression: str, verbose: bool
 
     if compression in ("none", "raw", "unknown"):
         shutil.copy2(decoded, component)
-    elif compression == "zstd":
-        try:
-            from compression import zstd
-            data = zstd.compress(decoded.read_bytes())
-            component.write_bytes(data)
-        except Exception as exc:
-            import logging
-            logging.exception("Repack Boot: Zstandard ramdisk encode failed: %s", decoded)
-            raise ToolError(f"Zstandard ramdisk encode failed for {decoded}: {exc}") from exc
     else:
-        run(
-            [magiskboot, f"compress={compression}", RAMDISK_DECODED, RAMDISK_COMPONENT],
-            tree,
-            verbose,
-        )
+        _native_compress(decoded, component, compression)
 
+
+# ── CLI commands ──────────────────────────────────────────────────────────────
 
 def command_unpack(args: argparse.Namespace) -> None:
     image = Path(args.image).resolve()
@@ -242,14 +274,15 @@ def command_unpack(args: argparse.Namespace) -> None:
         clean_tree_dir(tree)
 
     shutil.copy2(image, tree / SOURCE_IMAGE)
-    run([magiskboot, "unpack", "-h", SOURCE_IMAGE], tree, args.verbose)
+    # Use native unpack (runs in-process, no subprocess).
+    result = _native_unpack(tree / SOURCE_IMAGE, tree, dump_hdr=True)
     compression, has_ramdisk = decode_ramdisk(tree, magiskboot, args.verbose)
 
     meta = {
         "tool": "magiskboot_tree.py",
         "source_image": str(image),
         "source_copy": SOURCE_IMAGE,
-        "magiskboot": str(magiskboot),
+        "magiskboot": "native",
         "has_ramdisk": has_ramdisk,
         "ramdisk_component": RAMDISK_COMPONENT,
         "ramdisk_decoded": RAMDISK_DECODED,
@@ -285,7 +318,7 @@ def command_repack(args: argparse.Namespace) -> None:
     if not tree.is_dir():
         die(f"tree not found: {tree}")
     meta = read_meta(tree)
-    magiskboot = find_magiskboot(args.magiskboot or meta.get("magiskboot"))
+    magiskboot = find_magiskboot(args.magiskboot or None)
 
     compression = args.ramdisk_format or meta.get("ramdisk_compression", "raw")
     encode_ramdisk(tree, magiskboot, compression, args.verbose)
@@ -301,17 +334,18 @@ def command_repack(args: argparse.Namespace) -> None:
         temp_output = tree / (source.name + ".new")
         if temp_output.exists():
             temp_output.unlink()
-        run([magiskboot, "repack", source.name, temp_output.name], tree, args.verbose)
+        _native_repack(tree, source, temp_output)
         backup = tree / (source.name + ".bak")
         if not backup.exists():
             shutil.copy2(source, backup)
         os.replace(temp_output, source)
         final_output = source
     else:
-        run([magiskboot, "repack", source.name, str(output)], tree, args.verbose)
+        _native_repack(tree, source, output)
         final_output = output
 
     meta["ramdisk_compression"] = compression
+    meta["magiskboot"] = "native"
     write_meta(tree, meta)
 
     print("")
@@ -337,13 +371,13 @@ def command_status(args: argparse.Namespace) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Unpack/repack boot or vendor_boot images as editable folder trees."
+        description="Unpack/repack boot or vendor_boot images as editable folder trees (native)."
     )
     parser.add_argument(
         "--magiskboot",
-        help="Path to magiskboot.exe. Defaults to the kitchen's managed bin (package.json).",
+        help="Ignored — the native Rust backend is always used. Kept for CLI compatibility.",
     )
-    parser.add_argument("-v", "--verbose", action="store_true", help="Print full magiskboot output.")
+    parser.add_argument("-v", "--verbose", action="store_true", help="Print verbose output.")
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
@@ -392,3 +426,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

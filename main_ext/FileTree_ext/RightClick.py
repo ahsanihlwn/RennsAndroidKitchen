@@ -599,7 +599,7 @@ class FileTreeContextMixin:
                     _make_submenu_button(b_cv, "convert_img")
 
             elif fs_badge in ("EXT2", "EXT3", "EXT4"):
-                _has_unpack = is_available("ext_tool.exe")
+                _has_unpack = is_available("ext_cli.exe")
                 _has_convert = _submenu_any_available("convert_img")
                 if _has_unpack or _has_convert:
                     _sep()
@@ -1163,7 +1163,7 @@ class FileTreeContextMixin:
 
         elif action == "convert_img_to_new_dat":
             from core.img2simg import img2simg as _img2simg_cvdat
-            from core.img2sdat import img2sdat as _img2sdat_cvdat
+            from core.native_backend import img2sdat as _img2sdat_cvdat
             main = self.window()
             task_id = f"convert-dat:{full}"
             if main: main.push_task(task_id)
@@ -1175,7 +1175,7 @@ class FileTreeContextMixin:
                 if not ok:
                     return False, f"img2simg failed: {sparse_path}"
                 prefix = os.path.splitext(full)[0]
-                _img2sdat_cvdat.main(sparse_path, out_dir, VERSION=4, PREFIX=os.path.basename(prefix))
+                _img2sdat_cvdat(sparse_path, out_dir, version=4, prefix=os.path.basename(prefix))
                 try: os.remove(sparse_path)
                 except: pass
                 return True, prefix + ".new.dat"
@@ -1196,7 +1196,7 @@ class FileTreeContextMixin:
 
         elif action == "convert_img_to_dat_br":
             from core.img2simg import img2simg as _img2simg_cvdbr
-            from core.img2sdat import img2sdat as _img2sdat_cvdbr
+            from core.native_backend import img2sdat as _img2sdat_cvdbr
             from core.brotli_tool import compress_to_br as _compress_cvdbr
             main = self.window()
             task_id = f"convert-datbr:{full}"
@@ -1209,7 +1209,7 @@ class FileTreeContextMixin:
                 if not ok:
                     return False, f"img2simg failed: {sparse_path}"
                 prefix = os.path.splitext(full)[0]
-                _img2sdat_cvdbr.main(sparse_path, out_dir, VERSION=4, PREFIX=os.path.basename(prefix))
+                _img2sdat_cvdbr(sparse_path, out_dir, version=4, prefix=os.path.basename(prefix))
                 try: os.remove(sparse_path)
                 except: pass
                 dat_path = prefix + ".new.dat"
@@ -2633,7 +2633,7 @@ class FileTreeContextMixin:
         elif action == "repack_erofs_to_new_dat":
             from core.erofs import repack_erofs as _repack_erofs_dat
             from core.img2simg import img2simg as _img2simg_dat
-            from core.img2sdat import img2sdat as _img2sdat_mod
+            from core.native_backend import img2sdat as _img2sdat_mod
             from core.task_queue import TaskItem
 
             base_dir  = os.path.dirname(full)
@@ -2696,7 +2696,7 @@ class FileTreeContextMixin:
                     return False, f"img2simg failed: {sparse_path}"
                 prefix = os.path.splitext(img_out)[0]
                 out_dir = os.path.dirname(img_out)
-                _img2sdat_mod.main(sparse_path, out_dir, VERSION=4, PREFIX=os.path.basename(prefix))
+                _img2sdat_mod(sparse_path, out_dir, version=4, prefix=os.path.basename(prefix))
                 try: os.remove(sparse_path)
                 except: pass
                 try: os.remove(img_out)
@@ -2731,7 +2731,7 @@ class FileTreeContextMixin:
         elif action == "repack_erofs_to_dat_br":
             from core.erofs import repack_erofs as _repack_erofs_dbr
             from core.img2simg import img2simg as _img2simg_dbr
-            from core.img2sdat import img2sdat as _img2sdat_dbr_mod
+            from core.native_backend import img2sdat as _img2sdat_dbr_mod
             from core.brotli_tool import compress_to_br as _compress_dbr
             from core.task_queue import TaskItem
 
@@ -2795,7 +2795,7 @@ class FileTreeContextMixin:
                     return False, f"img2simg failed: {sparse_path}"
                 prefix = os.path.splitext(img_out)[0]
                 out_dir = os.path.dirname(img_out)
-                _img2sdat_dbr_mod.main(sparse_path, out_dir, VERSION=4, PREFIX=os.path.basename(prefix))
+                _img2sdat_dbr_mod(sparse_path, out_dir, version=4, prefix=os.path.basename(prefix))
                 try: os.remove(sparse_path)
                 except: pass
                 try: os.remove(img_out)
@@ -2838,7 +2838,7 @@ class FileTreeContextMixin:
         elif action == "repack_ext_to_new_dat":
             from core.repack_ext4 import main as _repack_ext_dat_fn
             from core.img2simg import img2simg as _img2simg_ext_dat
-            from core.img2sdat import img2sdat as _img2sdat_ext_mod
+            from core.native_backend import img2sdat as _img2sdat_ext_mod
             from core.task_queue import TaskItem
 
             base_dir  = os.path.dirname(full)
@@ -2901,7 +2901,7 @@ class FileTreeContextMixin:
                     return False, f"img2simg failed: {sparse_path}"
                 prefix = os.path.splitext(img_out)[0]
                 out_dir = os.path.dirname(img_out)
-                _img2sdat_ext_mod.main(sparse_path, out_dir, VERSION=4, PREFIX=os.path.basename(prefix))
+                _img2sdat_ext_mod(sparse_path, out_dir, version=4, prefix=os.path.basename(prefix))
                 try: os.remove(sparse_path)
                 except: pass
                 try: os.remove(img_out)
@@ -2935,7 +2935,7 @@ class FileTreeContextMixin:
         elif action == "repack_ext_to_dat_br":
             from core.repack_ext4 import main as _repack_ext_dbr_fn
             from core.img2simg import img2simg as _img2simg_ext_dbr
-            from core.img2sdat import img2sdat as _img2sdat_ext_dbr_mod
+            from core.native_backend import img2sdat as _img2sdat_ext_dbr_mod
             from core.brotli_tool import compress_to_br as _compress_ext_dbr
             from core.task_queue import TaskItem
 
@@ -2999,7 +2999,7 @@ class FileTreeContextMixin:
                     return False, f"img2simg failed: {sparse_path}"
                 prefix = os.path.splitext(img_out)[0]
                 out_dir = os.path.dirname(img_out)
-                _img2sdat_ext_dbr_mod.main(sparse_path, out_dir, VERSION=4, PREFIX=os.path.basename(prefix))
+                _img2sdat_ext_dbr_mod(sparse_path, out_dir, version=4, prefix=os.path.basename(prefix))
                 try: os.remove(sparse_path)
                 except: pass
                 try: os.remove(img_out)
@@ -3064,7 +3064,7 @@ class FileTreeContextMixin:
 
         elif action == "unpack_dat_br_to_image":
             from core.brotli_tool import decompress_from_br
-            from core.sdat2img import sdat2img as _sdat2img_mod
+            from core.native_backend import sdat2img as _sdat2img_mod
             task_id = f"unpack-datbr-img:{full}"
             _main_w = self.window()
             if _main_w: _main_w.push_task(task_id)
@@ -3080,7 +3080,7 @@ class FileTreeContextMixin:
                 if not os.path.isfile(tl):
                     return False, f"transfer.list not found: {tl}"
                 try:
-                    _sdat2img_mod.main(tl, dat_path, img_out)
+                    _sdat2img_mod(tl, dat_path, img_out)
                 except Exception as e:
                     return False, f"sdat2img failed: {e}"
                 try: os.remove(dat_path)
@@ -3103,7 +3103,7 @@ class FileTreeContextMixin:
 
         elif action == "unpack_dat_br_to_folder":
             from core.brotli_tool import decompress_from_br
-            from core.sdat2img import sdat2img as _sdat2img_fld_mod
+            from core.native_backend import sdat2img as _sdat2img_fld_mod
             from core.header_magic import check_magic as _check_magic_fld
             task_id = f"unpack-datbr-fld:{full}"
             _main_w = self.window()
@@ -3119,7 +3119,7 @@ class FileTreeContextMixin:
                 if not os.path.isfile(tl):
                     return False, f"transfer.list not found: {tl}"
                 try:
-                    _sdat2img_fld_mod.main(tl, dat_path, img_out)
+                    _sdat2img_fld_mod(tl, dat_path, img_out)
                 except Exception as e:
                     return False, f"sdat2img failed: {e}"
                 try: os.remove(dat_path)
@@ -3154,7 +3154,7 @@ class FileTreeContextMixin:
 
 
         elif action == "unpack_dat_to_image":
-            from core.sdat2img import sdat2img as _sdat2img_dat_mod
+            from core.native_backend import sdat2img as _sdat2img_dat_mod
             task_id = f"unpack-dat-img:{full}"
             _main_w = self.window()
             if _main_w: _main_w.push_task(task_id)
@@ -3166,7 +3166,7 @@ class FileTreeContextMixin:
                 if not os.path.isfile(tl):
                     return False, f"transfer.list not found: {tl}"
                 try:
-                    _sdat2img_dat_mod.main(tl, full, img_out)
+                    _sdat2img_dat_mod(tl, full, img_out)
                 except Exception as e:
                     return False, f"sdat2img failed: {e}"
                 return True, img_out
@@ -3186,7 +3186,7 @@ class FileTreeContextMixin:
 
 
         elif action == "unpack_dat_to_folder":
-            from core.sdat2img import sdat2img as _sdat2img_dat_fld_mod
+            from core.native_backend import sdat2img as _sdat2img_dat_fld_mod
             from core.header_magic import check_magic as _check_magic_dat_fld
             task_id = f"unpack-dat-fld:{full}"
             _main_w = self.window()
@@ -3199,7 +3199,7 @@ class FileTreeContextMixin:
                 if not os.path.isfile(tl):
                     return False, f"transfer.list not found: {tl}"
                 try:
-                    _sdat2img_dat_fld_mod.main(tl, full, img_out)
+                    _sdat2img_dat_fld_mod(tl, full, img_out)
                 except Exception as e:
                     return False, f"sdat2img failed: {e}"
                 fs = _check_magic_dat_fld(img_out)
@@ -4759,29 +4759,10 @@ class FileTreeContextMixin:
                         return False, "lz4 not installed"
 
                 elif ext == '.pac':
-                    from core.pac_lister import list_pac
+                    from core.native_backend import pac_extract
 
-                    listing = list_pac(src)
-                    extracted = 0
-                    chunk_size = 1024 * 1024
-
-                    with open(src, 'rb') as fh:
-                        for entry in listing.files:
-                            out_path = os.path.join(out_dir, entry.file_name)
-                            os.makedirs(os.path.dirname(out_path), exist_ok=True)
-
-                            remaining = entry.size
-                            fh.seek(entry.data_offset)
-                            with open(out_path, 'wb') as fo:
-                                while remaining > 0:
-                                    chunk = fh.read(min(chunk_size, remaining))
-                                    if not chunk:
-                                        return False, f"PAC payload ended early: {entry.file_name}"
-                                    fo.write(chunk)
-                                    remaining -= len(chunk)
-                            extracted += 1
-
-                    if extracted == 0:
+                    res = pac_extract(src, out_dir)
+                    if not res.get("extracted"):
                         return False, "PAC contains no extractable files"
 
                 elif ext == '.iso':

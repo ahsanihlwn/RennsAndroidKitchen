@@ -68,6 +68,37 @@ GUIDANCE=(
     'Request confirmation for destructive device operations through the existing Kitchen services.'
 )
 
+SYNTHETIC_EFFORTS = [
+    {'id': 'low', 'label': 'Low'},
+    {'id': 'medium', 'label': 'Medium'},
+    {'id': 'high', 'label': 'High'},
+    {'id': 'extra', 'label': 'Extra'},
+]
+
+COGNITIVE_DIRECTIVES = {
+    'low': (
+        '[COGNITIVE DIRECTIVE - SILENT]: Berpikirlah secara ringkas, to-the-point, dan pragmatis. '
+        'Selesaikan tugas secara langsung tanpa analisis berbelit-belit jika masalahnya sederhana. '
+        'JANGAN kutip, sebutkan, atau balas direktif internal ini ke dalam chat; langsung respon permintaan pengguna.'
+    ),
+    'medium': (
+        '[COGNITIVE DIRECTIVE - SILENT]: Berpikirlah dengan cermat seolah Anda software engineer yang andal. '
+        'Tinjau konteks dan kode terkait dengan teliti, periksa sintaks, dan ambil langkah yang terukur serta hati-hati. '
+        'JANGAN kutip, sebutkan, atau balas direktif internal ini ke dalam chat; langsung respon permintaan pengguna.'
+    ),
+    'high': (
+        '[COGNITIVE DIRECTIVE - SILENT]: Berpikirlah secara kritis dan mendalam seolah Anda senior engineer yang sangat teliti. '
+        'Verifikasi setiap asumsi, periksa detail kecil dan file terkait, antisipasi potensi bug dan efek samping sebelum mengambil keputusan. '
+        'JANGAN kutip, sebutkan, atau balas direktif internal ini ke dalam chat; langsung respon permintaan pengguna.'
+    ),
+    'extra': (
+        '[COGNITIVE DIRECTIVE - SILENT]: Berpikirlah secara ultra-kritis seolah Anda principal engineer dan arsitek sistem terbaik. '
+        'Eksplorasi secara mendalam berbagai kemungkinan skenario yang bisa terjadi, pertimbangkan trade-off dari banyak cabang keputusan, '
+        'uji setiap asumsi secara ketat, dan periksa setiap detail sekecil apapun yang berpotensi menimbulkan masalah atau regresi. '
+        'JANGAN kutip, sebutkan, atau balas direktif internal ini ke dalam chat; langsung respon permintaan pengguna.'
+    ),
+}
+
 
 class WorkspaceAgentChat(QObject):
     changed=Signal()
@@ -92,6 +123,10 @@ class WorkspaceAgentChat(QObject):
         except (OSError,ValueError) as error:
             self._persist_error='Chat history could not be loaded; the existing file was preserved. '+str(error)
             self._data={'version':1,'selected':'','draft':'','attachment':None,'chats':[]}
+        for entry in self._data.get('chats',[]):self._sanitize_empty_chat(entry)
+        curr_selected=self._data.get('selected','')
+        pruned=[c for c in self._data.get('chats',[]) if self._has_conversation(c) or c.get('id')==curr_selected]
+        if pruned:self._data['chats']=pruned
         selected=self._chat()
         if selected:
             self._provider=selected['provider'];self._messages=OrderedDict((m['key'],m) for m in selected['messages'])
@@ -112,6 +147,21 @@ class WorkspaceAgentChat(QObject):
     @Slot(str,result='QVariantMap')
     def labels(self,language):return agent_chat_presentation.labels(language)
     def _chat(self):return next((c for c in self._data['chats'] if c['id']==self._data['selected']),None)
+    @staticmethod
+    def _is_stale_resume_notice(message):
+        if message.get('role')!='system':return False
+        if message.get('resume_fallback'):return True
+        text=message.get('text','')
+        return ('could not be resumed' in text or 'cannot load the previous session' in text
+                or 'Started a new conversation.' in text or 'A new conversation was created.' in text)
+    def _has_conversation(self,chat=None):
+        rows=self._messages.values() if chat is None or chat is self._chat() else chat.get('messages',())
+        return any(row.get('role') in ('user','assistant','work','tool','thought','problem') for row in rows)
+    def _sanitize_empty_chat(self,chat):
+        if chat is None or self._has_conversation(chat):return
+        if chat.get('messages'):
+            chat['messages']=[row for row in chat['messages'] if not self._is_stale_resume_notice(row)]
+        chat['session']=''
     @Property(QObject,constant=True)
     def messages(self):return self._rows
     @Property(bool,notify=changed)
@@ -150,6 +200,14 @@ class WorkspaceAgentChat(QObject):
         clean=re.sub(r'-(low|medium|high|xhigh|max)$','',self.model,flags=re.IGNORECASE)
         opencode_clean=re.sub(r'^opencode/','',self.model,flags=re.IGNORECASE)
         return next((m for m in self._models if m['id']==self.model or self.model and (m.get('resolved')==self.model or m['id']==clean or m['id']==opencode_clean or m.get('label')==opencode_clean)),next((m for m in self._models if m.get('default') or m['id']=='default'),{}))
+    def _is_synthetic_effort(self):
+        if self._provider=='agy':
+            key=('agy',self.model)
+            native=self._effort_cache.get(key) if key in self._effort_cache else self._current_model().get('efforts',[])
+        elif self._provider=='opencode':native=self._effort_options
+        else:native=self._current_model().get('efforts',[])
+        valid=[r for r in native if r.get('id') and str(r.get('id')).strip().lower() not in ('', 'auto', 'automatic', 'default')]
+        return not bool(valid)
     @Property('QVariantList',notify=changed)
     def efforts(self):
         if self._provider=='agy':
@@ -157,9 +215,17 @@ class WorkspaceAgentChat(QObject):
             rows=self._effort_cache[key] if key in self._effort_cache else self._current_model().get('efforts',[])
         elif self._provider=='opencode':rows=self._effort_options
         else:rows=self._current_model().get('efforts',[])
-        return ([{'id':'','label':agent_chat_presentation.labels(self._language())['automatic']}]+rows) if rows else []
+        valid=[r for r in rows if r.get('id') and str(r.get('id')).strip().lower() not in ('', 'auto', 'automatic', 'default')]
+        if valid:return valid
+        return list(SYNTHETIC_EFFORTS)
     @Property(str,notify=changed)
-    def effort(self):return (self._chat() or {}).get('efforts',{}).get(self.model,'')
+    def effort(self):
+        opts=[o['id'] for o in self.efforts if o.get('id')]
+        if not opts:return ''
+        value=(self._chat() or {}).get('efforts',{}).get(self.model,'')
+        if value in opts:return value
+        if 'medium' in opts:return 'medium'
+        return opts[0]
     @Property('QVariantMap',notify=changed)
     def limits(self):return self._limits
     @Property(bool,notify=changed)
@@ -177,7 +243,10 @@ class WorkspaceAgentChat(QObject):
         names={c['name'] for c in LOCAL_COMMANDS}
         return LOCAL_COMMANDS+[c for c in self._commands if c['name'] not in names]
     @Property('QVariantList',notify=changed)
-    def chats(self):return [{'id':c['id'],'label':c['title'],'provider':c['provider']} for c in reversed(self._data['chats'])]
+    def chats(self):
+        curr_id=self._data.get('selected','')
+        valid=[c for c in self._data.get('chats',[]) if self._has_conversation(c) or c.get('id')==curr_id]
+        return [{'id':c['id'],'label':c['title'],'provider':c['provider']} for c in reversed(valid)]
     @Property(str,notify=changed)
     def selectedChat(self):return self._data['selected']
     @Property(str,notify=changed)
@@ -254,7 +323,12 @@ class WorkspaceAgentChat(QObject):
         else:self.show()
     @Slot(str)
     def setDraft(self,text):
-        if text!=self.draft:self._data['draft']=text;self._schedule_save()
+        if text!=self.draft:
+            self._data['draft']=text
+            if self._error and agent_chat_presentation.is_model_error(self._error):
+                self._error=''
+                self.changed.emit()
+            self._schedule_save()
     @Slot()
     def refreshAttachments(self):self._data['attachment']=self.inbox.capture();self.changed.emit();self._schedule_save()
     @Slot()
@@ -311,7 +385,7 @@ class WorkspaceAgentChat(QObject):
             path=agent_attachments.save_clipboard_image(clipboard.image(),folder)
             if not self._add_attachments([path],source='clipboard'):Path(path).unlink(missing_ok=True)
         except (OSError,ValueError) as error:
-            _log.exception('Pasting clipboard image');self._error=str(error);self.changed.emit()
+            _log.exception('Pasting clipboard image',extra={'fatal_suppress_ui':True});self._error=str(error);self.changed.emit()
         return True
 
     @Slot(str)
@@ -330,9 +404,20 @@ class WorkspaceAgentChat(QObject):
     def selectProvider(self,provider):
         if self.running or provider==self._provider:return
         if provider not in {p['id'] for p in self._providers}:return
+        curr=self._chat()
+        if curr and not self._has_conversation(curr):
+            curr['provider']=provider
+            curr['model']=''
+            curr['session']=''
+            curr.pop('mode',None)
+            self._mode=''
+            self._disconnect();self._provider=provider;self.changed.emit();self.connectBackend()
+            return
+        self._mode=''
         self._save();self._disconnect();self._provider=provider;self._create_chat();self.changed.emit();self.connectBackend()
 
     def _create_chat(self):
+        self._data['chats']=[c for c in self._data.get('chats',[]) if self._has_conversation(c)]
         chat={'id':uuid.uuid4().hex,'title':'New conversation','provider':self._provider,'model':'','session':'','state':'idle','messages':[]}
         self._data['chats'].append(chat);self._data['chats']=self._data['chats'][-24:];self._data['selected']=chat['id']
         self._messages=OrderedDict();self._state='idle';self._models=[];self._commands=[];self._modes=[];self._effort_options=[];self._policy='';self._usage={};self._limits={};self._limits_error='';self._limits_loading=False;self._limits_after_ready=False;self._error='';self._log_path='';self._sync_rows();self._schedule_save()
@@ -340,6 +425,9 @@ class WorkspaceAgentChat(QObject):
     @Slot()
     def newChat(self):
         if self.busy:return
+        curr=self._chat()
+        if curr and not self._has_conversation(curr):
+            return
         self._save();self._disconnect();self._create_chat();self.changed.emit()
 
     @Slot(str)
@@ -347,10 +435,38 @@ class WorkspaceAgentChat(QObject):
         if self.busy:return
         chat=next((c for c in self._data['chats'] if c['id']==key),None)
         if chat is None:return
-        self._save();self._disconnect();self._data['selected']=key;self._provider=chat['provider'];self._messages=OrderedDict((r['key'],r) for r in chat['messages'])
+        curr=self._chat()
+        if curr and curr['id']!=key and not self._has_conversation(curr):
+            self._data['chats']=[c for c in self._data['chats'] if c['id']!=curr['id']]
+        self._save();self._disconnect();self._data['selected']=key;self._provider=chat['provider']
+        self._sanitize_empty_chat(chat);self._messages=OrderedDict((r['key'],r) for r in chat['messages'])
         self._log_path=chat.get('log_path','')
         if chat.get('preview_archived'):self._notice('Older previews were archived. Full output remains in the agent logs; this native session can be resumed explicitly.')
-        self._state='interrupted' if chat['state']=='interrupted' else 'idle';self._models=[];self._commands=[];self._modes=[];self._effort_options=[];self._limits={};self._limits_error='';self._sync_rows();self.changed.emit();self._schedule_save();self.connectBackend()
+        self._state='interrupted' if chat['state']=='interrupted' else 'idle';self._mode=chat.get('mode','');self._models=[];self._commands=[];self._modes=[];self._effort_options=[];self._limits={};self._limits_error='';self._sync_rows();self.changed.emit();self._schedule_save();self.connectBackend()
+
+    @Slot(str)
+    def deleteChat(self,key):
+        if self.busy:return
+        target=next((c for c in self._data.get('chats',[]) if c['id']==key),None)
+        if target is None:return
+        self._data['chats']=[c for c in self._data.get('chats',[]) if c['id']!=key]
+        if self._data.get('selected')==key:
+            self._disconnect()
+            if self._data['chats']:
+                next_chat=self._data['chats'][-1]
+                self._data['selected']=next_chat['id']
+                self._provider=next_chat['provider']
+                self._sanitize_empty_chat(next_chat)
+                self._messages=OrderedDict((r['key'],r) for r in next_chat['messages'])
+                self._log_path=next_chat.get('log_path','')
+                self._state='idle'
+                self._models=[];self._commands=[];self._modes=[];self._effort_options=[];self._limits={};self._limits_error=''
+                self._sync_rows()
+                self.connectBackend()
+            else:
+                self._create_chat()
+        self.changed.emit()
+        self._schedule_save()
 
     @Slot(str)
     def selectModel(self,model):
@@ -361,6 +477,13 @@ class WorkspaceAgentChat(QObject):
             else:return
         if self._chat() is None:self._create_chat()
         self._effort_options=[]
+        self._error=''
+        curr=next((m for m in self._models if m.get('id')==model),None)
+        if curr:
+            supported={e['id'] for e in curr.get('efforts',[]) if e.get('id')}
+            stored_effort=self._chat().get('efforts',{}).get(model,'')
+            if stored_effort and stored_effort not in supported:
+                self._chat().setdefault('efforts',{}).pop(model,None)
         if self._protocol is not None and self._provider!='agy' and model:
             try:self._protocol.set_model(model)
             except ValueError as error:self._error=str(error)
@@ -371,21 +494,49 @@ class WorkspaceAgentChat(QObject):
 
     @Slot(str)
     def selectEffort(self,effort):
-        if self.busy or effort not in {e['id'] for e in self.efforts}:return
+        if self.busy:return
+        valid={e['id'] for e in self.efforts}
+        if effort and effort not in valid:return
+        self._error=''
         if self._chat() is None:self._create_chat()
+        default_val='medium' if 'medium' in valid else (next(iter(valid)) if valid else '')
+        target=effort if effort in valid else default_val
         if self._protocol is not None and self._provider in ('codex','opencode'):
-            try:self._protocol.set_effort(effort or self._current_model().get('defaultEffort','default'))
+            if not effort and self._provider=='opencode':
+                self._chat().setdefault('efforts',{}).pop(self.model,None)
+                self.changed.emit();self._schedule_save()
+                return
+            try:self._protocol.set_effort(target)
             except ValueError as error:self._error=str(error);self.changed.emit();return
-            if self._provider=='opencode':return # Persist only after the native acknowledgment.
+            if self._provider=='opencode':
+                if effort:self._chat().setdefault('efforts',{})[self.model]=target
+                else:self._chat().setdefault('efforts',{}).pop(self.model,None)
+                self.changed.emit();self._schedule_save()
+                return
         else:self._disconnect()
-        self._chat().setdefault('efforts',{})[self.model]=effort
+        if effort:
+            self._chat().setdefault('efforts',{})[self.model]=target
+        else:
+            self._chat().setdefault('efforts',{}).pop(self.model,None)
         self.changed.emit();self._schedule_save()
+
+    @Slot()
+    def resetModelToAutomatic(self):
+        self._error=''
+        self.selectModel('')
+        self.selectEffort('')
+        self.changed.emit()
 
     @Slot(str)
     def selectMode(self,mode):
-        if self.busy or not self._protocol:return
-        try:self._protocol.set_mode(mode)
-        except ValueError as error:self._error=str(error);self.changed.emit()
+        if self.running:return
+        self._mode=mode
+        chat=self._chat()
+        if chat:chat['mode']=mode
+        self.changed.emit();self._schedule_save()
+        if self._protocol is not None:
+            try:self._protocol.set_mode(mode)
+            except ValueError as error:self._error=str(error);self.changed.emit()
 
     @Slot()
     def connectBackend(self):
@@ -396,12 +547,29 @@ class WorkspaceAgentChat(QObject):
         try:workspace=self._prepare_workspace()
         except ValueError as error:self._error=str(error);self._state='failed';self.changed.emit();return
         cwd=workspace['working_directory']
-        chat=self._chat();self._state='connecting';self._error='';self._generation+=1;generation=self._generation
+        chat=self._chat()
+        if not self._has_conversation(chat):chat['session']=''
+        self._state='connecting';self._error='';self._generation+=1;generation=self._generation
         self._transport=AgentProcess(self);self._transport.event.connect(lambda packet:self._receive(generation,packet),Qt.QueuedConnection)
         transport=self._transport
         self._transport.event.connect(lambda packet:self._cleanup_transport(transport,packet),Qt.QueuedConnection)
+        chosen_mode = chat.get('mode', self._mode)
+        if chosen_mode: self._mode = chosen_mode
+        if self._is_synthetic_effort():
+            chosen_effort = ''
+        else:
+            supported = {e['id'] for e in self.efforts if e.get('id')}
+            chosen_effort = self.effort if self.effort in supported else ''
+        if self._provider == 'agy':
+            curr = self._current_model()
+            model_efforts = curr.get('efforts', []) if curr else self._effort_cache.get(('agy', self.model), [])
+            valid_native = {e['id'] for e in model_efforts if e.get('id')}
+            if not valid_native or self.effort not in valid_native:
+                chosen_effort = ''
         self._protocol=PROTOCOLS[provider['protocol']](self._transport.send,self._protocol_event,cwd,GUIDANCE,chat['session'],chat['model'])
-        self._protocol.effort=self.effort
+        self._protocol.effort=chosen_effort
+        if hasattr(self._protocol, 'mode') and chosen_mode:
+            self._protocol.mode = chosen_mode
         folder=self._store.folder if self._store else Path(__import__('core.app_paths',fromlist=['LOG_DIR']).LOG_DIR)/'agent_chat'
         self._log_path=str(folder/chat['id']/(uuid.uuid4().hex+'.jsonl'))
         chat['log_path']=self._log_path
@@ -411,7 +579,7 @@ class WorkspaceAgentChat(QObject):
         env['RAK_PROJECT_CONTAINER']=self.owner.project;env['RAK_WORKSPACE_ROOT']=cwd
         env['RAK_WORKSPACE_ROOTS']=json.dumps(workspace['tree_roots'],ensure_ascii=False)
         workspace_dirs=[cwd]+[path for path in workspace['tree_roots'] if path!=cwd]
-        argv=provider['argv']+agent_backends.launch_arguments(provider,chat['model'],chat['session'],effort=self.effort,workspace_dirs=workspace_dirs,instructions=GUIDANCE)
+        argv=provider['argv']+agent_backends.launch_arguments(provider,chat['model'],chat['session'],effort=chosen_effort,workspace_dirs=workspace_dirs,instructions=GUIDANCE)
         self._backend_cwd=cwd
         self._transport.start(argv,cwd,env,self._log_path)
         if provider['id']=='agy':self._load_agy_models(provider)
@@ -423,9 +591,11 @@ class WorkspaceAgentChat(QObject):
         if chat.get('workspace_binding')!=desired:
             if self._transport is not None:self._disconnect()
             if chat.get('session'):
+                had_history=self._has_conversation(chat)
                 chat['previous_sessions']=(chat.get('previous_sessions',[])+[{'id':chat['session'],'workspace_binding':chat.get('workspace_binding')}])[-8:]
                 chat['session']=''
-                self._notice(agent_chat_presentation.labels(self._language())['workspace_session_reset'].replace('{path}',workspace['working_directory']))
+                if had_history:
+                    self._notice(agent_chat_presentation.labels(self._language())['workspace_session_reset'].replace('{path}',workspace['working_directory']))
             chat['workspace_binding']=desired;self._schedule_save()
         return workspace
 
@@ -437,6 +607,7 @@ class WorkspaceAgentChat(QObject):
             if ok:
                 self._models=result;self._catalog_error=''
                 migrated=False
+                valid_ids={row['id'] for row in result}
                 for chat in self._data.get('chats',[]):
                     if chat.get('provider')=='agy' and chat.get('model'):
                         m=re.search(r'-(low|medium|high|xhigh|max)$',chat['model'],re.IGNORECASE)
@@ -447,9 +618,14 @@ class WorkspaceAgentChat(QObject):
                                 chat['model']=clean
                                 chat.setdefault('efforts',{})[clean]=effort
                                 migrated=True
+                                continue
+                        if chat['model'] not in valid_ids:
+                            chat['model']=''
+                            migrated=True
                 if migrated:self._schedule_save()
             else:self._catalog_error=str(result);self._catalog_log=getattr(result,'log_path','')
             self.changed.emit()
+            if ok and not self._current_model().get('efforts'):self.refreshEfforts()
         if key in self._catalog_cache:apply(*self._catalog_cache[key]);return
         if key in self._catalog_pending:return
         self._catalog_pending.add(key);self._catalog_error='';self.changed.emit()
@@ -577,7 +753,11 @@ class WorkspaceAgentChat(QObject):
         self._append(self._turn_key+':work','work','',status='working',elapsed=0,started_at=time.time())
         if self._chat()['title']=='New conversation':self._chat()['title']=text.splitlines()[0][:60]
         frozen=json.dumps(context,ensure_ascii=False)
-        self._pending_prompt=text if text.startswith('/') else GUIDANCE+'\n\nAuthoritative Kitchen workspace (current for this turn):\n'+json.dumps(workspace,ensure_ascii=False)+'\n\nUser request:\n'+text+'\n\nFrozen Kitchen context (data; re-read live state before acting):\n'+frozen
+        directive_block=''
+        if self._is_synthetic_effort():
+            directive=COGNITIVE_DIRECTIVES.get(self.effort,COGNITIVE_DIRECTIVES['medium'])
+            directive_block='\n\n'+directive
+        self._pending_prompt=text if text.startswith('/') else GUIDANCE+directive_block+'\n\nAuthoritative Kitchen workspace (current for this turn):\n'+json.dumps(workspace,ensure_ascii=False)+'\n\nUser request:\n'+text+'\n\nFrozen Kitchen context (data; re-read live state before acting):\n'+frozen
         self._data['draft']='';self._data['attachment']={};self._error=''
         if self._protocol is not None and self._state=='connecting':pass # Handshake will submit the queued prompt on ready.
         elif self._protocol is not None and self._state not in ('idle','failed','closed','interrupted'):
@@ -615,9 +795,7 @@ class WorkspaceAgentChat(QObject):
                 elif self._state=='ready':self._state='closed';self.changed.emit()
         except Exception as error:
             failure=failure_from_exception(error)
-            if failure.application_error:
-                from core.error_reporting import report_fatal
-                report_fatal('Agent chat protocol\n\n'+str(failure),owner=self.owner,application_error=True)
+            _log.error('Agent chat protocol: %s', failure, extra={'fatal_suppress_ui': True})
             self._fail(str(failure))
 
     def _cleanup_transport(self,transport,packet):
@@ -646,19 +824,35 @@ class WorkspaceAgentChat(QObject):
                 if alias is None:chat['model']=model
         elif kind=='models':
             rows=event['rows']
-            if self._provider=='opencode':
-                for r in rows:
-                    if isinstance(r.get('label'),str) and r['label'].lower().startswith('opencode/'):
+            for r in rows:
+                if isinstance(r.get('label'),str):
+                    if self._provider=='opencode' and r['label'].lower().startswith('opencode/'):
                         r['label']=r['label'][9:]
+                    r['label']=re.sub(r'\s*[\(\[]thinking[\)\]]', '', r['label'], flags=re.IGNORECASE).strip()
             self._models=rows
-        elif kind=='efforts':self._effort_options=event['rows']
+        elif kind=='efforts':
+            self._effort_options=event['rows']
+            current=event.get('current','')
+            if chat and current and str(current).strip().lower() not in ('', 'auto', 'automatic', 'default') and not chat.get('efforts',{}).get(self.model) and any(r['id']==current for r in event['rows']):
+                chat.setdefault('efforts',{})[self.model]=current
         elif kind=='effort':
-            if chat:chat.setdefault('efforts',{})[self.model]=event['effort']
+            val=event.get('effort','')
+            if val and str(val).strip().lower() not in ('', 'auto', 'automatic', 'default'):
+                if chat:chat.setdefault('efforts',{})[self.model]=val
+            elif chat:
+                chat.setdefault('efforts',{}).pop(self.model,None)
         elif kind=='limits':self._limits=agent_metadata.codex_limits(event['data']);self._limits_loading=False;self._limits_error=''
-        elif kind=='modes':self._modes=event['rows'];self._mode=event.get('current','')
-        elif kind=='mode':self._mode=event['mode']
+        elif kind=='modes':
+            self._modes=event['rows']
+            if not self._mode:self._mode=event.get('current','')
+            if chat and not chat.get('mode'):chat['mode']=self._mode
+        elif kind=='mode':
+            self._mode=event['mode']
+            if chat:chat['mode']=self._mode
         elif kind=='model':
             if chat:chat['model']=event['model']
+            if self._protocol is not None and self._provider=='codex':
+                self._protocol.effort=self.effort
         elif kind=='commands':self._commands=event['rows']
         elif kind=='policy':self._policy=event['text']
         elif kind=='account':self._account='CLI account configured' if event['authenticated'] else 'Sign-in may be required'
@@ -720,7 +914,7 @@ class WorkspaceAgentChat(QObject):
         elif kind=='request_resolved':self._requests.pop(event['id'],None)
         elif kind=='notice':
             if event['text'].startswith('account/rateLimits/read:'):self._limits_loading=False;self._limits_error=agent_chat_presentation.labels(self._language())['limits_unavailable']
-            else:self._notice(event['text'])
+            elif not (event.get('resume_fallback') and not self._has_conversation(chat)):self._notice(event['text'])
         elif kind=='workspace_error':
             if self._transport:self._transport.terminate()
             self._fail(event['text'])
@@ -803,14 +997,17 @@ class WorkspaceAgentChat(QObject):
         self._state=status if status in ('completed','interrupted') else 'failed'
         if close_after_result:
             state=self._state;self._disconnect();self._state=state
-        if status=='failed':self._append(self._turn_key+':problem','problem',event.get('error') or final,failure_kind=event.get('failure_kind') or 'operation_failed')
+        if status=='failed':
+            turn_key = self._turn_key or uuid.uuid4().hex
+            self._append(turn_key+':problem','problem',event.get('error') or final,failure_kind=event.get('failure_kind') or 'operation_failed')
         elif status=='interrupted':self._notice(event.get('note') or 'Request stopped',status=self._state)
         self._sync_rows();self._publish_state();self._save();self.changed.emit()
 
     def _fail(self,text):
         self._pending_prompt=None
-        _log.error('Agent %s: %s',self._provider,text);self._error=text
-        self._finish({'status':'failed','error':text})
+        _log.error('Agent %s: %s',self._provider,text,extra={'fatal_suppress_ui':True});self._error=text
+        is_model=agent_chat_presentation.is_model_error(text)
+        self._finish({'status':'failed','error':text,'failure_kind':'model_error' if is_model else 'operation_failed'})
         self._disconnect();self._state='failed';self.changed.emit()
 
     def _append(self,key,role,text,**fields):
@@ -832,9 +1029,15 @@ class WorkspaceAgentChat(QObject):
     def _save(self):
         if self._store is None:return
         chat=self._chat()
-        if chat:chat['messages']=[{**r,'text':r['text'][-16000:]} for r in self._messages.values()];chat['state']=self._state
+        saved_session=None
+        if chat:
+            chat['messages']=[{**r,'text':r['text'][-16000:]} for r in self._messages.values()];chat['state']=self._state
+            if not self._has_conversation(chat) and chat.get('session'):
+                saved_session=chat['session'];chat['session']=''
         try:self._store.save()
-        except OSError as error:self._persist_error='Chat history could not be saved: '+str(error);_log.exception('Saving agent chat history');self.changed.emit()
+        except OSError as error:self._persist_error='Chat history could not be saved: '+str(error);_log.exception('Saving agent chat history',extra={'fatal_suppress_ui':True});self.changed.emit()
+        finally:
+            if chat and saved_session is not None:chat['session']=saved_session
 
     def _disconnect(self):
         self._generation+=1

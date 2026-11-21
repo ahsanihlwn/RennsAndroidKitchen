@@ -16,7 +16,18 @@ ActionButton {
     signal chosen(string key)
     implicitHeight: 28
     implicitWidth: Math.max(80, Math.ceil(caption.implicitWidth) + 35)
+    property color backdropColor: colors.BG2
     cornerRadius: 6
+    fillColor: "transparent"
+    hoverFillColor: colors.b06
+    downFillColor: colors.b10
+    disabledFillColor: "transparent"
+    edgeWidth: 0
+    edgeColor: "transparent"
+    hoverEdgeColor: "transparent"
+    disabledEdgeColor: "transparent"
+    labelColor: colors.FG
+    hoverLabelColor: colors.FG_BRIGHT
     leftAligned: true
     leftPadding: 12
     rightPadding: 9
@@ -117,7 +128,7 @@ ActionButton {
         panelColor: control.colors.BG_MODAL
         tintBaseColor: control.colors.BG2
         panelBorder: typeof rakPreferences!=="undefined" ? rakPreferences.panelBorder : control.colors.b10
-        sourceBackdropColor: control.colors.BG2
+        sourceBackdropColor: control.backdropColor
         onAboutToShow: {
             picked=""
             if(control.Window.window.dialogStack)control.Window.window.dialogStack.registerPopup(menu)
@@ -166,6 +177,9 @@ ActionButton {
                     width: items.width; height: 32
                     text: !menu.opening && menu.picked===modelData.key ? "" : modelData.label
                     leftAligned: true
+                    edgeWidth: 0
+                    edgeColor: "transparent"
+                    hoverEdgeColor: "transparent"
                     fillColor: modelData.key === control.currentKey ? control.colors.a12 : "transparent"
                     hoverFillColor: control.colors.a14
                     downFillColor: control.colors.b08

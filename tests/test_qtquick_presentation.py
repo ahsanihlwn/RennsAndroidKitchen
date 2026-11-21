@@ -66,7 +66,7 @@ class PresentationTests(unittest.TestCase):
         model = LauncherModel()
         commands = []
         model.command.connect(lambda name, data: commands.append((name, data)))
-        self.assertEqual(model.settings['blurRadius'], 6)
+        self.assertEqual(model.settings['blurRadius'], 17)
         self.assertEqual(model.effectiveBlurRadius, 18)
         for value in (-1, 27, True, '12', None, float('nan'), float('inf')):
             model.chooseSetting('blurRadius', value)
@@ -133,6 +133,171 @@ class PresentationTests(unittest.TestCase):
         model.replaceDrives([], ["c:"])
         self.assertEqual([row["project_name"] for row in model.projects], ["Other"])
         self.assertEqual(len(changes), 1)
+
+    def test_favorite_filter_toggles_and_filters_pinned_projects(self):
+        from PySide6.QtCore import QPersistentModelIndex
+        model = LauncherModel(projects=[
+            {"project_name": "Normal", "path": "C:/Normal", "pinned": False},
+            {"project_name": "Pinned 1", "path": "C:/Pinned1", "pinned": True},
+            {"project_name": "Pinned 2", "path": "D:/Pinned2", "pinned": True},
+        ])
+        self.assertFalse(model.favoriteFilter)
+        self.assertEqual(len(model.projects), 3)
+        self.assertEqual(model.favoriteCount, 2)
+        self.assertEqual(model.visibleProjectsCount, 3)
+        normal_index = QPersistentModelIndex(model.projectRows.index(2))
+        model.setFavoriteFilter(True)
+        self.assertTrue(model.favoriteFilter)
+        self.assertEqual([row["path"] for row in model.projects], ["C:/Pinned1", "D:/Pinned2"])
+        self.assertEqual(model.visibleProjectsCount, 2)
+        self.assertEqual(model.projectRows.rowCount(), 3)
+        self.assertTrue(normal_index.isValid())
+        model.setFavoriteFilter(False)
+        self.assertFalse(model.favoriteFilter)
+        self.assertEqual(len(model.projects), 3)
+        self.assertEqual(model.visibleProjectsCount, 3)
+        self.assertTrue(normal_index.isValid())
+
+    def test_projects_page_filter_pills_hide_cards_without_destroying_or_delaying(self):
+        import os
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import Qt, QObject
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QApplication
+        from ui.runtime import create_launcher
+
+        app = QApplication.instance() or QApplication([])
+        model = LauncherModel(
+            projects=[
+                {"project_name": "Pinned", "path": "C:/Pinned", "port1": "system", "pinned": True},
+                {"project_name": "Normal", "path": "C:/Normal", "port1": "vendor", "pinned": False},
+            ],
+            settings={"animations": True, "effects": "low"},
+        )
+        model.replaceTrash([
+            {"project_name": "Deleted", "path": "C:/Deleted", "port1": "system", "_trash_id": "trash-1"},
+        ])
+        engine, window = create_launcher(model, visible=True)
+
+        def visual_item(name):
+            pending = [window.contentItem()]
+            while pending:
+                candidate = pending.pop()
+                if candidate.objectName() == name:
+                    return candidate
+                pending.extend(candidate.childItems())
+            return None
+
+        def click_item(name):
+            target = visual_item(name)
+            self.assertIsNotNone(target, name)
+            QTest.mouseClick(window, Qt.LeftButton, Qt.NoModifier,
+                             target.mapToScene(target.boundingRect().center()).toPoint())
+            app.processEvents()
+
+        try:
+            QTest.qWait(50)
+            self.assertEqual(engine._diagnostics, [])
+            project_list = visual_item("projectList")
+            trash_list = visual_item("trashList")
+            motion = visual_item("projectListMotion")
+            page = project_list.parentItem().parentItem()
+            normal_card = visual_item("projectCard_C:/Normal")
+            pinned_card = visual_item("projectCard_C:/Pinned")
+            self.assertIsNotNone(normal_card)
+            self.assertIsNotNone(pinned_card)
+            normal_delegate = normal_card.parentItem().parentItem()
+
+            # Clicking Favorit smoothly animates and hides non-pinned delegates without deleting them.
+            click_item("favoriteDrive")
+            self.assertTrue(model.favoriteFilter)
+            self.assertFalse(motion.property("active"))
+            QTest.qWait(50)
+            self.assertGreater(normal_delegate.property("reveal"), 0.0)
+            self.assertLess(normal_delegate.property("reveal"), 1.0)
+            QTest.qWait(220)
+            self.assertFalse(normal_delegate.property("visible"))
+            self.assertEqual(normal_delegate.property("height"), 0)
+            self.assertIs(visual_item("projectCard_C:/Normal"), normal_card)
+            self.assertIs(visual_item("projectCard_C:/Pinned"), pinned_card)
+
+            # Clicking Sampah smoothly cross-fades to trashList without destroying project cards.
+            click_item("trashDrive")
+            self.assertTrue(page.property("trash"))
+            self.assertFalse(motion.property("active"))
+            QTest.qWait(50)
+            self.assertGreater(page.property("trashProgress"), 0.0)
+            self.assertLess(page.property("trashProgress"), 1.0)
+            QTest.qWait(220)
+            self.assertFalse(project_list.property("visible"))
+            self.assertTrue(trash_list.property("visible"))
+            trash_card = visual_item("projectCard_C:/Deleted")
+            self.assertIsNotNone(trash_card)
+            self.assertIs(visual_item("projectCard_C:/Normal"), normal_card)
+
+            # Clicking Semua smoothly restores visibility of the exact same ProjectCard instance.
+            click_item("allProjectsDrive")
+            self.assertFalse(page.property("trash"))
+            self.assertFalse(model.favoriteFilter)
+            self.assertFalse(motion.property("active"))
+            QTest.qWait(250)
+            self.assertTrue(project_list.property("visible"))
+            self.assertFalse(trash_list.property("visible"))
+            self.assertTrue(normal_delegate.property("visible"))
+            self.assertEqual(normal_delegate.property("height"), 74)
+            self.assertIs(visual_item("projectCard_C:/Normal"), normal_card)
+            self.assertIs(visual_item("projectCard_C:/Deleted"), trash_card)
+
+            # Spamming filter pills mid-animation continues from current position with proportional duration.
+            click_item("favoriteDrive")
+            QTest.qWait(45)
+            mid_reveal = normal_delegate.property("reveal")
+            self.assertGreater(mid_reveal, 0.0)
+            self.assertLess(mid_reveal, 1.0)
+            click_item("allProjectsDrive")
+            # Continuing from mid_reveal back to 1.0 uses remaining duration < full 190ms.
+            QTest.qWait(180)
+            self.assertEqual(normal_delegate.property("reveal"), 1.0)
+
+            click_item("trashDrive")
+            QTest.qWait(45)
+            mid_trash = page.property("trashProgress")
+            self.assertGreater(mid_trash, 0.0)
+            self.assertLess(mid_trash, 1.0)
+            click_item("allProjectsDrive")
+            QTest.qWait(190)
+            self.assertEqual(page.property("trashProgress"), 0.0)
+
+            # Header and footer GlassBand share identical edge fade in High mode only.
+            header_glass = visual_item("projectsHeaderGlass")
+            footer_glass = visual_item("projectsFooterGlass")
+            self.assertIsNotNone(header_glass)
+            self.assertIsNotNone(footer_glass)
+            self.assertEqual(header_glass.property("fadeEdge"), "bottom")
+            self.assertEqual(footer_glass.property("fadeEdge"), "top")
+            self.assertEqual(header_glass.property("fadeSize"), footer_glass.property("fadeSize"))
+            self.assertGreater(header_glass.property("fadeSize"), 0)
+
+            model.chooseSetting("animations", False)
+            model.chooseSetting("effects", "high")
+            app.processEvents()
+            self.assertTrue(header_glass.property("edgeFading"))
+            self.assertTrue(footer_glass.property("edgeFading"))
+            self.assertTrue(header_glass.property("masked"))
+            self.assertTrue(footer_glass.property("masked"))
+
+            for mode in ("medium", "low"):
+                model.chooseSetting("effects", mode)
+                app.processEvents()
+                self.assertFalse(header_glass.property("edgeFading"))
+                self.assertFalse(footer_glass.property("edgeFading"))
+                self.assertFalse(header_glass.property("masked"))
+                self.assertFalse(footer_glass.property("masked"))
+        finally:
+            window.close()
+            window.deleteLater()
+            engine.deleteLater()
+            app.processEvents()
 
     def test_trash_search_refreshes_count_and_retains_restore_identifier(self):
         model = LauncherModel()

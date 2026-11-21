@@ -26,7 +26,7 @@ DialogWindow {
             width: 18; height: 18; iconSize: 18
             iconKey: "settings"
             strokeColor: dialog.c.FG
-            accentColor: dialog.c.accentColor
+            accentColor: dialog.c.accent_hex
             isLight: (dialog.c && dialog.c.is_light !== undefined) ? dialog.c.is_light : false
             anchors.verticalCenter: parent.verticalCenter
         }
@@ -61,7 +61,7 @@ DialogWindow {
                         id: toggle; objectName: "workspaceSettingsToggle_"+card.section
                         anchors.right: parent.right; anchors.rightMargin: 15; y: 36
                         checked: !!(dialog.draft[card.section] && dialog.draft[card.section][card.modelData.field])
-                        accentColor: dialog.c.accent_hex; offColor: dialog.c.offToggle; animationsEnabled: dialog.model.settings.animations
+                        animationsEnabled: dialog.model.settings.animations
                         onToggled: dialog.setValue(card.section,card.modelData.field,checked)
                     }
                     SmoothRectangle { x: 14; y: 68; width: parent.width-28; height: 1; color: dialog.c.b06 }
@@ -95,7 +95,7 @@ DialogWindow {
                                 required property var modelData
                                 width: details.width; height: 54
                                 Column { spacing: 6; RakLabel { text: modelData.title; color: dialog.c.FG_MUTED; font.pixelSize: 12 } RakLabel { text: modelData.description; color: dialog.c.b25; font.pixelSize: 10 } }
-                                RakSwitch { anchors.right: parent.right; y: 8; enabled: false; checked: modelData.checked; accentColor: dialog.c.accent_hex; offColor: dialog.c.offToggle }
+                                RakSwitch { anchors.right: parent.right; y: 8; enabled: false; checked: modelData.checked; }
                             }
                         }
                     }
@@ -117,7 +117,7 @@ DialogWindow {
                     RakLabel { x: 15; y: 12; width: parent.width-80; text: agentCard.modelData.title; color: dialog.c.FG; font.pixelSize: 12; font.weight: Font.Medium }
                     RakLabel { x: 15; y: 38; width: parent.width-85; text: agentCard.modelData.description; color: dialog.c.FG_DESC; font.pixelSize: 10; wrapMode: Text.WordWrap }
                     RakSwitch { objectName: "workspaceSettingsToggle_agent_"+agentCard.modelData.key; anchors.right: parent.right; anchors.rightMargin: 15; y: 35
-                        checked: !!(dialog.draft.agent && dialog.draft.agent[agentCard.modelData.key]); accentColor: dialog.c.accent_hex; offColor: dialog.c.offToggle; animationsEnabled: dialog.model.settings.animations
+                        checked: !!(dialog.draft.agent && dialog.draft.agent[agentCard.modelData.key]); animationsEnabled: dialog.model.settings.animations
                         onToggled: dialog.setValue("agent",agentCard.modelData.key,checked)
                     }
                 }

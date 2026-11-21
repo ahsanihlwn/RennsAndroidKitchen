@@ -29,6 +29,7 @@ RakButton {
         text: button.row.shortcut || ""
         visible: !button.row.children && !!button.row.shortcut
         font.pixelSize: 11
+        renderType: button.transformed ? Text.CurveRendering : Text.NativeRendering
         color: button.enabled ? button.c.FG_MUTED : Qt.rgba(button.foreground.r,button.foreground.g,button.foreground.b,90/255)
     }
     Image {

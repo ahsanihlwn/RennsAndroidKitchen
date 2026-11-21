@@ -8,7 +8,7 @@ Item {
     required property var model
     property bool showProfile: false
     default property alias actions: actionRow.data
-    height: 80
+    height: 72
     property alias identityItem: profile
     onVisibleChanged: if(visible)Qt.callLater(actionRow.forceLayout)
     function actionEndpoints(host) {
@@ -35,7 +35,7 @@ Item {
     Item {
         id: profile
         visible: footer.showProfile && !!footer.model.profile.name
-        x: 36; y: 16; width: Math.min(350, footer.width / 3); height: 32
+        x: 36; anchors.verticalCenter: parent.verticalCenter; width: Math.min(350, footer.width / 3); height: 32
         RoundedImage {
             id: avatar
             x: 0; y: 2; width: 28; height: 28
@@ -53,5 +53,5 @@ Item {
         }
         Image { id: profileBadge; x: profileName.x+profileName.width+4; y: 1.5; width: 14; height: 14; visible: !!footer.model.profile.badge; source: visible?footer.model.icon(footer.model.profile.badge, ""):""; sourceSize: Qt.size(14,14) }
     }
-    Row { id: actionRow; anchors.right: parent.right; anchors.rightMargin: 36; y: 16; spacing: 12 }
+    Row { id: actionRow; anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter; spacing: 12 }
 }

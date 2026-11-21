@@ -15,6 +15,7 @@ def context_tools(session,path):
     """Reference group order and capability checks, independent of presentation."""
     from core.binary_handler import is_available
     from core import apktool_tool
+    from core.oem_containers import OEM_CONTAINER_KINDS
     from ui.viewers import ARCHIVE_EXT
     from core.tree_entries import APKTOOL_LINK_ROLE
     directory=session.active_tree;node=directory._nodes.get(path)
@@ -34,7 +35,7 @@ def context_tools(session,path):
         ('rc_to_new_dat','convert_img_to_new_dat','img2simg.exe'),('rc_to_dat_br','convert_img_to_dat_br','img2simg.exe','brotli.exe')])
     if is_file:
         if badge in ('EROFS','EXT2','EXT3','EXT4'):
-            rows=[];binary='extract.erofs.exe' if badge=='EROFS' else 'ext_tool.exe'
+            rows=[];binary='extract.erofs.exe' if badge=='EROFS' else 'ext_cli.exe'
             if is_available(binary):rows.append(item('unpack_erofs' if badge=='EROFS' else 'unpack_ext','rc_unpack_image'))
             if convert:rows.append(convert)
             section(rows)
@@ -62,9 +63,24 @@ def context_tools(session,path):
             if is_available('lpunpack.exe'):rows.extend([item('open_super','rc_open_super'),item('unpack_super','rc_unpack_super')])
             if is_available('img2simg.exe'):rows.append(item('convert_to_sparse','rc_convert_sparse'))
             section(rows)
-        if badge in ('BOOT','VNDRBOOT') and is_available('magiskboot.exe'):section([item('unpack_boot','rc_unpack_ext',fs=badge)])
+        basename=os.path.basename(physical).lower()
+        is_boot_file=(badge in ('BOOT','VNDRBOOT')) or (basename.startswith(('boot','init_boot','vendor_boot')) and basename.endswith('.img'))
+        if is_boot_file:
+            boot_rows=[]
+            if is_available('magiskboot.exe'):
+                if badge in ('BOOT','VNDRBOOT'):boot_rows.append(item('unpack_boot','rc_unpack_ext',fs=badge))
+                boot_rows.append({'key':'magisk_patch','label':'Magisk Patch...'})
+            section(boot_rows)
+        if badge in OEM_CONTAINER_KINDS:
+            section([{'key':'open_oem','label':'Inspect Container'},{'key':'unpack_oem','label':'Extract Container'}])
+        if badge=='F2FS' and (is_available('extract.f2fs.exe') or is_available('imgkit.exe')):
+            section([{'key':'unpack_f2fs','label':'Unpack F2FS Image'}])
+        if badge=='VBMETA':
+            section([{'key':'patch_vbmeta','label':'Disable AVB Verification (vbmeta)'}])
+        if basename=='fstab' or basename.startswith('fstab.'):
+            section([{'key':'patch_fstab','label':'Disable AVB & Encryption...'}])
         extension=os.path.splitext(path)[1].lower()
-        if extension in ARCHIVE_EXT:section([item('extract_here','rc_extract_here'),item('extract_to','rc_extract_to')])
+        if extension in ARCHIVE_EXT and badge not in OEM_CONTAINER_KINDS:section([item('extract_here','rc_extract_here'),item('extract_to','rc_extract_to')])
         if extension=='.apk':
             decompiled=apktool_tool.is_decompiled(directory.base,path)
             has_tool=apktool_tool.is_apktool_available();has_signer=apktool_tool.is_signer_available();rows=[]
@@ -85,6 +101,14 @@ def context_tools(session,path):
         root_level='/' not in rel.strip('/');engine=directory.engine
         fs_root=root_level and engine is not None and rel in engine.root_map_ctx and rel in engine.root_map_fs
         if fs_root:section([item('neocat','rc_neocat_selinux')])
+        from core.quick_mods import find_selinux_dir
+        folder_tools=[]
+        if find_selinux_dir(physical):
+            folder_tools.append({'key':'sepolicy_rules_patch','label':'Sepolicy Rules Patch...'})
+        rel_top=rel.strip('/').split('/')[0] if rel else ''
+        if rel_top not in ('config','META-INF','neobranch','.rak_quarantine') and not os.path.basename(physical).startswith('.'):
+            folder_tools.append({'key':'apk_debloater','label':'APK Debloater...'})
+        if folder_tools:section(folder_tools)
         if root_level and badge not in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT','SUPER') and not fs_root and rel not in ('config','META-INF'):
             section([item('make_filesystem','rc_make_filesystem')])
         if badge in ('EROFS','EXT2','EXT3','EXT4'):
@@ -184,7 +208,11 @@ def dispatch_tool(session,action,path,data):
             if action.endswith('_folder'):outputs.append(prefix)
         if action in ('unpack_super','unpack_sparse') and files.view.active_branches():
             from core.partition_viewer import super_info
-            outputs.extend(os.path.join(os.path.dirname(path),name+'.img') for name in super_info(physical)['partitions'])
+            from core.super_logic import is_super_norm_enabled, normalize_partition_names
+            part_names = super_info(physical)['partitions']
+            if is_super_norm_enabled():
+                part_names = list(dict.fromkeys([*part_names, *normalize_partition_names(part_names)]))
+            outputs.extend(os.path.join(os.path.dirname(path),name+'.img') for name in part_names)
         if outputs:
             from ui.workspace_cli import WorkspaceCli
             for output in outputs:WorkspaceCli._tool_target(files,output)
@@ -291,9 +319,21 @@ def dispatch_tool(session,action,path,data):
         if action=="neocat":
             from core.rak_policy_view import run_policy_in_view
             return run_policy_in_view(files.base,os.path.basename(path),apply=True)
+        if action=="unpack_oem":
+            from core.oem_containers import extract_container
+            result=extract_container(physical)
+            return True,result.get("out_dir") or ""
+        if action=="unpack_f2fs":
+            from core.oem_containers import unpack_f2fs
+            return True,unpack_f2fs(physical)
+        if action=="patch_vbmeta":
+            from core.quick_mods import apply_vbmeta_patch
+            result=apply_vbmeta_patch(physical)
+            return True,f"{path} (flags 0x{result.get('flags',0):x})"
         raise ValueError("Unknown tool: "+action)
-    if action in ("open_super","open_payload"):
-        session.openAs(path,"super" if action=="open_super" else "payload")
+    if action in ("open_super","open_payload","open_oem"):
+        kind="oem" if action=="open_oem" else ("super" if action=="open_super" else "payload")
+        session.openAs(path,kind)
     elif action=='apktool_switch_mode':
         from core.tree_entries import APKTOOL_LINK_ROLE
         directory=session.active_tree;node=directory._nodes.get(path)
@@ -325,6 +365,72 @@ def dispatch_tool(session,action,path,data):
         session.search.prepare(session.active_tree.base,_directory(session))
         session.presentationRequested.emit("find",{})
     elif action=="android":session.presentationRequested.emit("android",{})
+    elif action=="magisk_patch":
+        def run_magisk(values):
+            apk=(values.get("apk_path") or "").strip()
+            if not apk or not os.path.isfile(apk):
+                from core.command_context import OperationError
+                raise OperationError("Select a valid Magisk APK file.")
+            arch=values.get("arch") or "arm64-v8a"
+            keep_verity=str(values.get("keep_verity") or "false").lower()=="true"
+            keep_forceencrypt=str(values.get("keep_forceencrypt") or "false").lower()=="true"
+            def do_patch():
+                from core.terminal_execution import library_operation
+                from core.quick_mods import patch_boot_with_magisk
+                physical,_=files.view.resolve(path)
+                if not physical:raise FileNotFoundError(path)
+                with library_operation('rak magisk_patch '+path) as output:
+                    res=patch_boot_with_magisk(physical,apk,arch=arch,keep_verity=keep_verity,keep_forceencrypt=keep_forceencrypt)
+                    output(res.get("output","")+"\n")
+                    return True,res.get("output","")
+            operation(session,"Magisk Patch",do_patch)
+        form(session,f"Magisk Patch: {os.path.basename(path)}",[
+            {"key":"apk_path","label":"Magisk APK","placeholder":"Select Magisk.apk...","browseFile":True,"browseTitle":"Select Magisk APK","nameFilters":["Android Package (*.apk)","All Files (*)"]},
+            {"key":"arch","label":"Architecture","value":"arm64-v8a","choices":[
+                {"key":"arm64-v8a","label":"arm64-v8a"},{"key":"armeabi-v7a","label":"armeabi-v7a"},
+                {"key":"x86_64","label":"x86_64"},{"key":"x86","label":"x86"}]},
+            {"key":"keep_verity","label":"AVB / dm-verity","value":"false","choices":[
+                {"key":"false","label":"Disable Verity"},{"key":"true","label":"Keep Verity"}]},
+            {"key":"keep_forceencrypt","label":"Force Encryption","value":"false","choices":[
+                {"key":"false","label":"Disable ForceEncrypt"},{"key":"true","label":"Keep ForceEncrypt"}]},
+        ],run_magisk,description="Patch boot / init_boot image with Magisk using magiskboot.",width=460,accept="Patch")
+    elif action=="patch_fstab":
+        def run_fstab(values):
+            dis_avb=str(values.get("disable_avb") or "true").lower()=="true"
+            dis_enc=str(values.get("disable_encryption") or "true").lower()=="true"
+            def do_patch():
+                from core.terminal_execution import library_operation
+                from core.quick_mods import apply_fstab_patch
+                physical,_=files.view.resolve(path)
+                if not physical:raise FileNotFoundError(path)
+                with library_operation('rak patch_fstab '+path) as output:
+                    res=apply_fstab_patch(physical,disable_avb=dis_avb,disable_encryption=dis_enc)
+                    msg=f"{path} ({len(res.get('changes',[]))} line(s) updated)" if res.get("changed") else f"{path} (no matching flags)"
+                    output(msg+"\n")
+                    return True,msg
+            operation(session,"Patch Fstab",do_patch)
+        form(session,f"Patch {os.path.basename(path)}",[
+            {"key":"disable_avb","label":"AVB / Verified Boot Flags","value":"true","choices":[
+                {"key":"true","label":"Remove avb / verify flags"},{"key":"false","label":"Keep AVB flags"}]},
+            {"key":"disable_encryption","label":"Data Encryption Flags","value":"true","choices":[
+                {"key":"true","label":"Remove forceencrypt / fileencryption"},{"key":"false","label":"Keep encryption flags"}]},
+        ],run_fstab,width=420,accept="Patch")
+    elif action=="apk_debloater":
+        target=path or ""
+        if target:
+            try:
+                phys,_=files.view.resolve(target)
+                if phys:target=phys
+            except OSError:pass
+        session.presentationRequested.emit("apkDebloater",{"path":target})
+    elif action=="sepolicy_rules_patch":
+        target=path or ""
+        if target:
+            try:
+                phys,_=files.view.resolve(target)
+                if phys:target=phys
+            except OSError:pass
+        session.presentationRequested.emit("sepolicyPatch",{"path":target})
     elif action=='automation':session.privateFeatures.pickAutomation()
     elif action=='compare':session.privateFeatures.compare.showPicker()
     else:

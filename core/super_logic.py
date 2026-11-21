@@ -1,27 +1,42 @@
 # SPDX-License-Identifier: MPL-2.0
-import os
-from core import kitchen_process as subprocess
 import json
-from core.app_paths import BIN_DIR, PROJECT_DATA_DIR
+import os
+from types import SimpleNamespace
+
+from core.app_paths import PROJECT_DATA_DIR
+from core.command_context import OperationError
+
 print("[CORE STAGE] SUPER SPARSE LOGIC CORE")
 
 PROJECT_DIR = PROJECT_DATA_DIR
-
 SETTINGS_FILE = os.path.join(PROJECT_DIR, "project_settings.json")
 
-BIN_PATH = BIN_DIR
 
-from core.binary_handler import resolve_binary
-from core.proc_util import CREATE_NO_WINDOW
-
-def is_super_norm_enabled():
+def is_super_norm_enabled(settings_file: str | None = None):
+    path = settings_file or SETTINGS_FILE
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
         return bool(cfg.get("super", {}).get("norm", True))
     except Exception as e:
         print("[SUPER] settings read failed → default norm=true:", e)
         return True
+
+
+def normalize_partition_names(partitions):
+    """Return normalized unique output names (strip *_a / *_b) preserving order."""
+    seen = set()
+    normalized = []
+    for name in partitions:
+        if len(name) > 2 and (name.endswith("_a") or name.endswith("_b")):
+            base = name[:-2]
+        else:
+            base = name
+        if base and base not in seen:
+            seen.add(base)
+            normalized.append(base)
+    return normalized
+
 
 class SuperInfo:
     def __init__(self):
@@ -39,75 +54,37 @@ class SuperInfo:
             self.slots.add("b")
 
 
-import re
-
-SUPER_PART_RE = re.compile(
-    r"super:\s+\d+\s+\.\.\s+\d+:\s+([a-zA-Z0-9_]+)"
-)
-
 def read_super_info(img_path):
-    LPUNPACK = resolve_binary(BIN_PATH, "lpunpack.exe")
-    if not LPUNPACK:
-        return False, "LPUNPACK NOT FOUND"
+    from core.native_backend import super_info
 
     info = SuperInfo()
-
-    cmd = [LPUNPACK, "--info", img_path]
-
     try:
-        p = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            shell=False,
-            text=True,
-            creationflags=CREATE_NO_WINDOW
-        )
-
-        for line in p.stdout:
-            line = line.rstrip()
-            info.raw += line + "\n"
-
-            # PARTITION
-            m = SUPER_PART_RE.search(line)
-            if m:
-                info.partitions.append(m.group(1))
-                continue
-
-            # GROUP
-            if line.strip().startswith("Group:"):
-                grp = line.split(":", 1)[1].strip()
-                info.groups.add(grp)
-                if grp.endswith("_a"):
-                    info.active_slot = "A"
-                elif grp.endswith("_b"):
-                    info.active_slot = "B"
-
+        data = super_info(img_path)
     except Exception as e:
         print("SUPER INFO ERROR:", e)
+        return info
 
+    info.raw = data.get("raw", "")
+    for part in data.get("partitions", []):
+        info.add_partition(part)
+    for grp in data.get("groups", []):
+        info.groups.add(grp)
+    info.active_slot = data.get("active_slot")
     return info
 
+
 def extract_partition(img_path, part_name, out_dir):
+    from core.native_backend import super_extract
 
-    LPUNPACK = resolve_binary(BIN_PATH, "lpunpack.exe")
-    if not LPUNPACK:
-        return False, "LPUNPACK NOT FOUND"
-
-    cmd = [
-        LPUNPACK,
-        "-p",
-        part_name,
-        img_path,
-        out_dir
-    ]
-    return subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
+    try:
+        res = super_extract(img_path, out_dir, partitions=[part_name], normalize=False)
+        return SimpleNamespace(returncode=0, stdout=json.dumps(res), stderr="")
+    except Exception as e:
+        return SimpleNamespace(returncode=1, stdout="", stderr=str(e))
 
 
 def extract_all(img_path, out_dir):
-    LPUNPACK = resolve_binary(BIN_PATH, "lpunpack.exe")
-    if not LPUNPACK:
-        return False, "LPUNPACK NOT FOUND"
+    from core.native_backend import super_extract
 
     norm = is_super_norm_enabled()
 
@@ -115,72 +92,35 @@ def extract_all(img_path, out_dir):
     print("[SUPER] IMG  :", img_path)
     print("[SUPER] OUT  :", out_dir)
     print("[SUPER] norm :", norm)
-    print("[SUPER] BIN  :", LPUNPACK)
-
-    cmd = [
-        LPUNPACK,
-        img_path,
-        out_dir
-    ]
-
-    # 🔥 POLICY HOOK (BENAR)
     if norm:
-        cmd.append("--norm")
-        print("[SUPER] policy → normalize enabled (--norm)")
+        print("[SUPER] policy → normalize enabled")
     else:
         print("[SUPER] policy → normalize disabled")
 
-    print("[SUPER] CMD :", " ".join(cmd))
+    try:
+        res = super_extract(img_path, out_dir, normalize=norm)
+        print("[SUPER] OUTPUTS:", res.get("outputs", []))
+        return True, out_dir
+    except Exception as e:
+        return False, str(e)
 
-    p = subprocess.run(cmd, capture_output=True, text=True, creationflags=CREATE_NO_WINDOW)
-
-    print("[SUPER] RETURN :", p.returncode)
-    print("[SUPER] STDOUT :\n", p.stdout)
-    print("[SUPER] STDERR :\n", p.stderr)
-
-    if p.returncode != 0:
-        return False, p.stderr or "lpunpack failed"
-
-    return True, out_dir
 
 def convert_to_raw(img_path, out_dir):
-    LPUNPACK = resolve_binary(BIN_PATH, "lpunpack.exe")
-    if not LPUNPACK:
-        return False, "LPUNPACK NOT FOUND"
+    from core.native_backend import super_unsparse
 
     print("[SUPER] UNSPARSE START")
 
-    # lpunpack replaces the sparse image with raw data.
     if not os.path.isfile(img_path):
         return False, "File tidak ditemukan"
 
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
-    cmd = [
-        LPUNPACK,
-        img_path,
-        out_dir,
-        "--unsparse"
-    ]
-
-    print("[SUPER] CMD :", " ".join(cmd))
-
     try:
-        p = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            creationflags=CREATE_NO_WINDOW
-        )
-        print("[SUPER] UNSPARSE RC :", p.returncode)
-        print("[SUPER] STDOUT :", p.stdout)
-        print("[SUPER] STDERR :", p.stderr)
-
-        if p.returncode != 0:
-            return False, p.stderr or "unsparse failed"
-
-        return True, p.stdout
-
+        out_path = super_unsparse(img_path, out_dir)
+        print("[SUPER] UNSPARSE OK :", out_path)
+        return True, out_path
+    except OperationError as e:
+        return False, str(e)
     except Exception as e:
         return False, str(e)

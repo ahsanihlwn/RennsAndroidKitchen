@@ -39,7 +39,8 @@ Item {
     Behavior on presence { NumberAnimation { duration: bar.animationsEnabled?280:0; easing.type: Easing.OutCubic } }
     Behavior on logPresence { NumberAnimation { duration: bar.animationsEnabled?240:0; easing.type: Easing.OutCubic } }
     Behavior on statusWidth { NumberAnimation { duration: bar.animationsEnabled?220:0; easing.type: Easing.OutCubic } }
-    NumberAnimation { id: captionFade; target: bar; property: "textPhase"; to: 1; duration: 180; easing.type: Easing.OutCubic }
+    NumberAnimation { id: captionFade; target: bar; property: "textPhase"; to: 1; duration: bar.animationsEnabled?180:0; easing.type: Easing.OutCubic }
+    onAnimationsEnabledChanged: if(!animationsEnabled){captionFade.stop();textPhase=1}
 
     Item {
         id: status

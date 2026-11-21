@@ -30,6 +30,35 @@ def source_fingerprint():
     for folder in (CRATE / "src", CRATE / ".cargo", ROOT / ".cargo"):
         if folder.is_dir():
             paths.update(path for path in folder.rglob("*") if path.is_file())
+    for tool_crate in (
+        ROOT / "core" / "lpunpack",
+        ROOT / "core" / "ext_cli",
+        ROOT / "core" / "make_ext4fs",
+        ROOT / "core" / "pac_extractor",
+        ROOT / "core" / "magiskboot",
+        ROOT / "core" / "erofs_rs",
+        ROOT / "core" / "sdatimg",
+        ROOT / "core" / "brotli_rs",
+    ):
+        for name in ("Cargo.toml", "Cargo.lock"):
+            path = tool_crate / name
+            if path.is_file():
+                paths.add(path)
+        src_dir = tool_crate / "src"
+        if src_dir.is_dir():
+            paths.update(path for path in src_dir.rglob("*") if path.is_file())
+    pt_root = ROOT / "core" / "platform_tools_rs"
+    if (pt_root / "Cargo.toml").is_file():
+        paths.add(pt_root / "Cargo.toml")
+    if (pt_root / "crates").is_dir():
+        for crate_dir in (pt_root / "crates").iterdir():
+            if not crate_dir.is_dir():
+                continue
+            if (crate_dir / "Cargo.toml").is_file():
+                paths.add(crate_dir / "Cargo.toml")
+            crate_src = crate_dir / "src"
+            if crate_src.is_dir():
+                paths.update(path for path in crate_src.rglob("*") if path.is_file())
     for name in ("build.rs", "rust-toolchain", "rust-toolchain.toml"):
         for folder in (CRATE, ROOT):
             path = folder / name

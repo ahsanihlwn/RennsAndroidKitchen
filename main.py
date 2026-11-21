@@ -97,7 +97,7 @@ def run_workspace_worker():
     from main_ext.class_ThemeUi import theme
 
     configure_text_rendering_env()
-    initialize_quick_runtime(webengine=True)
+    initialize_quick_runtime(webengine=False)
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv)
@@ -108,10 +108,16 @@ def run_workspace_worker():
     ui_lang.init()
     account_state = AccountState(app)
 
+    # Pre-warm icon catalog, config service connection, and Workspace.qml compilation
+    # into a reusable engine + QQmlComponent before signaling standby ready.
+    from PySide6.QtCore import QUrl
+    from icons.handler import warm_icon_catalog
+    from ui.runtime import IconProvider
     from ui.workspace_window import (
         ViewerDocument, HexDocument, SoDocument, PartitionDocument,
-        ImageDocument, MediaDocument, ArchiveDocument
+        ImageDocument, MediaDocument, ArchiveDocument, DocumentImages
     )
+
     qmlRegisterType(ViewerDocument, "Renns.Workspace", 1, 0, "ViewerDocument")
     qmlRegisterType(HexDocument, "Renns.Workspace", 1, 0, "HexDocument")
     qmlRegisterType(SoDocument, "Renns.Workspace", 1, 0, "SoDocument")
@@ -120,10 +126,14 @@ def run_workspace_worker():
     qmlRegisterType(MediaDocument, "Renns.Workspace", 1, 0, "MediaDocument")
     qmlRegisterType(ArchiveDocument, "Renns.Workspace", 1, 0, "ArchiveDocument")
 
-    # Warm up QML compilation for Workspace.qml in advance
+    from core import rak_cli  # noqa: F401
+    warm_icon_catalog()
     warm_engine = QQmlApplicationEngine()
+    warm_engine.addImageProvider("icons", IconProvider())
+    warm_engine.addImageProvider("rak", IconProvider())
+    warm_engine.addImageProvider("documents", DocumentImages())
     workspace_qml_path = str(Path(__file__).resolve().parent / "ui" / "Workspace.qml")
-    comp = QQmlComponent(warm_engine, workspace_qml_path)
+    comp = QQmlComponent(warm_engine, QUrl.fromLocalFile(workspace_qml_path))
 
     class WorkerBridge(QObject):
         commandReceived = Signal(dict)
@@ -133,7 +143,10 @@ def run_workspace_worker():
 
     @Slot(dict)
     def handle_command(cmd):
+        import time as _time
+        _t_cmd = _time.perf_counter()
         project = cmd["project"]
+        print(f"[MAIN STAGE] worker handle_command project={project}", flush=True)
         p1 = cmd["p1"]
         p2 = cmd.get("p2")
         palette = cmd.get("palette") or theme.name
@@ -158,6 +171,7 @@ def run_workspace_worker():
         account_state.changed.connect(lambda: preferences.replaceProfile(account_state.profile()))
 
         from main import Main
+        use_warm = comp is not None and comp.isReady() and not comp.isError()
         editor = Main(
             project,
             p1,
@@ -165,8 +179,11 @@ def run_workspace_worker():
             preferences=preferences,
             profile_provider=account_state.profile_provider,
             enable_private_services=True,
-            enable_cli_services=True
+            enable_cli_services=True,
+            qml_engine=warm_engine if use_warm else None,
+            qml_component=comp if use_warm else None,
         )
+        print(f"[MAIN STAGE] Main constructed use_warm={use_warm} ({(_time.perf_counter()-_t_cmd)*1000:.1f}ms)", flush=True)
         active_editor[0] = editor
 
         def on_ready():
@@ -224,7 +241,7 @@ def run_workspace_standalone(argv=None):
     from core.error_reporting import install_error_reporter
 
     configure_text_rendering_env()
-    initialize_quick_runtime(webengine=True)
+    initialize_quick_runtime(webengine=False)
     app = QApplication.instance()
     if app is None:
         app = QApplication(sys.argv if argv is None else [sys.argv[0]] + list(argv))

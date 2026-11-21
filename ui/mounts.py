@@ -94,12 +94,15 @@ class WorkspaceMounts(QObject):
             return True,imgfs.decode_text(raw)[0]
         def done(ok,text):
             if not ok:self.session.message(str(text),'Mounted image');return
+            if any(tab['path']==tab_id for tab in self.session._tab_data):
+                self.session.selectTab(tab_id);return
             from core.editor_document import _detect_language
             writable=self.writable(image)
             def save(tab_id,content):self.save_text(image,internal,tab_id,content);return False
             self.session.editor.bridge.open_virtual(tab_id,text,language=_detect_language(internal),read_only=not writable,on_save=save if writable else None)
             self.session._tab_data.append({'key':tab_id,'path':tab_id,'documentPath':tab_id,'title':os.path.basename(internal),'kind':'editor','icon':'txt','unsaved':False,'url':''})
             self.session._active_tab=tab_id;self.session._refresh_tabs();self.session._reveal_right()
+            self.session.editor.openFile(tab_id)
         self._jobs.submit('read:'+tab_id,work,None,done)
     def _mutate(self,label,image,work,done=None):
         if not self.writable(image):self.session.message('This mounted image is read-only.','Mounted image');return

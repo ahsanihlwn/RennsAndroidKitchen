@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
+import "../motion.js" as Motion
 
 Item {
     id: motion
@@ -11,10 +12,14 @@ Item {
     property bool updating: false
     property bool settleRequested: false
     property string lastSignature: ""
+    property string previousSignature: ""
     property real progress: 1
-    readonly property bool running: transition.running
+    property real activeSpan: 1
+    property bool activeTransition: false
+    readonly property bool running: activeTransition || transition.running
     readonly property bool pending: updateTimer.running
-    readonly property int duration: 280
+    readonly property int duration: animationsEnabled ? 240 : 0
+    property int activeDuration: duration
 
     function schedule(immediate=false) {
         if(updating)return
@@ -36,29 +41,67 @@ Item {
         if(logicalChange && !changed && initialized) {
             updating=false;updateTimer.restart();return
         }
+        const wasRunning=transition.running
+        const prevProgress=progress
+        const reversed=wasRunning && logicalChange && signature===previousSignature
+        if(logicalChange)previousSignature=lastSignature
         lastSignature=signature;settleRequested=false;initialized=true
         if(changed || (!animate && transition.running)) {
             transition.stop()
+            activeTransition=animate
             for(const pane of panes)pane.prepare(animate)
             if(animate) {
-                progress=0
-                // Retarget from the displayed positions, including reversals.
-                for(const pane of panes)pane.step(0)
-                transition.start()
+                let remainingRatio=0
+                let hasFade=false
+                for(const pane of panes) {
+                    const delta=Math.abs(pane.endOpacity-pane.startOpacity)
+                    if(delta>0.0001) {
+                        hasFade=true
+                        remainingRatio=Math.max(remainingRatio,delta)
+                    }
+                }
+                const reverseRatio=reversed ? Motion.clamp(Motion.outCubic(prevProgress)*activeSpan+(1-activeSpan)) : 1
+                if(!hasFade)remainingRatio=reverseRatio
+                else if(reversed)remainingRatio=Math.max(remainingRatio,reverseRatio)
+                activeSpan=remainingRatio
+                activeDuration=Motion.remainingDuration(duration,1-remainingRatio,0,1)
+                if(activeDuration<=0) {
+                    progress=1
+                    for(const pane of panes)pane.step(1)
+                    activeTransition=false
+                    activeSpan=1
+                } else {
+                    progress=0
+                    // Retarget from the displayed positions, including reversals.
+                    for(const pane of panes)pane.step(0)
+                    transition.start()
+                }
             } else {
                 progress=1
                 for(const pane of panes)pane.step(1)
+                activeTransition=false
+                activeSpan=1
             }
         }
         updating=false
     }
     onProgressChanged: { if(panes)for(const pane of panes)pane.step(progress) }
     onSignatureChanged: schedule()
-    onAnimationsEnabledChanged: schedule(!animationsEnabled)
+    onAnimationsEnabledChanged: {
+        if(!animationsEnabled && running) {
+            transition.stop()
+            progress=1
+            for(const pane of panes)pane.step(1)
+            activeTransition=false
+            activeSpan=1
+        }
+        schedule(!animationsEnabled)
+    }
     Component.onCompleted: schedule(true)
-    Timer { id: updateTimer; interval: 16; onTriggered: motion.sync() }
+    Timer { id: updateTimer; interval: 0; onTriggered: motion.sync() }
     NumberAnimation {
         id: transition; target: motion; property: "progress"; from: 0; to: 1
-        duration: motion.duration; easing.type: Easing.OutQuint
+        duration: motion.activeDuration; easing.type: Easing.OutCubic
+        onStopped: { motion.activeTransition=false; if(motion.progress>=.9999)motion.activeSpan=1 }
     }
 }

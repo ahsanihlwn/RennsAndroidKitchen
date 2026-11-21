@@ -34,12 +34,39 @@ DialogWindow {
         }
         Repeater {
             model: dialog.details.kind==="ask"?(dialog.details.choices || []):[]
-            delegate: C.RadioButton {
+            delegate: RakButton {
+                id: choiceRadio
                 required property string modelData
-                width: form.width; text: modelData; font.family: "Poppins"; font.pixelSize: 12
-                palette.windowText: dialog.c.FG
-                checked: dialog.answer===modelData
+                readonly property bool isChosen: dialog.answer===modelData
+                width: form.width; height: Math.max(30, choiceRow.implicitHeight+10); implicitHeight: height
+                leftAligned: true; leftPadding: 8; rightPadding: 10; cornerRadius: 7; edgeWidth: 1
+                fillColor: isChosen?dialog.c.a12:"transparent"
+                hoverFillColor: isChosen?dialog.c.a18:dialog.c.b05
+                downFillColor: dialog.c.a24
+                edgeColor: isChosen?dialog.c.a35:"transparent"
+                hoverEdgeColor: isChosen?dialog.c.a50:dialog.c.b10
                 onClicked: {dialog.answer=modelData;answerField.text=""}
+                contentItem: Row {
+                    id: choiceRow; spacing: 8
+                    SmoothRectangle {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 16; height: 16; radius: 8
+                        color: "transparent"
+                        border.width: choiceRadio.isChosen?2:1.5
+                        border.color: choiceRadio.isChosen?dialog.c.accent_hex:dialog.c.FG_MUTED
+                        SmoothRectangle {
+                            anchors.centerIn: parent
+                            width: 8; height: 8; radius: 4
+                            color: dialog.c.accent_hex; visible: choiceRadio.isChosen
+                        }
+                    }
+                    RakLabel {
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: Math.max(0, choiceRadio.width-choiceRadio.leftPadding-choiceRadio.rightPadding-24)
+                        text: choiceRadio.modelData; font.pixelSize: 12; color: dialog.c.FG; wrapMode: Text.WordWrap
+                        transformed: choiceRadio.transformed
+                    }
+                }
             }
         }
         RakField {

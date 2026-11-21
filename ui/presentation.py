@@ -14,7 +14,7 @@ from PySide6.QtGui import QColor
 
 from core import ui_lang
 from core.flag import APP_NAME, APP_VERSION, edition_label, window_title
-from main_ext.class_ThemeUi import _PALETTES, theme, BLUR_RADIUS_DEFAULT, BLUR_RADIUS_MAXIMUM, blur_radius_value
+from main_ext.class_ThemeUi import _PALETTES, theme, BLUR_RADIUS_DEFAULT, BLUR_RADIUS_MAXIMUM, blur_radius_value, button_tokens_for
 from ui.rows import RowsModel
 
 
@@ -40,6 +40,7 @@ class LauncherModel(QObject):
     projectsChanged = Signal()
     trashChanged = Signal()
     favoriteFilterChanged = Signal()
+    filterChanged = Signal()
     drivesChanged = Signal()
     presentationRequested = Signal(str, "QVariantMap")
     command = Signal(str, "QVariantMap")
@@ -69,10 +70,12 @@ class LauncherModel(QObject):
         self._deleting_path = ""
         self._opening_path = ""
         self._animate_rows = True
+        self._skip_project_rows_sync = False
         self._color_cache = None
         self._string_cache = None
         self.appearance_interceptor = None
         self._project_rows = RowsModel(self.projects, self)
+        self._all_project_rows = RowsModel(sorted(self._projects, key=lambda row: not row.get("pinned", False)), self)
         self._trash_rows = RowsModel(parent=self)
         self._drive_rows = RowsModel(self._drives, self)
         self.projectsChanged.connect(self._sync_projects)
@@ -93,7 +96,9 @@ class LauncherModel(QObject):
             self.changed.emit()
 
     def _sync_projects(self):
-        self._project_rows.replace(self.projects, animate=self._animate_rows)
+        if self._skip_project_rows_sync:
+            return
+        self._project_rows.replace(self._base_projects(), animate=self._animate_rows)
 
     def _sync_trash(self):
         self._trash_rows.replace(self.trashProjects, animate=self._animate_rows)
@@ -101,6 +106,10 @@ class LauncherModel(QObject):
     @Property(QObject, constant=True)
     def projectRows(self):
         return self._project_rows
+
+    @Property(QObject, constant=True)
+    def allProjectRows(self):
+        return self._all_project_rows
 
     @Property(QObject, constant=True)
     def trashRows(self):
@@ -217,6 +226,7 @@ class LauncherModel(QObject):
             result["red"+str(alpha)] = color_alpha("#dc4646",alpha/100)
         result["popupPanel"] = color_alpha(palette["BG2"], 120/255)
         result["popupCard"] = "#0affffff"
+        result.update(button_tokens_for(self._palette_name, palette, color_alpha))
         self._color_cache = result
         return result
 
@@ -258,27 +268,59 @@ class LauncherModel(QObject):
     def favoriteCount(self):
         return sum(1 for row in self._projects if row.get("pinned", False))
 
+    @Property(int, notify=projectsChanged)
+    def visibleProjectsCount(self):
+        return len(self.projects)
+
+    @Property("QVariantList", notify=filterChanged)
+    def excludedDrives(self):
+        return sorted(self._excluded_drives)
+
+    @Property(str, notify=filterChanged)
+    def searchQuery(self):
+        return self._query
+
     @Slot()
     def toggleFavoriteFilter(self):
-        self._favorite_filter = not self._favorite_filter
-        self.favoriteFilterChanged.emit()
-        self.projectsChanged.emit()
+        self.setFavoriteFilter(not self._favorite_filter)
 
-    @Property("QVariantList", notify=projectsChanged)
-    def projects(self):
+    @Slot(bool)
+    def setFavoriteFilter(self, enabled):
+        enabled = bool(enabled)
+        if enabled == self._favorite_filter:
+            return
+        self._favorite_filter = enabled
+        self.favoriteFilterChanged.emit()
+        self.filterChanged.emit()
+        if self._project_rows.animating:
+            self._project_rows.cancelMotion.emit()
+            self._project_rows.setAnimating(False)
+        self._skip_project_rows_sync = True
+        try:
+            self.projectsChanged.emit()
+        finally:
+            self._skip_project_rows_sync = False
+
+    def _base_projects(self):
         query = self._query.casefold().strip()
         rows = [row for row in self._projects if row.get("drive", "").casefold() not in self._excluded_drives
                 and (not query or query in " ".join(str(row.get(key, "")) for key in
                 ("project_name", "path", "port1", "port2")).casefold())]
+        return sorted(rows, key=lambda row: not row.get("pinned", False))
+
+    @Property("QVariantList", notify=projectsChanged)
+    def projects(self):
+        rows = self._base_projects()
         if self._favorite_filter:
             rows = [row for row in rows if row.get("pinned", False)]
-        return sorted(rows, key=lambda row: not row.get("pinned", False))
+        return rows
 
     @Slot(str)
     def search(self, query):
         if self._query != query:
             self._query = query
             self._animate_rows = False
+            self.filterChanged.emit()
             self.projectsChanged.emit()
             self.trashChanged.emit()
             self._animate_rows = True
@@ -288,6 +330,7 @@ class LauncherModel(QObject):
         rows = [dict(row) for row in rows]
         if rows != self._projects:
             self._projects = rows
+            self._all_project_rows.replace(sorted(rows, key=lambda row: not row.get("pinned", False)), animate=False)
             self.projectsChanged.emit()
 
     @Property("QVariantMap", notify=profileChanged)
@@ -378,6 +421,9 @@ class LauncherModel(QObject):
             self.drivesChanged.emit()
         if excluded != self._excluded_drives:
             self._excluded_drives = excluded
+            self.filterChanged.emit()
+            if self._project_rows.animating:
+                self._project_rows.cancelMotion.emit()
             self.projectsChanged.emit()
 
     @Property("QVariantMap", notify=settingsChanged)
@@ -390,7 +436,7 @@ class LauncherModel(QObject):
 
     @Property("QVariantList", constant=True)
     def palettes(self):
-        return [{"key": key, **value} for key, value in _PALETTES.items()]
+        return [{"key": key, **value, **button_tokens_for(key, value, color_alpha)} for key, value in _PALETTES.items()]
 
     @Property(str, notify=colorsChanged)
     def paletteName(self):

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
 import QtQuick.Controls as C
+import QtQuick.Dialogs as D
 
 DialogWindow {
     id: dialog
@@ -16,6 +17,25 @@ DialogWindow {
         values=initial;open()
     }
     function submit() { workspace.dispatch(details.action || "submitForm",{token:details.token,values:values});dismiss() }
+    D.FileDialog {
+        id: fieldFilePicker
+        property string targetKey: ""
+        property var targetField: null
+        function urlToLocalPath(u) {
+            let s = u.toString()
+            if (s.startsWith("file:///")) {
+                s = s.slice(8)
+                if (/^[A-Za-z]:/.test(s)) return decodeURIComponent(s)
+                return "/" + decodeURIComponent(s)
+            }
+            return decodeURIComponent(s)
+        }
+        onAccepted: {
+            const local = urlToLocalPath(selectedFile)
+            dialog.values[targetKey] = local
+            if (targetField) targetField.text = local
+        }
+    }
     RakLabel { x: 20; y: 18; text: dialog.details.title || ""; font.pixelSize: 14; font.weight: Font.DemiBold; color: dialog.c.FG }
     Column {
         id: form; x: 20; y: 52; width: parent.width-40; spacing: 12
@@ -27,14 +47,30 @@ DialogWindow {
                 required property var modelData
                 width: form.width; spacing: 5
                 RakLabel { visible: text.length>0; text: field.modelData.label || ""; font.pixelSize: 11; color: dialog.c.FG2 }
-                RakField {
-                    objectName: "workspaceForm_"+field.modelData.key
-                    width: parent.width; height: 36; visible: !field.modelData.choices
-                    text: field.modelData.value || ""; placeholderText: field.modelData.placeholder || ""
-                    fillColor: dialog.c.BG_INPUT; edgeColor: dialog.c.b18; focusEdgeColor: dialog.c.a55
-                    labelColor: dialog.c.FG; hintColor: dialog.c.placeholder
-                    onTextChanged: dialog.values[field.modelData.key]=text
-                    Keys.onReturnPressed: dialog.submit()
+                Row {
+                    width: parent.width; spacing: 6; visible: !field.modelData.choices
+                    RakField {
+                        id: textInput
+                        objectName: "workspaceForm_"+field.modelData.key
+                        width: field.modelData.browseFile ? parent.width - 82 : parent.width
+                        height: 36
+                        text: field.modelData.value || ""; placeholderText: field.modelData.placeholder || ""
+                        fillColor: dialog.c.BG_INPUT; edgeColor: dialog.c.b18; focusEdgeColor: dialog.c.a55
+                        labelColor: dialog.c.FG; hintColor: dialog.c.placeholder
+                        onTextChanged: dialog.values[field.modelData.key]=text
+                        Keys.onReturnPressed: dialog.submit()
+                    }
+                    DialogButton {
+                        visible: !!field.modelData.browseFile
+                        colors: dialog.c; text: "Browse"; implicitWidth: 76; implicitHeight: 36
+                        onClicked: {
+                            fieldFilePicker.targetKey = field.modelData.key
+                            fieldFilePicker.targetField = textInput
+                            fieldFilePicker.title = field.modelData.browseTitle || ("Select " + (field.modelData.label || "File"))
+                            fieldFilePicker.nameFilters = field.modelData.nameFilters || ["All Files (*)"]
+                            fieldFilePicker.open()
+                        }
+                    }
                 }
                 WorkspaceChoiceButton {
                     id: choice

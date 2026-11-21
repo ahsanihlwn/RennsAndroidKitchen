@@ -1,55 +1,34 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
-from core import kitchen_process as subprocess
+import re
 import shlex
-import re
-from core import kitchen_process as subprocess
-import os
-import re
-from core import kitchen_process as subprocess
-from main_ext.class_ConfigEngine import ConfigEngine
-from core.app_paths import BIN_DIR
-print("[CORE STAGE] EROFS STARTING")
 
+from core.app_paths import BIN_DIR
+from core.binary_handler import resolve_binary
 
 BIN_PATH = BIN_DIR
-
-from core.binary_handler import resolve_binary
-from core.proc_util import CREATE_NO_WINDOW, kill_process_tree as _kill_process_tree
-
 
 UUID_RE = re.compile(
     r"Filesystem UUID:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
     r"[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})"
 )
 
-def get_uuid_from_fs_options(fs_options_path):
-    print(f"[UUID] open fs_options: {fs_options_path}")
 
+def get_uuid_from_fs_options(fs_options_path):
     if not os.path.isfile(fs_options_path):
-        print("[UUID][ERR] fs_options FILE NOT FOUND")
         return None, f"fs_options tidak ditemukan: {fs_options_path}"
 
     try:
         with open(fs_options_path, "r", encoding="utf-8", errors="ignore") as f:
-            for idx, line in enumerate(f, start=1):
-                print(f"[UUID][LINE {idx}] {line.strip()}")
-
+            for line in f:
                 if "Filesystem UUID:" in line:
-                    print("[UUID] keyword FOUND")
                     m = UUID_RE.search(line)
                     if m:
-                        print(f"[UUID] PARSED UUID = {m.group(1)}")
                         return m.group(1), None
-
-                    print("[UUID][ERR] UUID FORMAT INVALID")
                     return None, "UUID ditemukan tapi formatnya tidak valid"
-
     except Exception as e:
-        print(f"[UUID][EXCEPTION] {e}")
         return None, f"Gagal membaca fs_options: {e}"
 
-    print("[UUID][ERR] UUID NOT FOUND IN FILE")
     return None, "UUID tidak ditemukan di fs_options"
 
 
@@ -73,86 +52,24 @@ def unpack_erofs(img_path):
 
     from core.storage_detector import get_optimal_io_workers
     threads = get_optimal_io_workers(parent, max_cap=64, hdd_cap=4)
-    # Keep every untrusted path as one argv item so metacharacters in a file
-    # name are always data, never executable syntax.
-    cmd = [
-        UNPACK_EROFS, "-i", img_path, "-x", "-f", "-s",
-        f"-T{threads}", "-o", parent,
-    ]
 
     try:
-        p = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            shell=False,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=CREATE_NO_WINDOW
+        from core.native_backend import erofs_unpack
+        report = erofs_unpack(
+            img_path,
+            parent,
+            image_base_name=name,
+            threads=threads,
+            write_configs=True,
+            overwrite=True,
         )
-        out, _ = p.communicate()
-
-        if p.returncode != 0:
-            return False, (out or "").strip() or "extract.erofs failed"
-
-        # After extraction, determine actual result folder
-        # Common behaviour: extract.erofs will create parent/<name>/...
-        if os.path.isdir(result_dir):
-            # good: extractor created parent/<name> — that's our final folder
-            return True, out.strip()
-
-
-        print(f"[UNPACK] parent dir = {parent}")
-        print(f"[UNPACK] result_dir = {result_dir}")
-
-        try:
-            if not os.path.exists(result_dir):
-                print("[UNPACK] create result_dir")
-                os.makedirs(result_dir, exist_ok=True)
-
-            for item in os.listdir(parent):
-                print(f"[UNPACK][SCAN] found item: {item}")
-
-                src = os.path.join(parent, item)
-                print(f"[UNPACK][SRC] {src}")
-
-                if os.path.abspath(src) == os.path.abspath(img_path):
-                    print("[UNPACK][SKIP] image file")
-                    continue
-
-                if os.path.abspath(src) == os.path.abspath(result_dir):
-                    print("[UNPACK][SKIP] result_dir itself")
-                    continue
-
-                dst = os.path.join(result_dir, item)
-                print(f"[UNPACK][MOVE] {src} -> {dst}")
-
-                if os.path.exists(dst):
-                    print("[UNPACK][OVERWRITE] removing existing dst")
-                    import shutil
-                    if os.path.isdir(dst):
-                        shutil.rmtree(dst)
-                    else:
-                        os.remove(dst)
-
-                os.rename(src, dst)
-                print("[UNPACK][OK] moved")
-
-        except Exception as move_err:
-            print(f"[UNPACK][ERR] relocate failed: {move_err}")
-            warn_msg = f"WARN relocate: {move_err}"
-            return True, warn_msg
-
-
-        return True, out.strip()
-
+        files = report.get("files_extracted", 0)
+        return True, f"OK → {result_dir} ({files} files extracted)"
     except Exception as e:
-        return False, str(e)
+        return False, f"erofs_unpack failed: {e}"
 
 
 def _patch_fs_config(fs_config_file: str, folder_path: str, part_name: str):
-
     # Baca entry yang sudah ada (key = path string)
     existing = set()
     try:
@@ -169,7 +86,6 @@ def _patch_fs_config(fs_config_file: str, folder_path: str, part_name: str):
 
     # Walk folder dan cari path yang missing
     for root, dirs, files in os.walk(folder_path):
-        # entry untuk direktori ini sendiri
         rel_dir = os.path.relpath(root, os.path.dirname(folder_path)).replace("\\", "/")
         if rel_dir not in existing:
             new_lines.append(f"{rel_dir} 0 0 0755")
@@ -188,8 +104,6 @@ def _patch_fs_config(fs_config_file: str, folder_path: str, part_name: str):
 
     print(f"[PATCH_FSCFG] adding {len(new_lines)} missing entries to fs_config")
     try:
-        # newline="\n": mkfs.erofs parse strict, CRLF/empty-line bikin
-        # "Ill-formed line". Jangan tulis baris kosong sebagai separator.
         with open(fs_config_file, "a", encoding="utf-8", newline="\n") as f:
             for ln in new_lines:
                 f.write(ln + "\n")
@@ -202,7 +116,7 @@ def repack_erofs(folder_path, part_name=None):
     if not MKFS_BIN:
         return False, "EROFS ENVIRONTMENT NOT FOUND"
 
-    # PATCH: ambil nama partisi otomatis
+    # Ambil nama partisi otomatis
     if part_name is None:
         part_name = os.path.basename(folder_path.rstrip("/\\"))
 
@@ -226,7 +140,7 @@ def repack_erofs(folder_path, part_name=None):
     if err:
         return False, f"UUID lookup gagal: {err}"
 
-    # pastikan file2 config lain ada
+    # Pastikan file-file config lain ada
     if not os.path.isfile(fs_config_file):
         return False, f"fs_config tidak ditemukan: {fs_config_file}"
     if not os.path.isfile(file_contexts):
@@ -235,7 +149,7 @@ def repack_erofs(folder_path, part_name=None):
     # AUTO-PATCH fs_config: tambahkan entry yang missing
     _patch_fs_config(fs_config_file, folder_path, part_name)
 
-    # output img baru
+    # Output img baru
     out_img = os.path.join(parent, f"{name}_new.img")
 
     from core.repack_policy import get_erofs_args
@@ -244,60 +158,36 @@ def repack_erofs(folder_path, part_name=None):
     from core.storage_detector import get_optimal_io_workers
     workers = get_optimal_io_workers(folder_path, max_cap=64, hdd_cap=4)
 
-    # t_arg currently is "-T <timestamp>".  It is configuration produced by
-    # RAK, not a shell fragment; split it only into the two argv parameters.
+    ts = 0
     t_parts = shlex.split(t_arg, posix=False)
-    cmd = [
-        MKFS_BIN, z_arg, *t_parts,
-        f"--workers={workers}",
-        "--async-queue-limit=2048",
-        "-U", uuid_val,
-        f"--mount-point=/{part_name}",
-        f"--fs-config-file={fs_config_file}",
-        f"--file-contexts={file_contexts}",
-        out_img, folder_path,
-    ]
-
+    if len(t_parts) >= 2 and t_parts[0] == "-T":
+        try:
+            ts = int(t_parts[1])
+        except (ValueError, TypeError):
+            ts = 0
 
     print("========== EROFS REPACK DEBUG ==========")
     print(f"Mode      : {erofs_mode}")
-    print("Command   :")
-    print(subprocess.list2cmdline(cmd))
+    print(f"Algorithm : {z_arg}")
+    print(f"Timestamp : {ts}")
+    print(f"UUID      : {uuid_val}")
+    print(f"Workers   : {workers}")
+    print(f"Output    : {out_img}")
     print("========================================")
 
-
-    p = None
     try:
-        print("[REPACK] running mkfs.erofs...")
-
-        p = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            shell=False,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=CREATE_NO_WINDOW
+        from core.native_backend import erofs_pack
+        report = erofs_pack(
+            source_dir=folder_path,
+            output_image=out_img,
+            algo=z_arg,
+            mount_point=f"/{part_name}",
+            fs_config=fs_config_file,
+            file_contexts=file_contexts,
+            uuid=uuid_val,
+            timestamp=ts,
+            threads=workers,
         )
-
-
-        out, _ = p.communicate()
-
-        print("[REPACK] process finished")
-        print(f"[REPACK] returncode = {p.returncode}")
-        print("[REPACK] output:")
-        print(out)
-
-        if p.returncode != 0:
-            return False, f"mkfs.erofs error: {out.strip()}"
-
         return True, f"OK → {out_img}"
-
     except Exception as e:
-        if p is not None:
-            try:
-                _kill_process_tree(p.pid)
-            except Exception:
-                pass
-        return False, str(e)
+        return False, f"erofs_pack error: {e}"

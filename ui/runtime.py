@@ -9,6 +9,11 @@ from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtQml import QQmlApplicationEngine, qmlRegisterType
 from PySide6.QtQuick import QQuickImageProvider
 from PySide6.QtQuickControls2 import QQuickStyle
+try:
+    from shiboken6 import isValid as _is_valid
+except ImportError:
+    def _is_valid(obj):
+        return obj is not None
 
 
 
@@ -31,14 +36,19 @@ def initialize_quick_runtime(*, webengine=False):
         _input_regions_registered = True
     if not globals().get("_quill_registered", False):
         try:
-            from ui.quill_editor import NativeEditor
+            from ui.quill_editor import NativeEditor, NativeDiffEditor
             qmlRegisterType(NativeEditor, "Quill.Native", 1, 0, "NativeEditor")
+            qmlRegisterType(NativeDiffEditor, "Quill.Native", 1, 0, "NativeDiffEditor")
             globals()["_quill_registered"] = True
         except Exception:
             pass
-    if webengine:
-        from PySide6.QtWebEngineQuick import QtWebEngineQuick
-        QtWebEngineQuick.initialize()
+    if not globals().get("_qtterm_registered", False):
+        try:
+            from core.qtterm import register_qml_types as register_qtterm_types
+            register_qtterm_types()
+            globals()["_qtterm_registered"] = True
+        except Exception as e:
+            print(f"[runtime] WARNING: Failed to register QtTerm: {e}")
 
 
 class WindowLifetime(QObject):
@@ -223,11 +233,11 @@ class DialogStack(QObject):
 
     @Property(bool, notify=changed)
     def modalActive(self):
-        return any(dialog.property("presented") and dialog.property("modal") for dialog in self.stack)
+        return any(_is_valid(dialog) and dialog.property("presented") and dialog.property("modal") for dialog in self.stack)
 
     @Slot(QObject)
     def registerDialog(self, dialog):
-        if self._closed or dialog in self.dialogs:
+        if self._closed or not _is_valid(dialog) or dialog in self.dialogs:
             return
         self.dialogs.append(dialog)
         dialog.prepareRequested.connect(lambda dialog=dialog: self.prepare(dialog))
@@ -237,43 +247,51 @@ class DialogStack(QObject):
     def unregisterDialog(self, dialog):
         if self._closed:
             return
-        self.release(dialog)
         if dialog in self.dialogs:
             self.dialogs.remove(dialog)
+        self.release(dialog)
 
     def eventFilter(self, window, event):
         if self.stack and event.type() in (QEvent.ShortcutOverride,QEvent.KeyPress) and event.key()==Qt.Key_Escape:
-            if any(popup.property('visible') for popup in self.popups):return False
+            if any(_is_valid(popup) and popup.property('visible') for popup in self.popups):return False
             event.accept()
-            if event.type()==QEvent.KeyPress:
+            if event.type()==QEvent.KeyPress and _is_valid(self.stack[-1]):
                 QMetaObject.invokeMethod(self.stack[-1], "dismiss")
             return True
         return False
 
     @Slot(QObject)
     def registerPopup(self,popup):
-        if not self._closed and popup not in self.popups:self.popups.append(popup)
+        if not self._closed and _is_valid(popup) and popup not in self.popups:self.popups.append(popup)
 
     @Slot(QObject)
     def unregisterPopup(self,popup):
         if popup in self.popups:self.popups.remove(popup)
 
     def prepare(self, dialog):
-        if self._closed:
+        if self._closed or not _is_valid(dialog):
             return
         self.release(dialog)
-        backdrop=self.stack[-1].property('backdropSurface') if self.stack else None
+        backdrop=self.stack[-1].property('backdropSurface') if (self.stack and _is_valid(self.stack[-1])) else None
         self.stack.append(dialog)
         self.serial += 1
         dialog.setProperty("z", 100+self.serial)
         dialog.setProperty("backdropSource", backdrop or self.owner.property("backdropSurface"))
         self._focus()
-        self.owner.requestActivate()
+        if _is_valid(self.owner):
+            self.owner.requestActivate()
 
     def _focus(self):
+        alive = []
+        self.stack = [d for d in self.stack if _is_valid(d)]
+        top = self.stack[-1] if self.stack else None
         for dialog in self.dialogs:
-            dialog.setProperty("active", bool(self.stack and dialog is self.stack[-1]))
-        self.changed.emit()
+            if _is_valid(dialog):
+                dialog.setProperty("active", bool(top is not None and dialog is top))
+                alive.append(dialog)
+        self.dialogs = alive
+        if _is_valid(self):
+            self.changed.emit()
 
     def release(self, dialog):
         if dialog in self.stack:
@@ -282,11 +300,14 @@ class DialogStack(QObject):
 
     def close(self):
         self._closed = True
-        for popup in tuple(self.popups):QMetaObject.invokeMethod(popup,'close')
+        for popup in tuple(self.popups):
+            if _is_valid(popup):
+                QMetaObject.invokeMethod(popup,'close')
         self.popups.clear()
         for dialog in tuple(self.dialogs):
-            dialog.setProperty("finalClose", True)
-            QMetaObject.invokeMethod(dialog, "close")
+            if _is_valid(dialog):
+                dialog.setProperty("finalClose", True)
+                QMetaObject.invokeMethod(dialog, "close")
         self.stack.clear()
         self.changed.emit()
 

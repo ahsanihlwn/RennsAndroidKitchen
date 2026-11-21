@@ -2,6 +2,7 @@
 import json
 import os
 import hashlib
+import time
 
 from core import apktool_tool
 from core.native_backend import directory_entries
@@ -22,13 +23,15 @@ def _collapse_target(path):
 
 
 def scan_tree_directory(spec):
+    t0 = time.perf_counter()
     base, logical = spec["base"], spec["path"]
     physical = spec.get("target") or logical
     branch_only = bool(spec.get("branch") and not os.path.isdir(physical))
     if branch_only:
         physical = spec["branch"]
+    include_magic = bool(spec.get("include_magic", False))
     try:
-        rows = directory_entries(physical, base)
+        rows = directory_entries(physical, base, include_magic=include_magic)
     except OSError:
         # Rust's directory API reports missing paths as a plain OSError.
         # A missing or stale folder link is an empty view, not a startup/modal
@@ -94,7 +97,7 @@ def scan_tree_directory(spec):
                 hidden_names = {entry["name"] for entry in rows if is_deleted(entry)}
                 rows = [entry for entry in rows if entry["name"] not in hidden_names]
                 try:
-                    branch_rows = directory_entries(branch_dir, base)
+                    branch_rows = directory_entries(branch_dir, base, include_magic=include_magic)
                 except OSError:
                     branch_rows = []
                 for entry in branch_rows:
@@ -119,10 +122,10 @@ def scan_tree_directory(spec):
         entry["apk_mirror"] = apktool_tool.mirror_dir_for(base, source) if (
             has_apk_mirrors and source.lower().endswith(".apk") and apktool_tool.is_decompiled(base, source)) else None
         low = name.lower()
-        badge = entry["magic"] if low.endswith(".img") or (
-            low.endswith(".bin") and entry["magic"] == "PAYLOAD") else ""
+        badge = entry["magic"] if low.endswith((".img", ".ozip", ".ofp", ".ops", ".kdz", ".dz", ".app", ".pac", ".cpb", ".romfs", ".squashfs", ".sqsh")) or (
+            low.endswith(".bin") and entry["magic"] in ("PAYLOAD", "AMLOGIC", "ALLWINNER", "OFP", "OFP_QC", "OFP_MTK", "OFP_ZIP", "ROMFS", "SQUASHFS")) else ""
         if os.path.normpath(entry["path"]) in dropped:
-            if not low.endswith((".img", ".bin")):
+            if not low.endswith((".img", ".bin", ".ozip", ".ofp", ".ops", ".kdz", ".dz", ".app", ".pac", ".cpb", ".romfs", ".squashfs", ".sqsh")):
                 from core.header_magic import check_magic
                 entry["magic"] = check_magic(entry["path"])
             badge = entry["magic"]
@@ -138,7 +141,10 @@ def scan_tree_directory(spec):
                               -1 if is_dir and is_root and low == apktool_tool.APKTOOL_DEC_DIR.lower() else
                               0 if is_folder else
                               1)
-        raw = json.dumps(entry, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        link = entry["symlink"]
+        link_sig = ((link["target"], link["resolved"], link["exists"], link["is_dir"], link["is_file"]) if link else None)
+        raw = repr((name, entry["path"], source, entry["branch"], is_dir, entry["size"], entry["mtime_ns"], entry["magic"],
+                    entry["fs_type"], entry["collapse"], entry["apk_mirror"], badge, entry["priority"], link_sig)).encode("utf-8")
         entry["fingerprint"] = hashlib.blake2b(raw, digest_size=16).hexdigest()
         visible.append(entry)
     visible.sort(key=lambda entry: (entry["priority"], entry["name"].lower()))

@@ -5,14 +5,16 @@ import QtQuick.Shapes
 SmoothRectangle {
     id: splash
     required property var model
+    property bool active: model.startupActive
     objectName: "startupSplash"
     color: model.colors.BG
-    visible: model.startupActive
+    visible: active
     enabled: visible && opacity>.001
     opacity: 1
     signal revealed()
     function reveal() {
         if (!visible) return
+        if (fade.running) return
         if (model.settings.animations) fade.start()
         else { opacity = 0; revealed() }
     }
@@ -61,5 +63,5 @@ SmoothRectangle {
         sourceSize.width: splash.model.splashBrand.sourceWidth; sourceSize.height: splash.model.splashBrand.sourceHeight
     }
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onWheel: wheel => wheel.accepted = true }
-    NumberAnimation { id: fade; target: splash; property: "opacity"; to: 0; duration: 260; easing.type: Easing.OutCubic; onFinished: splash.revealed() }
+    NumberAnimation { id: fade; target: splash; property: "opacity"; to: 0; duration: 200; easing.type: Easing.OutCubic; onFinished: splash.revealed() }
 }

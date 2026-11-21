@@ -1,14 +1,8 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
 import sys
-from core import kitchen_process as subprocess
-from core.app_paths import BIN_DIR
 from core.command_context import OperationError
 print("[CORE STAGE] EXT4 REPACK")
-
-
-from core.binary_handler import resolve_binary
-from core.proc_util import CREATE_NO_WINDOW
 
 # HELPER: ALIGN & SIZE SCAN
 
@@ -148,14 +142,9 @@ def auto_detect_partition_name(config_dir: str) -> str:
 def main(partition_dir):
     try:
         import traceback
+        from core.native_backend import ext_make_fs
 
         partition_dir = os.path.abspath(os.path.normpath(partition_dir))
-
-        # 🔥 RESOLVE SAAT DIPAKAI
-        MAKE_EXT4FS_EXE = resolve_binary(BIN_DIR, "make_ext4fs.exe")
-
-        if not MAKE_EXT4FS_EXE or not os.path.exists(MAKE_EXT4FS_EXE):
-            return False, "EXT Environtment not found"
 
         base = os.path.dirname(partition_dir)
         partition_name = os.path.basename(partition_dir)
@@ -177,8 +166,6 @@ def main(partition_dir):
             return False, f"file_contexts hilang: {file_contexts_path}"
         if not os.path.isdir(partition_dir):
             return False, f"Folder partisi tidak valid: {partition_dir}"
-        if not os.path.exists(MAKE_EXT4FS_EXE):
-            return False, f"make_ext4fs.exe tidak ditemukan:\n{MAKE_EXT4FS_EXE}"
 
         # Baca _info
         info = parse_info(info_path)
@@ -219,38 +206,15 @@ def main(partition_dir):
             f"final={final_size}",
         )
 
-
-        # Build command
-        cmd = [
-            MAKE_EXT4FS_EXE,
-            "-l", str(final_size),
-            "-a", mount_point_clean,
-            "-S", file_contexts_path,
-            "-C", fs_config_path,
+        ext_make_fs(
             out_img,
             partition_dir,
-        ]
-
-        # Run tool (capture stdout/stderr seperti EROFS)
-        env = os.environ.copy()
-        env["PYTHONIOENCODING"] = "utf-8"
-        env["PYTHONUTF8"] = "1"
-
-
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            shell=False,
-            env=env,
-            creationflags=CREATE_NO_WINDOW,
+            size_bytes=final_size,
+            mount_point=mount_point_clean,
+            file_contexts=file_contexts_path,
+            fs_config=fs_config_path,
+            block_size=block_size,
         )
-
-        if proc.returncode != 0:
-            err_out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-            return False, f"make_ext4fs ERROR (code {proc.returncode}):\n{err_out.strip()}"
 
         return True, out_img
 

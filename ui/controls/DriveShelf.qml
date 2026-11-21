@@ -31,7 +31,7 @@ Item {
         return Qt.point(Math.round(p.x),Math.round(p.y))
     }
     function changeLayout() {
-        if (!ready || trash || diskActive || sidebar===wantedSidebar) return
+        if (!ready || !visible || trash || diskActive || sidebar===wantedSidebar) return
         let before={trash:position(0,"trash")}
         const rows=model.driveRows.snapshot()
         for (let i=0;i<rows.length;++i) before[rows[i].key]=position(i+1,rows[i].key)
@@ -51,7 +51,7 @@ Item {
         changeLayout()
     }
     function beginDisks(before,after,owner) {
-        if (!ready || !model.settings.animations || !parent.visible || model.startupActive) return
+        if (!ready || !visible || !model.settings.animations || !parent.visible || model.startupActive) return
         layoutClock.seek(layoutClock.duration); layoutActive=false
         const bounds=sidebar?Qt.rect(viewport.x,viewport.y,viewport.width,viewport.height):Qt.rect(20,20,width-40,60)
         const plan=Motion.diskScene(before,after,(i,row)=>destination(i+1),bounds)

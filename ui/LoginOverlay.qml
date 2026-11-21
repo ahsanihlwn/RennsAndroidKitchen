@@ -11,7 +11,8 @@ Item {
     readonly property var c: model.colors
     readonly property string mode: backend?backend.mode:"signin"
     property real cardOpacity: 0
-    property real shadeOpacity: 0
+    property real cardScale: 1
+    property real shadeOpacity: cardOpacity
     property real shakeProgress: 0
     readonly property real shakeOffset: shakeProgress<.25?-20*shakeProgress:shakeProgress<.5?-5+40*(shakeProgress-.25):shakeProgress<.75?5-32*(shakeProgress-.5):-3+12*(shakeProgress-.75)
     visible: false
@@ -19,9 +20,9 @@ Item {
     function open() {
         if (!backend || visible) return
         backend.reset(); email.clear(); password.clear(); user.clear(); role.clear()
-        passwordVisible=false; cardOpacity=0; shadeOpacity=1; visible=true
+        passwordVisible=false; cardOpacity=model.settings.animations?0:1; cardScale=model.settings.animations?0.94:1; visible=true
         focus=true
-        reveal.restart()
+        if (model.settings.animations) cardReveal.restart()
     }
     function dismiss() { if (visible && !closeMotion.running) closeMotion.start() }
     property bool passwordVisible: false
@@ -38,7 +39,7 @@ Item {
     Item {
         id: container
         x: Math.max(0,(parent.width-420)/2); y: Math.max(0,(parent.height-480)/2)
-        width: 420; height: 480; opacity: overlay.cardOpacity
+        width: 420; height: 480; opacity: overlay.cardOpacity; scale: overlay.cardScale; transformOrigin: Item.Center
         SmoothRectangle {
             id: card
             objectName: "loginCard"
@@ -91,8 +92,8 @@ Item {
                     x: overlay.shakeOffset; width: parent.width; height: 41; cornerRadius: 8
                     enabled: !!overlay.backend && !overlay.backend.busy
                     text: overlay.backend?(overlay.backend.busy?"    ":"")+overlay.backend.label:"Sign in"
-                    fillColor: overlay.c.a90; edgeColor: overlay.c.accent_hex; hoverFillColor: overlay.c.accent_hex; downFillColor: overlay.c.a80
-                    disabledFillColor: overlay.c.a35; disabledLabelColor: "#8cffffff"; labelColor: "white"
+                    fillColor: overlay.c.BTN_PRIMARY_BG || overlay.c.a90; edgeColor: overlay.c.BTN_PRIMARY_EDGE || overlay.c.accent_hex; hoverFillColor: overlay.c.BTN_PRIMARY_HOVER || overlay.c.accent_hex; hoverEdgeColor: overlay.c.BTN_PRIMARY_EDGE_HOVER || overlay.c.accent_hex; downFillColor: overlay.c.BTN_PRIMARY_DOWN || overlay.c.a80
+                    disabledFillColor: overlay.c.BTN_PRIMARY_DISABLED_BG || overlay.c.a35; disabledEdgeColor: overlay.c.BTN_PRIMARY_DISABLED_EDGE || overlay.c.a20; disabledLabelColor: overlay.c.BTN_PRIMARY_DISABLED_FG || "#8cffffff"; labelColor: overlay.c.BTN_PRIMARY_FG || "white"; hoverLabelColor: overlay.c.BTN_PRIMARY_FG_HOVER || "white"
                     font.pixelSize: 13; font.weight: Font.DemiBold
                     onClicked: overlay.submit()
                     Spinner { x: 12; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; thickness: 3; inset: 3; accent: "white"; visible: !!overlay.backend && overlay.backend.busy }
@@ -108,9 +109,9 @@ Item {
                     objectName: "loginGoogle"
                     visible: overlay.mode==="signin"; width: parent.width; height: 39; cornerRadius: 8
                     text: "  Continue with Google"; iconSource: overlay.model.authIcon("google"); iconWidth: 16; iconHeight: 16
-                    font.pixelSize: 13; font.weight: Font.Medium; labelColor: overlay.c.FG
+                    font.pixelSize: 13; font.weight: Font.Medium; labelColor: overlay.c.BTN_SEC_FG || overlay.c.FG; hoverLabelColor: overlay.c.BTN_SEC_FG_HOVER || overlay.c.FG_BRIGHT
                     enabled: !!overlay.backend && !overlay.backend.busy
-                    fillColor: overlay.c.b04; hoverFillColor: overlay.c.b08; edgeColor: overlay.c.b12; hoverEdgeColor: overlay.c.b20
+                    fillColor: overlay.c.BTN_SEC_BG || overlay.c.b04; hoverFillColor: overlay.c.BTN_SEC_HOVER || overlay.c.b08; downFillColor: overlay.c.BTN_SEC_DOWN || overlay.c.b12; edgeColor: overlay.c.BTN_SEC_EDGE || overlay.c.b12; hoverEdgeColor: overlay.c.BTN_SEC_EDGE_HOVER || overlay.c.b20
                     onClicked: overlay.backend.google()
                 }
                 Column {
@@ -141,13 +142,16 @@ Item {
         labelColor: accent?overlay.c.FG_BLUE:overlay.c.FG_MUTED; hoverLabelColor: accent?overlay.c.accent_hex:overlay.c.FG
     }
     function submit() { if (backend) backend.submit(email.text,password.text,user.text,role.text) }
-    Timer { id: reveal; interval: 60; onTriggered: cardReveal.start() }
-    NumberAnimation { id: cardReveal; target: overlay; property: "cardOpacity"; to: 1; duration: overlay.model.settings.animations?160:0; easing.type: Easing.OutCubic }
+    ParallelAnimation {
+        id: cardReveal
+        NumberAnimation { target: overlay; property: "cardOpacity"; to: 1; duration: overlay.model.settings.animations?190:0; easing.type: Easing.OutQuad }
+        NumberAnimation { target: overlay; property: "cardScale"; to: 1; duration: overlay.model.settings.animations?190:0; easing.type: Easing.OutCubic }
+    }
     ParallelAnimation {
         id: closeMotion
-        NumberAnimation { target: overlay; property: "cardOpacity"; to: 0; duration: overlay.model.settings.animations?180:0; easing.type: Easing.InCubic }
-        NumberAnimation { target: overlay; property: "shadeOpacity"; to: 0; duration: overlay.model.settings.animations?180:0; easing.type: Easing.InCubic }
-        onFinished: { overlay.visible=false; password.clear() }
+        NumberAnimation { target: overlay; property: "cardOpacity"; to: 0; duration: overlay.model.settings.animations?140:0; easing.type: Easing.InQuad }
+        NumberAnimation { target: overlay; property: "cardScale"; to: 0.94; duration: overlay.model.settings.animations?140:0; easing.type: Easing.InCubic }
+        onFinished: { overlay.visible=false; overlay.cardScale=1; password.clear() }
     }
     NumberAnimation { id: shake; target: overlay; property: "shakeProgress"; from: 0; to: 1; duration: overlay.model.settings.animations?220:0; easing.type: Easing.OutQuad; onRunningChanged: if (!running) overlay.shakeProgress=0 }
     Connections {

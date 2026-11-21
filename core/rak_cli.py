@@ -677,12 +677,24 @@ def attach(main):
     return _bridge
 
 
+def _shutdown_native_adb():
+    try:
+        from core import native_backend
+        native_backend.adb_shutdown_servers()
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_native_adb)
+
+
 def detach(main):
 
     global _main_ref
     if _main_ref is main:
         _main_ref = None
         stop_ipc_server()
+        _shutdown_native_adb()
 
 
 def is_attached():
@@ -1834,6 +1846,15 @@ def _dispatch_ipc_command(cmd, cwd=""):
         updated = update_all_agent_files(cwd or os.getcwd())
         return {"ok": True, "msg": f"Agent instructions synchronized ({', '.join(updated)})"}
 
+    if action == "_adb_ensure_server":
+        import shlex
+        tokens = [_cli_unquote(t) for t in shlex.split(rest, posix=False)] if rest else []
+        host = tokens[0] if tokens else "127.0.0.1"
+        port = int(tokens[1]) if len(tokens) > 1 else 5037
+        from core import native_backend
+        native_backend.adb_ensure_server(host, port)
+        return {"ok": True, "msg": "ready"}
+
 
     if action not in ("help", "?", "list", "actions", "mounted", "mounts", "refresh"):
         bases = [getattr(tree, "base", None) for tree in (
@@ -2019,16 +2040,24 @@ def _rak_bat_content(cli_exe=None):
     )
 
 
-def _ensure_user_path_entry(path_entry):
+def _ensure_user_path_entry(path_entry, prepend=False):
 
     normalized = os.path.normcase(os.path.normpath(path_entry))
 
     current = os.environ.get("PATH", "")
     current_entries = [p for p in current.split(os.pathsep) if p]
-    if not any(
-        os.path.normcase(os.path.normpath(os.path.expandvars(p))) == normalized
-        for p in current_entries
-    ):
+    filtered_current = [
+        p for p in current_entries
+        if os.path.normcase(os.path.normpath(os.path.expandvars(p))) != normalized
+    ]
+    if prepend:
+        if (
+            not current_entries
+            or os.path.normcase(os.path.normpath(os.path.expandvars(current_entries[0]))) != normalized
+            or len(filtered_current) != len(current_entries) - 1
+        ):
+            os.environ["PATH"] = os.pathsep.join([path_entry, *filtered_current])
+    elif len(filtered_current) == len(current_entries):
         os.environ["PATH"] = current + (os.pathsep if current else "") + path_entry
 
     if os.name != "nt":
@@ -2048,26 +2077,60 @@ def _ensure_user_path_entry(path_entry):
                 stored_path, value_type = "", winreg.REG_EXPAND_SZ
 
             stored_entries = [p for p in str(stored_path).split(";") if p]
-            exists = any(
-                os.path.normcase(os.path.normpath(os.path.expandvars(p))) == normalized
-                for p in stored_entries
-            )
-            if not exists:
-                new_path = str(stored_path).rstrip(";")
-                new_path += (";" if new_path else "") + path_entry
+            filtered_stored = [
+                p for p in stored_entries
+                if os.path.normcase(os.path.normpath(os.path.expandvars(p))) != normalized
+            ]
+            if prepend:
+                needs_update = (
+                    not stored_entries
+                    or os.path.normcase(os.path.normpath(os.path.expandvars(stored_entries[0]))) != normalized
+                    or len(filtered_stored) != len(stored_entries) - 1
+                )
+                new_path = ";".join([path_entry, *filtered_stored])
+            else:
+                needs_update = len(filtered_stored) == len(stored_entries)
+                new_path = ";".join([*stored_entries, path_entry])
+            if needs_update:
                 winreg.SetValueEx(key, "Path", 0, value_type, new_path)
 
-        # Tell Explorer/new processes that the User environment changed.
-        import ctypes
-        result = ctypes.c_ulong()
-        ctypes.windll.user32.SendMessageTimeoutW(
-            0xFFFF, 0x001A, 0, "Environment", 0x0002, 2000,
-            ctypes.byref(result),
-        )
+                # Tell Explorer/new processes that the User environment changed.
+                import ctypes
+                result = ctypes.c_ulong()
+                ctypes.windll.user32.SendMessageTimeoutW(
+                    0xFFFF, 0x001A, 0, "Environment", 0x0002, 2000,
+                    ctypes.byref(result),
+                )
     except Exception as e:
 
 
         print(f"[RAK_CLI] PATH launcher registration skipped: {e}")
+
+
+def _write_if_changed(path, content):
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            if f.read() == content:
+                return
+    except OSError:
+        pass
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(content)
+
+
+def _native_shim_content(cli_exe, tool):
+    if cli_exe:
+        return (
+            "@echo off\r\n"
+            f'"{cli_exe}" --rak-cli {tool} %*\r\n'
+            "exit /b %ERRORLEVEL%\r\n"
+        )
+    return (
+        "@echo off\r\n"
+        f'set "PYTHONPATH={_proj_root};%PYTHONPATH%"\r\n'
+        f'"{sys.executable}" "{os.path.join(_this_dir, "rak_cli.py")}" {tool} %*\r\n'
+        "exit /b %ERRORLEVEL%\r\n"
+    )
 
 
 def ensure_rak_bat():
@@ -2080,8 +2143,7 @@ def ensure_rak_bat():
     local_dir = os.path.dirname(os.path.abspath(sys.executable)) if cli_exe else _proj_root
     local_bat = os.path.join(local_dir, "rak.bat")
     try:
-        with open(local_bat, "w", encoding="utf-8") as f:
-            f.write(bat_content)
+        _write_if_changed(local_bat, bat_content)
     except Exception:
         pass
 
@@ -2091,11 +2153,23 @@ def ensure_rak_bat():
     os.makedirs(bin_dir, exist_ok=True)
     bin_bat = os.path.join(bin_dir, "rak.bat")
     try:
-        with open(bin_bat, "w", encoding="utf-8") as f:
-            f.write(bat_content)
+        _write_if_changed(bin_bat, bat_content)
         _ensure_user_path_entry(bin_dir)
     except Exception as e:
         print(f"[RAK_CLI] Gagal membuat launcher rak: {e}")
+
+    # 3. Native platform-tools shims so bare `adb`, `fastboot`, `sqlite3`, etc.
+    # in RAK Terminal or shells always route to rak_native ahead of legacy .exe files.
+    try:
+        from core.native_tools import NATIVE_PLATFORM_TOOLS
+        native_cli_dir = os.path.join(bin_dir, "native_cli")
+        os.makedirs(native_cli_dir, exist_ok=True)
+        for tool in NATIVE_PLATFORM_TOOLS:
+            shim_path = os.path.join(native_cli_dir, f"{tool}.cmd")
+            _write_if_changed(shim_path, _native_shim_content(cli_exe, tool))
+        _ensure_user_path_entry(native_cli_dir, prepend=True)
+    except Exception as e:
+        print(f"[RAK_CLI] Gagal membuat shim native_cli: {e}")
 
 
 def _print_cli_response(response, origin='GUI'):
@@ -2247,6 +2321,63 @@ def _main_cli():
         ok, msg = _execute_compare_command(args[1:], cwd=os.getcwd())
         print(msg, file=sys.stdout if ok else sys.stderr)
         sys.exit(0 if ok else 1)
+
+    from core.native_tools import NATIVE_PLATFORM_TOOLS
+    if first in NATIVE_PLATFORM_TOOLS or first in ("platform-tools", "platform_tools"):
+        from core import native_backend
+        if first in ("platform-tools", "platform_tools"):
+            if len(args) == 1 or args[1].lower() in ("version", "--version", "-v"):
+                ver = native_backend.platform_tools_version()
+                print(json.dumps(ver, ensure_ascii=False))
+                sys.exit(0)
+            tool = args[1].lower()
+            if tool not in NATIVE_PLATFORM_TOOLS:
+                print(
+                    f"[RAK_CLI] Unknown platform-tools command: {args[1]} "
+                    f"(available: {', '.join(NATIVE_PLATFORM_TOOLS)})",
+                    file=sys.stderr,
+                )
+                sys.exit(2)
+            tool_args = args[2:]
+        else:
+            tool = first
+            tool_args = args[1:]
+
+        if tool == "adb":
+            i = 0
+            host = "127.0.0.1"
+            port = 5037
+            subcmd = ""
+            while i < len(tool_args):
+                tok = tool_args[i]
+                if tok in ("-s", "-t", "-H", "-P", "-L"):
+                    if i + 1 < len(tool_args):
+                        if tok == "-H":
+                            host = tool_args[i + 1]
+                        elif tok == "-P":
+                            try:
+                                port = int(tool_args[i + 1])
+                            except ValueError:
+                                pass
+                        i += 2
+                        continue
+                if tok in ("-d", "-e", "-a"):
+                    i += 1
+                    continue
+                subcmd = tok.lower()
+                break
+            no_server_cmds = {
+                "", "version", "--version", "help", "--help", "-h",
+                "keygen", "kill-server", "start-server", "server", "nodaemon",
+            }
+            if subcmd not in no_server_cmds:
+                try:
+                    _call_ipc_server(f"_adb_ensure_server {host} {port}", os.getcwd())
+                except Exception:
+                    pass
+
+        rc = native_backend.platform_tool_run_stdio(tool, tool_args)
+        sys.exit(int(rc))
 
     # Fast-path: Virtual In-Image (VFS) operations run directly in pure Python
     if first in ("img", "vfs", "image"):

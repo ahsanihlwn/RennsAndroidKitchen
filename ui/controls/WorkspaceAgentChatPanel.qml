@@ -26,7 +26,7 @@ Item {
     function scrollToEnd() {
         conversation.forceLayout()
         conversation.positionViewAtEnd()
-        conversation.contentY=Math.max(conversation.originY,conversation.originY+conversation.contentHeight-conversation.height+conversation.bottomMargin)
+        conversation.contentY=Math.max(conversation.originY-conversation.topMargin,conversation.originY+conversation.contentHeight-conversation.height+conversation.bottomMargin)
     }
     function tail() {if(followTail)Qt.callLater(()=>{if(followTail)scrollToEnd()})}
     function latest() {followTail=true;scrollToEnd()}
@@ -43,22 +43,165 @@ Item {
     SmoothRectangle { anchors.fill: parent; radius: 12; color: panel.c.BG3; border.width: 1; border.color: panel.c.b08 }
     Item {
         id: header; x: 18; y: 10; width: parent.width-36; height: 32
-        RakLabel { anchors.verticalCenter: parent.verticalCenter; text: panel.tr.assistant; font.pixelSize: 12; font.weight: Font.Medium; color: panel.c.FG2 }
-        AgentChatHistoryPicker {
-            id: historyMenu
-            objectName: "agentChatHistory"
+        Row {
+            anchors.left: parent.left; anchors.verticalCenter: parent.verticalCenter
+            spacing: 6
+            RakLabel {
+                anchors.verticalCenter: parent.verticalCenter
+                text: panel.tr.assistant
+                font.pixelSize: 12
+                font.weight: Font.Medium
+                color: panel.c.FG2
+            }
+            AgentChatChoice {
+                id: backendPicker
+                objectName: "agentChatBackend"
+                anchors.verticalCenter: parent.verticalCenter
+                height: 24
+                font.pixelSize: 11
+                colors: panel.c
+                popupBoundsItem: panel
+                text: panel.providerName
+                choices: chat.providers.map(p=>({key:p.id,label:p.label}))
+                currentKey: chat.provider
+                enabled: !chat.running
+                onChosen: key=>chat.selectProvider(key)
+                toolTip: panel.tr.choose_agent
+            }
+            AgentLimitMeter {
+                id: limitMeter
+                objectName: "agentChatLimitMeter"
+                anchors.verticalCenter: parent.verticalCenter
+                chat: panel.chat
+                preferences: panel.preferences
+                panelItem: panel
+            }
+        }
+        Row {
             anchors.right: parent.right; anchors.verticalCenter: parent.verticalCenter
-            chat: panel.chat
-            preferences: panel.preferences
-            panelItem: panel
-            onNewConversationRequested: composer.forceActiveFocus()
+            spacing: 6
+
+            // Mode toggle button (Plan / Build)
+            RakButton {
+                id: modeToggleBtn
+                objectName: "agentChatModeToggle"
+                visible: panel.chat.modes.length > 0
+                width: 24; height: 26; cornerRadius: 7; edgeWidth: 0
+                leftPadding: 4; rightPadding: 4
+                fillColor: "transparent"; hoverFillColor: panel.c.b06; downFillColor: panel.c.b09
+                disabledFillColor: "transparent"
+                enabled: !panel.chat.busy
+                readonly property bool animsEnabled: panel.preferences && panel.preferences.settings ? panel.preferences.settings.animations : true
+                readonly property string currentMode: panel.chat.mode || (panel.chat.modes[0] ? panel.chat.modes[0].id : "build")
+                readonly property bool isPlan: currentMode.toLowerCase().indexOf("plan") !== -1
+                readonly property color iconColor: modeToggleBtn.visualHovered ? panel.c.FG : panel.c.FG_MUTED
+                toolTip: isPlan ? "Mode: Plan (Klik untuk ganti ke Build)" : "Mode: Build (Klik untuk ganti ke Plan)"
+
+                onClicked: {
+                    if (panel.chat.modes.length < 2) return
+                    var cur = modeToggleBtn.currentMode
+                    var next = null
+                    for (var i = 0; i < panel.chat.modes.length; i++) {
+                        if (panel.chat.modes[i].id !== cur) {
+                            next = panel.chat.modes[i]
+                            break
+                        }
+                    }
+                    if (next) panel.chat.selectMode(next.id)
+                }
+
+                contentItem: Item {
+                    anchors.centerIn: parent
+                    width: 14; height: 14
+
+                    // Plan Icon (Document with checklist lines)
+                    Item {
+                        id: planIcon
+                        anchors.centerIn: parent
+                        width: 14; height: 14
+                        opacity: modeToggleBtn.isPlan ? 1.0 : 0.0
+                        scale: modeToggleBtn.isPlan ? 1.0 : 0.5
+                        visible: opacity > 0.01
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: modeToggleBtn.animsEnabled ? 180 : 0; easing.type: Easing.OutCubic }
+                        }
+                        Behavior on scale {
+                            NumberAnimation { duration: modeToggleBtn.animsEnabled ? 200 : 0; easing.type: Easing.OutCubic }
+                        }
+
+                        Rectangle {
+                            anchors.centerIn: parent
+                            width: 11; height: 13; radius: 1.8
+                            color: "transparent"; border.width: 1.3; border.color: modeToggleBtn.iconColor
+                            Rectangle { anchors.horizontalCenter: parent.horizontalCenter; y: -1.3; width: 4.5; height: 2.2; radius: 0.8; color: modeToggleBtn.iconColor }
+                            Rectangle { x: 2.2; y: 3.5; width: 6.5; height: 1.1; radius: 0.5; color: modeToggleBtn.iconColor }
+                            Rectangle { x: 2.2; y: 6.2; width: 6.5; height: 1.1; radius: 0.5; color: modeToggleBtn.iconColor }
+                            Rectangle { x: 2.2; y: 8.9; width: 4.0; height: 1.1; radius: 0.5; color: modeToggleBtn.iconColor }
+                        }
+                    }
+
+                    // Build (Hammer / Palu) Icon
+                    Item {
+                        id: buildIcon
+                        anchors.centerIn: parent
+                        width: 14; height: 14
+                        opacity: !modeToggleBtn.isPlan ? 1.0 : 0.0
+                        scale: !modeToggleBtn.isPlan ? 1.0 : 0.5
+                        visible: opacity > 0.01
+
+                        Behavior on opacity {
+                            NumberAnimation { duration: modeToggleBtn.animsEnabled ? 180 : 0; easing.type: Easing.OutCubic }
+                        }
+                        Behavior on scale {
+                            NumberAnimation { duration: modeToggleBtn.animsEnabled ? 200 : 0; easing.type: Easing.OutCubic }
+                        }
+
+                        Item {
+                            anchors.centerIn: parent
+                            width: 14; height: 14
+                            rotation: -42
+
+                            // Head
+                            Rectangle {
+                                x: 2; y: 1.6; width: 10; height: 3.0; radius: 0.9
+                                color: modeToggleBtn.iconColor
+                            }
+                            // Striking face
+                            Rectangle {
+                                x: 10.8; y: 1.0; width: 1.5; height: 4.2; radius: 0.6
+                                color: modeToggleBtn.iconColor
+                            }
+                            // Claw notch / peen
+                            Rectangle {
+                                x: 0.8; y: 2.2; width: 1.8; height: 2.4; radius: 0.5
+                                color: modeToggleBtn.iconColor
+                            }
+                            // Handle
+                            Rectangle {
+                                x: 6.1; y: 4.4; width: 1.8; height: 8.4; radius: 0.8
+                                color: modeToggleBtn.iconColor
+                            }
+                        }
+                    }
+                }
+            }
+
+            AgentChatHistoryPicker {
+                id: historyMenu
+                objectName: "agentChatHistory"
+                chat: panel.chat
+                preferences: panel.preferences
+                panelItem: panel
+                onNewConversationRequested: composer.forceActiveFocus()
+            }
         }
     }
     ListView {
         id: conversation; objectName: "agentChatMessages"
-        x: 18; y: 51; width: parent.width-36; height: Math.max(0,requestCard.y-y-18)
+        x: 18; y: 50; width: parent.width-36; height: Math.max(0,requestCard.y-y-18)
         model: chat.messages; clip: true; spacing: 10; boundsBehavior: Flickable.StopAtBounds
-        bottomMargin: 10
+        topMargin: 16; bottomMargin: 10
         onMovementStarted: panel.followTail=false
         onContentYChanged: if(moving || scrollBar.pressed)panel.followTail=atYEnd
         onMovementEnded: panel.followTail=atYEnd
@@ -116,15 +259,48 @@ Item {
             SmoothRectangle { x: body.x-12; y: 0; width: body.width+24; height: message.height; visible: message.user; radius: 13; color: panel.c.b04; border.width: 1; border.color: panel.c.b06 }
             Column {
                 id: body; width: message.user ? message.userContentWidth : message.width; x: message.user ? (message.width - width - 12) : 0; y: message.user ? 11 : 3; spacing: 8
-                RakLabel { visible: message.problem; width: parent.width; text: message.modelData.title || ""; font.pixelSize: 13; font.weight: Font.Medium; color: panel.c.FG_BRIGHT }
+                RakLabel { visible: message.problem; width: parent.width; text: (message.modelData && message.modelData.title) || ""; font.pixelSize: 13; font.weight: Font.DemiBold; color: (message.modelData && message.modelData.is_model_error) ? (panel.c.RED_STATUS || "#f87171") : panel.c.FG_BRIGHT }
                 C.TextArea {
-                    objectName: "agentChatMessageText"; visible: !message.activity && !message.problem && !message.status && !!message.modelData.text; width: parent.width; height: visible?implicitHeight:0; padding: 0
-                    text: message.modelData.text; textFormat: message.modelData.role==="assistant"?TextEdit.MarkdownText:TextEdit.PlainText
+                    objectName: "agentChatMessageText"; visible: !message.activity && !message.problem && !message.status && !!(message.modelData && message.modelData.text); width: parent.width; height: visible?implicitHeight:0; padding: 0
+                    text: (message.modelData && message.modelData.text) || ""; textFormat: TextEdit.MarkdownText
                     readOnly: true; selectByMouse: true; wrapMode: TextEdit.Wrap; font.family: "Poppins"; font.pixelSize: 13; color: panel.c.FG
                     selectionColor: panel.c.a40; selectedTextColor: panel.c.FG_BRIGHT; background: null
                 }
-                RakLabel { visible: message.problem; width: parent.width; text: message.modelData.body || ""; color: panel.c.FG; font.pixelSize: 12; wrapMode: Text.WordWrap }
-                RakLabel { visible: message.problem; width: parent.width; text: message.modelData.next || ""; color: panel.c.FG_MUTED; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                SmoothRectangle {
+                    visible: message.problem && !!(message.modelData && message.modelData.body)
+                    width: parent.width
+                    height: problemBodyText.implicitHeight + 16
+                    radius: 7
+                    color: panel.c.b04 || "#1a1b26"
+                    border.width: 1
+                    border.color: (message.modelData && message.modelData.is_model_error) ? (panel.c.red22 || "#451c1d") : panel.c.b10
+                    C.TextArea {
+                        id: problemBodyText
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        text: (message.modelData && message.modelData.body) || ""
+                        readOnly: true
+                        selectByMouse: true
+                        wrapMode: TextEdit.Wrap
+                        font.family: "Consolas"
+                        font.pixelSize: 11
+                        color: (message.modelData && message.modelData.is_model_error) ? (panel.c.RED_STATUS || "#f87171") : panel.c.FG
+                        background: null
+                        padding: 0
+                    }
+                }
+                RakLabel { visible: message.problem && !!(message.modelData && message.modelData.next); width: parent.width; text: (message.modelData && message.modelData.next) || ""; color: panel.c.FG_MUTED; font.pixelSize: 11; wrapMode: Text.WordWrap }
+                Row {
+                    visible: message.problem && !!(message.modelData && message.modelData.is_model_error)
+                    spacing: 8
+                    ActionButton {
+                        colors: panel.c
+                        text: panel.tr.switch_to_automatic || "Beralih ke Otomatis"
+                        height: 25
+                        font.pixelSize: 11
+                        onClicked: chat.resetModelToAutomatic()
+                    }
+                }
                 RakLabel { objectName: "agentChatWorkStatus"; visible: message.status; width: parent.width; text: message.modelData.title || ""; font.pixelSize: 11; color: panel.c.FG_MUTED; elide: Text.ElideRight }
                 RakButton { id: activityButton; visible: message.activity
                     objectName: message.thought ? (message.modelData.thinking ? "agentChatThinking" : "agentChatThought") : message.activity ? ("agentChatTool_" + message.modelData.key) : ""
@@ -426,8 +602,7 @@ Item {
     SmoothRectangle {
         id: composerBox; objectName: "agentChatComposerBox"; x: 14; y: parent.height-height-14; width: parent.width-28
         readonly property bool stacked: width<310
-        readonly property bool settingsVisible: chat.modes.length>0
-        height: footer.y+footer.height+9+(settingsVisible?27:0)+(inputError.visible?inputError.implicitHeight+12:0)+(catalogHint.visible?catalogHint.height+10:0)
+        height: footer.y+footer.height+9+(inputError.visible?inputError.implicitHeight+12:0)+(catalogHint.visible?catalogHint.height+10:0)
         radius: 18; color: panel.c.b03; border.width: 1; border.color: composer.activeFocus?panel.c.b20:panel.c.b09
         ListView {
             id: attachmentStrip; objectName: "agentChatAttachmentStrip"; x: 12; y: 10; width: parent.width-24; height: count?66:0
@@ -439,39 +614,58 @@ Item {
         C.ScrollView { id: inputScroll; x: 8; y: 12+attachmentStrip.height; width: parent.width-16; height: Math.max(43,Math.min(120,composer.contentHeight+8)); clip: true
             C.TextArea { id: composer; objectName: "agentChatComposer"; text: chat.draft; onTextChanged: chat.setDraft(text)
                 placeholderText: panel.tr.placeholder; placeholderTextColor: panel.c.FG_MUTED; textFormat: TextEdit.PlainText; wrapMode: TextEdit.Wrap; selectByMouse: true; font.family: "Poppins"; font.pixelSize: 12; color: panel.c.FG; padding: 5; background: null
+                Keys.priority: Keys.BeforeItem
                 Keys.onPressed: event=>{if((event.key===Qt.Key_V && (event.modifiers & Qt.ControlModifier)) || (event.key===Qt.Key_Insert && (event.modifiers & Qt.ShiftModifier)))event.accepted=chat.pasteAttachments()}
-                Keys.onReturnPressed: event=>{
+                function handleReturn(event) {
                     if(panel.request.id && panel.request.type==="approval"){
                         var yesChoice=(panel.approvalChoices || []).find(c=>c.kind==="yes");
                         if(yesChoice && yesChoice.id){chat.answer(panel.request.id,yesChoice.id,{});event.accepted=true;return}
                     }
-                    if(event.modifiers & Qt.ShiftModifier)event.accepted=false;else {panel.sendMessage();event.accepted=true}
+                    if(event.modifiers & Qt.ShiftModifier){
+                        event.accepted=false
+                    } else {
+                        panel.sendMessage()
+                        event.accepted=true
+                    }
                 }
+                Keys.onReturnPressed: event => handleReturn(event)
+                Keys.onEnterPressed: event => handleReturn(event)
             }
         }
         Item {
-            id: footer; x: 8; y: inputScroll.y+inputScroll.height+5; width: parent.width-16; height: composerBox.stacked?62:32
+            id: footer; x: 8; y: inputScroll.y+inputScroll.height+5; width: parent.width-16; height: 32
             AgentChatChoice { id: attachmentMenu; objectName: "agentChatAttach"; x: 0; y: 2; width: 24; height: 28; text: "+"; showArrow: false; font.pixelSize: 18; colors: panel.c; toolTip: panel.tr.attachments; popupBoundsItem: panel
                 choices: [{key:"selection",label:panel.tr.add_selection},{key:"files",label:panel.tr.add_files},{key:"folder",label:panel.tr.add_folder},{key:"clear",label:panel.tr.clear}]
                 onChosen: key=>{attachmentMenu.previewCaption=null;if(key==="selection")chat.refreshAttachments();else if(key==="files")attachmentFiles.open();else if(key==="folder")attachmentFolder.open();else chat.clearAttachments()}
             }
-            AgentChatChoice { id: backendPicker; objectName: "agentChatBackend"; x: 27; y: 3; width: Math.min(94,footer.width-100); colors: panel.c
-                text: panel.providerName; choices: chat.providers.map(p=>({key:p.id,label:p.label})); currentKey: chat.provider; enabled: !chat.running; onChosen: key=>chat.selectProvider(key); toolTip: panel.tr.choose_agent
+            AgentModelPicker {
+                id: modelPicker
+                objectName: "agentChatModel"
+                x: 28; y: 3
+                width: Math.min(implicitWidth, Math.max(40, permissionPicker.x - x - 6))
+                chat: panel.chat
+                preferences: panel.preferences
+                popupBoundsItem: panel
             }
-            AgentModelPicker { id: modelPicker; objectName: "agentChatModel"; x: composerBox.stacked?27:backendPicker.x+backendPicker.width+3; y: composerBox.stacked?33:3; width: composerBox.stacked?footer.width-35:Math.max(30,sendButton.x-x-5); chat: panel.chat; preferences: panel.preferences
+            AgentPermissionChoice {
+                id: permissionPicker
+                objectName: "agentChatPermission"
+                anchors.right: sendButton.left
+                anchors.rightMargin: 6
+                anchors.verticalCenter: parent.verticalCenter
+                chat: panel.chat
+                preferences: panel.preferences
+                popupBoundsItem: panel
             }
             RakButton { id: sendButton; objectName: "agentChatSend"; x: parent.width-width; y: 0; width: 32; height: 32; cornerRadius: 16; leftPadding: 0; rightPadding: 0; edgeWidth: 0
                 fillColor: panel.c.FG; hoverFillColor: panel.c.FG_BRIGHT; disabledFillColor: panel.c.b06
                 iconSource: "image://rak/"+(chat.running?"chat_stop":"chat_arrow_up")+"?color="+encodeURIComponent(enabled?panel.c.BG:panel.c.FG_MUTED); iconWidth: 19; iconHeight: 19
                 enabled: chat.running || ((!chat.busy || chat.state==="connecting") && (composer.text.trim().length>0 || chat.attachments.length>0))
-                toolTip: chat.state==="stopping"?panel.tr.force_stop:chat.running?(chat.provider==="agy"?panel.tr.stop_after:panel.tr.stop):panel.tr.send
+                toolTip: chat.state==="stopping"?panel.tr.force_stop:chat.running?(chat.provider==="agy"?panel.tr.stop_after:panel.tr.stop):(panel.tr.send + " (Enter)")
                 onClicked: {if(chat.running)chat.stop();else panel.sendMessage()}
             }
         }
-        AgentChatChoice { id: modePicker; objectName: "agentChatMode"; visible: chat.modes.length>0; x: 10; y: footer.y+footer.height+3; width: Math.min(130,parent.width-20); colors: panel.c
-            text: (chat.modes.find(m=>m.id===chat.mode)||{}).label || chat.mode; choices: chat.modes.map(m=>({key:m.id,label:m.label})); currentKey: chat.mode; enabled: !chat.busy; onChosen: key=>chat.selectMode(key)
-        }
-        RakLabel { id: inputError; x: 13; y: footer.y+footer.height+7+(composerBox.settingsVisible?27:0); width: parent.width-26; visible: !!chat.error && chat.state!=="failed"; text: visible?chat.error:""; color: panel.c.RED_STATUS; font.pixelSize: 10; wrapMode: Text.WordWrap }
+        RakLabel { id: inputError; x: 13; y: footer.y+footer.height+7; width: parent.width-26; visible: !!chat.error && chat.state!=="failed"; text: visible?chat.error:""; color: panel.c.RED_STATUS; font.pixelSize: 10; wrapMode: Text.WordWrap }
         Column { id: catalogHint; objectName: "agentChatModelWarning"; visible: !!chat.modelCatalogError; x: 13; y: inputError.y+(inputError.visible?inputError.implicitHeight+8:0); width: parent.width-26; spacing: 4
             RakLabel { width: parent.width; text: chat.modelCatalogError; color: panel.c.FG_MUTED; font.pixelSize: 10; wrapMode: Text.WordWrap }
             Row { spacing: 5
@@ -503,5 +697,19 @@ Item {
     }
     SmoothRectangle { visible: fileDrop.containsDrag; anchors.fill: composerBox; z: 5; radius: 18; color: panel.c.BG2; border.width: 1; border.color: panel.c.accent_hex
         RakLabel { anchors.centerIn: parent; width: parent.width-24; text: panel.tr.drop_files; horizontalAlignment: Text.AlignHCenter; font.pixelSize: 12; color: panel.c.FG; wrapMode: Text.WordWrap }
+    }
+    // Soft gradient fade at top of message list to smoothly dissolve scrolled content into header
+    Item {
+        x: conversation.x; y: conversation.y; width: conversation.width; height: 16
+        z: 3; enabled: false
+        opacity: !conversation.atYBeginning ? 1.0 : 0.0
+        Behavior on opacity { enabled: !!(panel.preferences && panel.preferences.settings && panel.preferences.settings.animations); NumberAnimation { duration: (panel.preferences && panel.preferences.settings && panel.preferences.settings.animations) ? 140 : 0; easing.type: Easing.OutCubic } }
+        Rectangle {
+            anchors.fill: parent
+            gradient: Gradient {
+                GradientStop { position: 0.0; color: panel.c.BG3 }
+                GradientStop { position: 1.0; color: "transparent" }
+            }
+        }
     }
 }

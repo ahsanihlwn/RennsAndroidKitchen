@@ -23,11 +23,10 @@ INCLUDE_MODULES = [
     "main", "core.neocat_load", "core.error_reporting", "services.service_main", "core.rak_cli",
     "multiprocessing", "multiprocessing.spawn", "multiprocessing.popen_spawn_win32",
     "multiprocessing.context", "multiprocessing.resource_tracker", "multiprocessing.connection",
-    "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineCore", "PySide6.QtWebChannel",
     "PySide6.QtNetwork", "PySide6.QtWebSockets", "PySide6.QtMultimedia",
     "PySide6.QtMultimediaWidgets", "PySide6.QtSvg", "PySide6.QtSvgWidgets",
     "PySide6.QtOpenGL", "PySide6.QtOpenGLWidgets", "PySide6.QtQuick",
-    "PySide6.QtQml", "PySide6.QtQuickControls2", "PySide6.QtWebEngineQuick",
+    "PySide6.QtQml", "PySide6.QtQuickControls2",
     "skia",
 ]
 THIRD_PARTY_PACKAGES = [
@@ -40,16 +39,27 @@ NUITKA_EXCLUDES = [
     "thrift", "mmh3", "pyroaring", "google.genai", "google.generativeai",
     "rennsproject.build_config", "rennsproject.requirements",
     "rennsproject.updater",
+    "PySide6.QtWebEngineWidgets", "PySide6.QtWebEngineCore", "PySide6.QtWebEngineQuick", "PySide6.QtWebChannel",
 ]
 ASSET_DIRS = [
     "icons", "textures", "learning_contexts", "fonts",
     "core/flashable_assets", "app_ext/dependency_registry", "licenses",
 ]
-TERMINAL_ASSETS = [
-    "terminal.html", "xterm.css", "xterm.js", "xterm-addon-fit.js",
-    "xterm-addon-web-links.js", "qwebchannel.js", "marked.min.js",
+TERMINAL_NATIVE_LIBS = ["termcore.dll"] if sys.platform == "win32" else []
+LICENSE_FILES = [
+    "LICENSE",
+    "NOTICE",
+    "core/lpunpack/LICENSE",
+    "core/ext_cli/LICENSE",
+    "core/make_ext4fs/LICENSE",
+    "core/make_ext4fs/NOTICE",
+    "core/pac_extractor/LICENSE",
+    "core/magiskboot/LICENSE",
+    "core/erofs_rs/LICENSE",
+    "core/erofs_rs/NOTICE",
+    "core/sdatimg/LICENSE",
+    "core/brotli_rs/LICENSE",
 ]
-LICENSE_FILES = ["LICENSE", "NOTICE", "core/img2sdat/LICENSE", "core/sdat2img/LICENSE"]
 
 
 def release_name(edition):
@@ -77,10 +87,10 @@ def embedded_asset_entries(private_build):
         if not source.is_dir():
             raise FileNotFoundError(f"Missing build asset: {source}")
         yield source, relative
-    for filename in TERMINAL_ASSETS:
+    for filename in TERMINAL_NATIVE_LIBS:
         source = ROOT / "core" / filename
         if not source.is_file():
-            raise FileNotFoundError(f"Missing terminal asset: {source}")
+            raise FileNotFoundError(f"Missing terminal native library: {source}")
         yield source, f"core/{filename}"
     for relative in LICENSE_FILES:
         source = ROOT / relative
@@ -97,6 +107,13 @@ def embedded_asset_entries(private_build):
                 ".png", ".jpg", ".jpeg", ".webp", ".svg", ".ico", ".json",
             ):
                 yield source, f"rennsproject/avatar/{source.name}"
+        avatar_assets = avatar / "assets"
+        if avatar_assets.is_dir():
+            for source in sorted(avatar_assets.iterdir()):
+                if source.is_file() and source.suffix.lower() in (
+                    ".png", ".jpg", ".jpeg", ".webp", ".svg", ".ico",
+                ):
+                    yield source, f"rennsproject/avatar/assets/{source.name}"
 
 
 def nuitka_command(output, *, private_build, debug, jobs):

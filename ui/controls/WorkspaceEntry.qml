@@ -11,11 +11,13 @@ Item {
     readonly property bool empty: !!d.empty
     property int depth: 0
     property bool treeMode: false
+    property bool settled: true
+    readonly property int layoutWidth: Math.floor(width)
     readonly property var c: preferences.colors
     readonly property var entryState: d.presentation || null
     readonly property string thumbnail: (entryState?entryState.thumbnailUrl:d.thumbnailUrl) || ""
     readonly property var layout: workspace.entryLayout(d.name || "",d.sizeLabel || "",d.badge || "",!!d.symlinkExists,
-                                                        d.branchColor || "",Math.floor(width),38+(treeMode?depth*20+5:0))
+                                                        d.branchColor || "",layoutWidth,38+(treeMode?depth*20+5:0))
     readonly property var chipColors: workspace.badgeColors(d.badge || "",c)
     readonly property var branchColors: ({red:"#e05555",blue:"#4d8ef0",yellow:"#f0c040",green:"#4db860",orange:"#f08030",purple:"#9060d0",pink:"#e070a0"})
     clip: true
@@ -32,8 +34,8 @@ Item {
         SmoothRectangle { visible: entry.depth>0; x: (entry.depth-1)*20+10; y: 0; width: 1; height: (entry.entryState?entry.entryState.lastSibling:entry.d.lastSibling)?14:28; color: entry.c.b18 }
         SmoothRectangle { visible: entry.depth>0; x: (entry.depth-1)*20+10; y: 14; width: 10; height: 1; color: entry.c.b18 }
     }
-    Image { objectName: "treeEntryIcon"; x: treeMode?16+depth*20:15; y: 4; width: 20; height: 20; visible: !entry.empty && !entry.thumbnail.length; source: entry.empty?"":workspace.fileIconUrl(d.iconKey || 'file',preferences.paletteName); sourceSize: Qt.size(48,48); fillMode: Image.PreserveAspectFit; smooth: true; asynchronous: true }
-    Image { x: treeMode?16+depth*20:15; y: 4; width: 20; height: 20; visible: !!entry.thumbnail.length; source: entry.thumbnail; sourceSize: Qt.size(48,48); fillMode: Image.PreserveAspectFit; smooth: true; asynchronous: false }
+    Image { objectName: "treeEntryIcon"; x: treeMode?16+depth*20:15; y: 4; width: 20; height: 20; visible: !entry.empty && !entry.thumbnail.length; source: entry.empty?"":workspace.fileIconUrl(d.iconKey || 'file',preferences.paletteName); sourceSize: Qt.size(28,28); fillMode: Image.PreserveAspectFit; smooth: true; asynchronous: true; cache: true }
+    Image { x: treeMode?16+depth*20:15; y: 4; width: 20; height: 20; visible: !!entry.thumbnail.length; source: entry.thumbnail; sourceSize: Qt.size(28,28); fillMode: Image.PreserveAspectFit; smooth: true; asynchronous: true; cache: true }
     RakLabel { objectName: "treeEntryName"; x: entry.layout.textX; y: 1; height: 28; text: entry.layout.text; color: entry.empty?Qt.rgba(200/255,200/255,200/255,130/255):c.FG; font.pixelSize: 13; font.italic: entry.empty; verticalAlignment: Text.AlignVCenter }
     RakLabel { x: entry.layout.sizeX; y: 0; height: 28; width: entry.layout.sizeWidth; text: entry.d.sizeLabel || ""; color: c.FG3; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter }
     SmoothRectangle {

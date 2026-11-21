@@ -1,0 +1,12 @@
+[package]
+name = "termcore"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+alacritty_terminal = "0.25"
+portable-pty = "0.9"
+regex = "1"

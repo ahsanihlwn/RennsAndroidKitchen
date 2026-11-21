@@ -31,6 +31,14 @@ def main():
 
     app = QApplication([])
     app.setQuitOnLastWindowClosed(False)
+
+    def safe_qwait(ms):
+        deadline = time.monotonic() + (ms / 1000.0)
+        while time.monotonic() < deadline:
+            app.processEvents()
+            time.sleep(0.01)
+
+    QTest.qWait = safe_qwait
     apply_app_font(app,polish_widgets=False)
     diagnostics = []
     with tempfile.TemporaryDirectory(prefix="rak-quick-integration-") as temporary:
@@ -100,12 +108,13 @@ def main():
                 deadline = time.monotonic() + timeout
                 while not predicate():
                     if time.monotonic() >= deadline:
-                        message=window.findChild(QObject,"launcherMessage")
-                        raise AssertionError(("Timed out waiting for production launcher handoff",{
-                            'page':runtime.model.page,'busy':runtime.model.busy,'windowVisible':window.isVisible(),
-                            'message':{key:message.property(key) for key in ('visible','opacity','presented','active')},
-                            'diagnostics':diagnostics}))
-                    QTest.qWait(50)
+                        message = window.findChild(QObject, "launcherMessage")
+                        raise AssertionError(("Timed out waiting for production launcher handoff", {
+                            'page': runtime.model.page, 'busy': runtime.model.busy, 'windowVisible': window.isVisible(),
+                            'message': {key: message.property(key) for key in ('visible', 'opacity', 'presented', 'active')} if message else {},
+                            'diagnostics': diagnostics}))
+                    app.processEvents()
+                    time.sleep(0.02)
 
             try:
                 runtime.model.choosePalette("dark_green")

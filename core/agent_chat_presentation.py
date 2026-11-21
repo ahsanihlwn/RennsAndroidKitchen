@@ -5,7 +5,7 @@ import json
 
 LABELS={
  'en':{
-  'assistant':'Agent','you':'You','new':'New chat','new_conversation':'New conversation','no_history':'No conversations yet','history':'History','close':'Close','more':'Options',
+  'assistant':'Agent','you':'You','new':'New chat','new_conversation':'New conversation','no_history':'No conversations yet','history':'History','delete':'Delete','close':'Close','more':'Options',
   'workspace_session_reset':'Working folder: {path}. A fresh backend session is used to avoid inheriting another workspace; earlier messages remain in history.',
   'welcome':'What would you like to do?','welcome_body':'Ask a question, or select a file and ask for help.',
   'example':'Explain the selected file','placeholder':'Ask anything, or type / for commands','send':'Send','stop':'Stop','latest':'Jump to latest message',
@@ -31,10 +31,13 @@ LABELS={
   'empty_next':'You can send another message or choose another assistant below.',
   'failed_body':'The assistant could not finish this request. Open the details to see what happened.',
   'failed_next':'Check the selected assistant and model before sending another message.',
+  'model_error_title':'Model Configuration Error',
+  'model_error_next':'Check the selected model or thinking level (effort) below, or switch back to Automatic.',
+  'switch_to_automatic':'Switch to Automatic',
   'shortened':'Long output is available in the diagnostic log.',
  },
  'id':{
-  'assistant':'Agent','you':'Kamu','new':'Chat baru','new_conversation':'Percakapan baru','no_history':'Belum ada percakapan','history':'Riwayat','close':'Tutup','more':'Pilihan',
+  'assistant':'Agent','you':'Kamu','new':'Chat baru','new_conversation':'Percakapan baru','no_history':'Belum ada percakapan','history':'Riwayat','delete':'Hapus','close':'Tutup','more':'Pilihan',
   'workspace_session_reset':'Folder kerja: {path}. Sesi backend baru dipakai agar workspace lama tidak ikut terbawa; pesan sebelumnya tetap di riwayat.',
   'welcome':'Mau mengerjakan apa?','welcome_body':'Tanyakan sesuatu, atau pilih file yang ingin dibantu.',
   'example':'Jelaskan file yang dipilih','placeholder':'Tanya apa saja, atau ketik / untuk perintah','send':'Kirim','stop':'Hentikan','latest':'Ke pesan terbaru',
@@ -60,9 +63,47 @@ LABELS={
   'empty_next':'Kamu bisa mengirim pesan lain atau memilih asisten lain di bawah.',
   'failed_body':'Asisten belum bisa menyelesaikan permintaan ini. Buka detail untuk melihat penyebabnya.',
   'failed_next':'Periksa asisten dan model yang dipilih sebelum mengirim pesan lain.',
+  'model_error_title':'Kendala Konfigurasi Model',
+  'model_error_next':'Periksa pilihan model atau level berpikir (effort) di bawah, atau beralih ke Otomatis.',
+  'switch_to_automatic':'Beralih ke Otomatis',
   'shortened':'Output panjang tersedia di log diagnostik.',
  }
 }
+
+
+def is_model_error(text):
+    lowered = str(text).lower()
+    return any(k in lowered for k in (
+        'invalid model', 'not supported for model', '--effort is not supported',
+        'model selection', 'unknown model', 'model not found', 'unsupported model',
+        'model catalog', 'rate limit', 'overloaded', 'quota', 'model error'
+    ))
+
+
+def extract_clean_error(text):
+    if not text: return ''
+    lines = [l.strip() for l in str(text).splitlines() if l.strip()]
+    for line in lines:
+        low = line.lower()
+        if 'error: ' in low:
+            idx = low.find('error: ')
+            return line[idx + 7:].strip()
+        if 'error:' in low:
+            idx = low.find('error:')
+            return line[idx + 6:].strip()
+        for term in ('invalid model', 'not supported for model', '--effort is not supported'):
+            if term in low:
+                idx = low.find(term)
+                return line[idx:].strip()
+    for line in lines:
+        low = line.lower()
+        if any(term in low for term in ('model', 'effort', 'unsupported', 'invalid', 'quota', 'rate limit', 'usage limit', 'limit reached', 'free usage')):
+            if not low.startswith('log:') and not low.startswith('agent exited') and not low.startswith('traceback'):
+                return line
+    useful = [l for l in lines if not l.startswith('Log:') and not l.startswith('Agent exited') and not l.startswith('Traceback')]
+    if useful:
+        return useful[0]
+    return lines[0] if lines else ''
 
 
 def labels(language):return dict(LABELS.get(language,LABELS['en']))
@@ -71,6 +112,7 @@ def labels(language):return dict(LABELS.get(language,LABELS['en']))
 def failure_kind(text):
     lowered=text.lower()
     if any(x in lowered for x in ('permission check failed','denied permission','permission denied','denied_actions')):return 'permission_denied'
+    if is_model_error(lowered):return 'model_error'
     return 'no_reply'
 
 
@@ -116,10 +158,39 @@ def transcript(messages,language='en'):
                 continue
             if r['role']=='system' and r.get('status') in ('completed','failed','interrupted'):continue
             if r['role']=='problem':
-                kind=r.get('failure_kind') or failure_kind(r['text'])
-                result.append({**r,'title':s['no_reply'] if kind in ('permission_denied','no_reply') else s['attention'],
-                    'body':s['permission_body'] if kind=='permission_denied' else s['empty_body'] if kind=='no_reply' else s['failed_body'],
-                    'next':s['permission_next'] if kind=='permission_denied' else s['empty_next'] if kind=='no_reply' else s['failed_next']})
+                raw_text = r.get('text', '')
+                kind = r.get('failure_kind') or failure_kind(raw_text)
+                if kind == 'model_error':
+                    clean_msg = extract_clean_error(raw_text) or raw_text
+                    result.append({
+                        **r,
+                        'title': s.get('model_error_title', s['attention']),
+                        'body': clean_msg,
+                        'next': s.get('model_error_next', s['failed_next']),
+                        'is_model_error': True
+                    })
+                elif kind == 'permission_denied':
+                    result.append({
+                        **r,
+                        'title': s['no_reply'],
+                        'body': s['permission_body'],
+                        'next': s['permission_next']
+                    })
+                elif kind == 'no_reply':
+                    result.append({
+                        **r,
+                        'title': s['no_reply'],
+                        'body': s['empty_body'],
+                        'next': s['empty_next']
+                    })
+                else:
+                    clean_msg = extract_clean_error(raw_text) or s['failed_body']
+                    result.append({
+                        **r,
+                        'title': s['attention'],
+                        'body': clean_msg,
+                        'next': s['failed_next']
+                    })
             else:result.append(dict(r))
         if work:
             state=work.get('status','interrupted')

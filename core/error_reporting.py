@@ -30,6 +30,18 @@ def error_reported_since(checkpoint, text):
         return any(serial > checkpoint and text in message for serial, message in _recent_errors)
 
 
+def is_agent_error(text):
+    if not text:
+        return False
+    s = str(text)
+    return (
+        s.startswith(('Agent ', 'Agent:', 'Agent\n', 'Agent\r'))
+        or 'Agent chat' in s
+        or 'Agent inbox' in s
+        or 'Agent process' in s
+    )
+
+
 def _presenter_for(owner=None):
     while isinstance(owner, QObject) and shiboken6.isValid(owner):
         if any(reference() is owner for reference in _presenters) and not getattr(owner, '_closing', False):
@@ -43,6 +55,8 @@ def _presenter_for(owner=None):
 
 
 def _present_fatal(text, owner=None):
+    if is_agent_error(text):
+        return
     app = QCoreApplication.instance()
     if not isinstance(app, QGuiApplication) or QCoreApplication.closingDown():
         return
@@ -60,6 +74,8 @@ def _present_fatal(text, owner=None):
 
 
 def _present_operation(text,owner=None):
+    if is_agent_error(text):
+        return
     app=QCoreApplication.instance()
     if not isinstance(app,QGuiApplication) or QCoreApplication.closingDown():return
     presenter=_presenter_for(owner)
@@ -99,7 +115,13 @@ class _FatalLogHandler(logging.Handler):
                 print(('[FATAL] ' if application_error else '[RAK_CLI:ERROR] ' if command is not None else '[OPERATION ERROR] ') + text, flush=True)
             except (OSError, ValueError, RuntimeError):
                 pass
-            if command is None or application_error:
+            suppress_ui = (
+                getattr(record, 'fatal_suppress_ui', False)
+                or (getattr(record, 'name', '') or '').startswith(('ui.agent', 'core.agent', 'services.agent'))
+                or getattr(record, 'name', '') in ('ui.inbox', 'core.agent_inbox')
+                or is_agent_error(text)
+            )
+            if not suppress_ui and (command is None or application_error):
                 owner=getattr(record,'fatal_owner',None)
                 if application_error:_present_fatal(text,owner)
                 else:_present_operation(text,owner)
@@ -199,7 +221,7 @@ def install_error_reporter():
     return reporter
 
 
-def report_fatal(log_text, *, owner=None, application_error=None):
+def report_fatal(log_text, *, owner=None, application_error=None, suppress_ui=False):
     # Compatibility entry point: an ordinary string is never evidence of a
     # Python application defect. Preserve typed worker failures or an actual
     # exception; uncaught-exception boundaries explicitly mark their traceback.
@@ -213,5 +235,9 @@ def report_fatal(log_text, *, owner=None, application_error=None):
     if application_error and sys.exc_info()[1] is not None and 'Traceback (most recent call last)' not in text:
         text+='\n\n'+traceback.format_exc().rstrip()
     install_error_logging()
+    suppress = bool(suppress_ui or is_agent_error(text))
     logging.getLogger(__name__).error('%s', text, extra={
-        'fatal_owner': owner, 'fatal_application_error': bool(application_error)})
+        'fatal_owner': owner,
+        'fatal_application_error': bool(application_error),
+        'fatal_suppress_ui': suppress,
+    })

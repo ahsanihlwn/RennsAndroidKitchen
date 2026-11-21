@@ -10,7 +10,7 @@ _LEGACY_USER_DIR = os.path.join(APP_ROOT, "user")
 
 _SETTINGS_FILE = os.path.join(_USER_DIR, "settings.json")
 
-BLUR_RADIUS_DEFAULT = 6
+BLUR_RADIUS_DEFAULT = 17
 BLUR_RADIUS_MAXIMUM = 26
 
 
@@ -170,38 +170,38 @@ _PALETTES = {
     },
 
     # DARK GREEN (Supabase)
-    # BG: near-black navy seperti supabase.com, accent hijau #3ECF8E khas Supabase
+    # BG: #121312 charcoal seperti supabase.com, accent emerald #3ECF8E & primary button #006239
     "dark_green": {
         "label":       "Dark Green",
         "accent_hex":  "#3ecf8e",
 
-        "BG":          "#0f0f0f",
-        "BG2":         "#1a1a1a",
-        "BG3":         "#171717",
-        "BG4":         "#1c1c1c",
-        "BG_SELECTED": "#1a2e22",
-        "BG_DISABLED": "#0c0c0c",
-        "BG_DARK":     "#080808",
-        "BG_INPUT":    "#1a1a1a",
-        "BG_MODAL":    "#1c1c1c",
-        "BG_TREE":     "#121212",
-        "BG_SCROLL":   "#2a2a2a",
+        "BG":          "#121312",
+        "BG2":         "#181a19",
+        "BG3":         "#161817",
+        "BG4":         "#1e211f",
+        "BG_SELECTED": "#14281e",
+        "BG_DISABLED": "#0e0f0e",
+        "BG_DARK":     "#0d0e0d",
+        "BG_INPUT":    "#161817",
+        "BG_MODAL":    "#191b1a",
+        "BG_TREE":     "#141615",
+        "BG_SCROLL":   "#2a2d2b",
 
         "FG":           "#ededed",
-        "FG_BRIGHT":    "#ffffff",
-        "FG_LABEL":     "#e0e0e0",
-        "FG2":          "#a0a0a0",
-        "FG3":          "#6e6e6e",
-        "FG_HOVER":     "#f0f0f0",
-        "FG_BLUE_MUTED":"#3ecf8e",
+        "FG_BRIGHT":    "#fafafa",
+        "FG_LABEL":     "#e4e6e5",
+        "FG2":          "#9da19f",
+        "FG3":          "#737775",
+        "FG_HOVER":     "#ffffff",
+        "FG_BLUE_MUTED":"#8fa89b",
         "FG_BLUE":      "#3ecf8e",
         "FG_BLUE_LIGHT":"#6edfae",
-        "FG_MUTED":     "#666666",
-        "FG_DESC":      "#555555",
-        "FG_DIM":       "#444444",
+        "FG_MUTED":     "#686c6a",
+        "FG_DESC":      "#555957",
+        "FG_DIM":       "#444846",
         "FG_SYNC":      "#3ecf8e",
-        "FG_DISABLED":  "#2a2a2a",
-        "FG_DISABLED2": "#222222",
+        "FG_DISABLED":  "#2d302e",
+        "FG_DISABLED2": "#242725",
 
         # gauge pemakaian ruang: lega → mulai penuh → hampir habis
         "_gauge_safe":   "#4ade9c",
@@ -222,7 +222,7 @@ _PALETTES = {
         "BG_TREE":     "#1e1a2e", "BG_SCROLL": "#3a3558",
         "FG":           "#f8f8f2", "FG_BRIGHT": "#ffffff", "FG_LABEL": "#f0f0ea",
         "FG2":          "#b0a8d0", "FG3":  "#7a7098", "FG_HOVER": "#ffffff",
-        "FG_BLUE_MUTED":"#bd93f9", "FG_BLUE": "#bd93f9", "FG_BLUE_LIGHT": "#d4b8ff",
+        "FG_BLUE_MUTED":"#a297bf", "FG_BLUE": "#bd93f9", "FG_BLUE_LIGHT": "#d4b8ff",
         "FG_MUTED":     "#6a6288", "FG_DESC": "#585075", "FG_DIM": "#443c60",
         "FG_SYNC":      "#bd93f9", "FG_DISABLED": "#2e2a44", "FG_DISABLED2": "#252038",
         # gauge pemakaian ruang: lega → mulai penuh → hampir habis
@@ -243,7 +243,7 @@ _PALETTES = {
         "BG_TREE":     "#1a1014", "BG_SCROLL": "#3a2028",
         "FG":           "#f0dde0", "FG_BRIGHT": "#ffffff", "FG_LABEL": "#eedde2",
         "FG2":          "#c09098", "FG3":  "#886068", "FG_HOVER": "#ffffff",
-        "FG_BLUE_MUTED":"#e05c6a", "FG_BLUE": "#e05c6a", "FG_BLUE_LIGHT": "#f08090",
+        "FG_BLUE_MUTED":"#b8888f", "FG_BLUE": "#e05c6a", "FG_BLUE_LIGHT": "#f08090",
         "FG_MUTED":     "#704848", "FG_DESC": "#5e3a3a", "FG_DIM": "#4a2c2c",
         "FG_SYNC":      "#e05c6a", "FG_DISABLED": "#2e1818", "FG_DISABLED2": "#240f0f",
         # gauge pemakaian ruang: lega → mulai penuh → hampir habis
@@ -264,7 +264,7 @@ _PALETTES = {
         "BG_TREE":     "#1e1e1e", "BG_SCROLL": "#404038",
         "FG":           "#f8f8f2", "FG_BRIGHT": "#ffffff", "FG_LABEL": "#f0f0e8",
         "FG2":          "#c0b898", "FG3":  "#807860", "FG_HOVER": "#ffffff",
-        "FG_BLUE_MUTED":"#fd971f", "FG_BLUE": "#fd971f", "FG_BLUE_LIGHT": "#ffb84d",
+        "FG_BLUE_MUTED":"#b89c7e", "FG_BLUE": "#fd971f", "FG_BLUE_LIGHT": "#ffb84d",
         "FG_MUTED":     "#706848", "FG_DESC": "#5c5438", "FG_DIM": "#484030",
         "FG_SYNC":      "#fd971f", "FG_DISABLED": "#303028", "FG_DISABLED2": "#262620",
         # gauge pemakaian ruang: lega → mulai penuh → hampir habis
@@ -285,7 +285,7 @@ _PALETTES = {
         "BG_TREE":     "#1e2430", "BG_SCROLL": "#354560",
         "FG":           "#d8dee9", "FG_BRIGHT": "#eceff4", "FG_LABEL": "#e0e5ef",
         "FG2":          "#9aa8bf", "FG3":  "#6a7888", "FG_HOVER": "#eceff4",
-        "FG_BLUE_MUTED":"#88c0d0", "FG_BLUE": "#88c0d0", "FG_BLUE_LIGHT": "#a8d8e8",
+        "FG_BLUE_MUTED":"#8da6b5", "FG_BLUE": "#88c0d0", "FG_BLUE_LIGHT": "#a8d8e8",
         "FG_MUTED":     "#4a5870", "FG_DESC": "#3c4a5e", "FG_DIM": "#2e3a4e",
         "FG_SYNC":      "#88c0d0", "FG_DISABLED": "#28303e", "FG_DISABLED2": "#202830",
         # gauge pemakaian ruang: lega → mulai penuh → hampir habis
@@ -401,6 +401,111 @@ _PALETTES = {
         "_shadow_rgb": (0, 0, 0), "_is_light": True,
     },
 }
+
+
+_PRIMARY_BUTTON_SPECS = {
+    "default":      ("#1d56b8", "#2566d4", "#164291", "#4d8ef0", "#7ab0ff", "#ffffff", "#ffffff"),
+    "dark":         ("#2d2f39", "#383a47", "#23252d", "#585a6a", "#7a7d91", "#ffffff", "#ffffff"),
+    "light":        ("#2563eb", "#1d4ed8", "#1e40af", "#60a5fa", "#93c5fd", "#ffffff", "#ffffff"),
+    "dark_green":   ("#006239", "#0b7849", "#004d2d", "#2b855e", "#3ecf8e", "#f8faf9", "#ffffff"),
+    "dark_purple":  ("#5b3ca8", "#6b49c4", "#482e87", "#9a72e8", "#bd93f9", "#ffffff", "#ffffff"),
+    "dark_red":     ("#8e2433", "#a62c3d", "#6e1a26", "#cc4b5c", "#e05c6a", "#ffffff", "#ffffff"),
+    "dark_orange":  ("#9a4f06", "#b55e09", "#7a3d04", "#e07e19", "#fd971f", "#ffffff", "#ffffff"),
+    "dark_ocean":   ("#1e5d73", "#26708a", "#164859", "#4fa0ba", "#88c0d0", "#ffffff", "#ffffff"),
+    "light_warm":   ("#b34b18", "#9c3f12", "#7d310c", "#dc7640", "#ea9160", "#ffffff", "#ffffff"),
+    "light_rose":   ("#ad2e55", "#942346", "#781a37", "#d95f85", "#e680a0", "#ffffff", "#ffffff"),
+    "light_green":  ("#006b40", "#0a8252", "#005432", "#2fa370", "#48bd8a", "#ffffff", "#ffffff"),
+    "light_purple": ("#5938bd", "#492ca3", "#3a2185", "#8364de", "#9d82eb", "#ffffff", "#ffffff"),
+    "light_gray":   ("#374151", "#1f2937", "#111827", "#6b7280", "#9ca3af", "#ffffff", "#ffffff"),
+}
+
+
+def _hex_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    if len(h) == 6:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return f"rgba({r},{g},{b},{alpha})"
+    return hex_color
+
+
+def button_tokens_for(name: str, palette: dict, rgba_fn=None) -> dict:
+    """Return synchronized primary, secondary, and danger button tokens for a palette."""
+    blend = rgba_fn or _hex_rgba
+    is_light = bool(palette.get("_is_light", False))
+    bg, hover, down, edge, edge_hover, fg, fg_hover = _PRIMARY_BUTTON_SPECS.get(
+        name, _PRIMARY_BUTTON_SPECS["default"]
+    )
+    br, bg_, bb = palette.get("_border_rgb", (0, 0, 0) if is_light else (255, 255, 255))
+    border_hex = f"#{br:02x}{bg_:02x}{bb:02x}"
+    if is_light:
+        sec_bg = palette.get("BG2", "#ffffff")
+        sec_hover = palette.get("BG4", "#eef0f4")
+        sec_down = palette.get("BG_DARK", "#e0e3e8")
+        sec_edge = blend(border_hex, 0.14)
+        sec_edge_hover = blend(border_hex, 0.24)
+        sec_fg = palette.get("FG", "#1c1e26")
+        sec_fg_hover = palette.get("FG_BRIGHT", "#0a0c12")
+        sec_dis_bg = palette.get("BG_DISABLED", "#e8eaed")
+        sec_dis_edge = blend(border_hex, 0.08)
+        sec_dis_fg = palette.get("FG_DISABLED", "#c0c4cc")
+        danger_bg, danger_hover, danger_down = "#b91c1c", "#991b1b", "#7f1d1d"
+        danger_edge, danger_edge_hover = "#ef4444", "#f87171"
+        danger_fg, danger_fg_hover = "#ffffff", "#ffffff"
+    else:
+        sec_bg = palette.get("BG4", "#1e1f26")
+        sec_hover = blend(palette.get("BG4", "#1e1f26"), 1.0)
+        # lift secondary hover subtly toward white using neutral border tint over BG4/BG3
+        h4 = sec_bg.lstrip("#")
+        if len(h4) == 6:
+            sr, sg, sb = int(h4[0:2], 16), int(h4[2:4], 16), int(h4[4:6], 16)
+            sec_hover = f"#{min(255, sr + 10):02x}{min(255, sg + 10):02x}{min(255, sb + 10):02x}"
+            sec_down = f"#{max(0, sr - 6):02x}{max(0, sg - 6):02x}{max(0, sb - 6):02x}"
+        else:
+            sec_hover = blend(border_hex, 0.11)
+            sec_down = blend(border_hex, 0.15)
+        sec_edge = blend(border_hex, 0.12)
+        sec_edge_hover = blend(border_hex, 0.22)
+        sec_fg = palette.get("FG", "#ededed")
+        sec_fg_hover = palette.get("FG_BRIGHT", "#ffffff")
+        sec_dis_bg = blend(border_hex, 0.03)
+        sec_dis_edge = blend(border_hex, 0.06)
+        sec_dis_fg = palette.get("FG_DISABLED", "#3a3f50")
+        danger_bg, danger_hover, danger_down = "#7f1d24", "#99232c", "#63151b"
+        danger_edge, danger_edge_hover = "#cc4750", "#ef5f67"
+        danger_fg, danger_fg_hover = "#fee2e2", "#ffffff"
+    toggle_off = palette.get("BG_SCROLL", "#2a2c3a")
+    return {
+        "TOGGLE_ON": bg,
+        "TOGGLE_OFF": toggle_off,
+        "TOGGLE_KNOB": "#ffffff" if not is_light else "#ffffff",
+        "BTN_PRIMARY_BG": bg,
+        "BTN_PRIMARY_HOVER": hover,
+        "BTN_PRIMARY_DOWN": down,
+        "BTN_PRIMARY_EDGE": edge,
+        "BTN_PRIMARY_EDGE_HOVER": edge_hover,
+        "BTN_PRIMARY_FG": fg,
+        "BTN_PRIMARY_FG_HOVER": fg_hover,
+        "BTN_PRIMARY_DISABLED_BG": blend(bg, 0.42),
+        "BTN_PRIMARY_DISABLED_EDGE": blend(edge, 0.25),
+        "BTN_PRIMARY_DISABLED_FG": blend("#ffffff", 0.72 if is_light else 0.45),
+        "BTN_SEC_BG": sec_bg,
+        "BTN_SEC_HOVER": sec_hover,
+        "BTN_SEC_DOWN": sec_down,
+        "BTN_SEC_EDGE": sec_edge,
+        "BTN_SEC_EDGE_HOVER": sec_edge_hover,
+        "BTN_SEC_FG": sec_fg,
+        "BTN_SEC_FG_HOVER": sec_fg_hover,
+        "BTN_SEC_DISABLED_BG": sec_dis_bg,
+        "BTN_SEC_DISABLED_EDGE": sec_dis_edge,
+        "BTN_SEC_DISABLED_FG": sec_dis_fg,
+        "BTN_DANGER_BG": danger_bg,
+        "BTN_DANGER_HOVER": danger_hover,
+        "BTN_DANGER_DOWN": danger_down,
+        "BTN_DANGER_EDGE": danger_edge,
+        "BTN_DANGER_EDGE_HOVER": danger_edge_hover,
+        "BTN_DANGER_FG": danger_fg,
+        "BTN_DANGER_FG_HOVER": danger_fg_hover,
+    }
 
 
 class _Theme:
@@ -698,27 +803,27 @@ class _Theme:
     def BORDER_BLUE_ACTIVE(self)->str: return self.accent(0.38)
 
     @property
-    def BTN_BASE(self)         -> str: return self.border_color(0.05)
+    def BTN_BASE(self)         -> str: return self.BTN_SEC_BG
     @property
-    def BTN_HOVER(self)        -> str: return self.border_color(0.09)
+    def BTN_HOVER(self)        -> str: return self.BTN_SEC_HOVER
     @property
-    def BTN_PRESSED(self)      -> str: return self.border_color(0.13)
+    def BTN_PRESSED(self)      -> str: return self.BTN_SEC_DOWN
 
     @property
-    def BTN_BLUE_BASE(self)    -> str: return self.accent(0.18)
+    def BTN_BLUE_BASE(self)    -> str: return self.BTN_PRIMARY_BG
     @property
-    def BTN_BLUE_HOVER(self)   -> str: return self.accent(0.30)
+    def BTN_BLUE_HOVER(self)   -> str: return self.BTN_PRIMARY_HOVER
     @property
-    def BTN_BLUE_PRESS(self)   -> str: return self.accent(0.48)
+    def BTN_BLUE_PRESS(self)   -> str: return self.BTN_PRIMARY_DOWN
 
     @property
-    def BTN_RED_BASE(self)     -> str: return self.red(0.14)
+    def BTN_RED_BASE(self)     -> str: return self.BTN_DANGER_BG
     @property
-    def BTN_RED_HOVER(self)    -> str: return self.red(0.28)
+    def BTN_RED_HOVER(self)    -> str: return self.BTN_DANGER_HOVER
     @property
-    def BTN_RED_BORDER(self)   -> str: return self.red(0.38)
+    def BTN_RED_BORDER(self)   -> str: return self.BTN_DANGER_EDGE
     @property
-    def BTN_RED_PRESS(self)    -> str: return self.red(0.55)
+    def BTN_RED_PRESS(self)    -> str: return self.BTN_DANGER_DOWN
 
     @property
     def ROW_HOVER(self)        -> str: return self.border_color(0.04)
@@ -789,6 +894,8 @@ class _Theme:
         for key, val in p.items():
             if not key.startswith("_") and key != "label" and key != "accent_hex":
                 setattr(self, key, val)
+        for key, val in button_tokens_for(self._name, p, _hex_rgba).items():
+            setattr(self, key, val)
 
     def _save(self):
         try:
@@ -862,41 +969,41 @@ QRadioButton::indicator:checked {{
     border: 1px solid {ac(0.70)};
 }}
 QPushButton {{
-    background: {bc(0.05)};
-    border: 1px solid {bc(0.09)};
+    background: {self.BTN_SEC_BG};
+    border: 1px solid {self.BTN_SEC_EDGE};
     border-radius: 7px;
     padding: 0 14px;
     height: 30px;
-    color: {btn_text};
+    color: {self.BTN_SEC_FG};
     font-size: 12px;
 }}
 QPushButton:hover {{
-    background: {bc(0.09)};
-    border-color: {bc(0.15)};
-    color: {btn_hover};
+    background: {self.BTN_SEC_HOVER};
+    border-color: {self.BTN_SEC_EDGE_HOVER};
+    color: {self.BTN_SEC_FG_HOVER};
 }}
-QPushButton:pressed {{ background: {bc(0.13)}; }}
+QPushButton:pressed {{ background: {self.BTN_SEC_DOWN}; }}
 QPushButton:disabled {{
-    color: {self.FG_DISABLED2};
-    background: {bc(0.02)};
-    border-color: {bc(0.04)};
+    color: {self.BTN_SEC_DISABLED_FG};
+    background: {self.BTN_SEC_DISABLED_BG};
+    border-color: {self.BTN_SEC_DISABLED_EDGE};
 }}
 QPushButton[role="primary"] {{
-    background: {ac(0.18)};
-    border: 1px solid {ac(0.38)};
-    color: {self.FG_BLUE};
+    background: {self.BTN_PRIMARY_BG};
+    border: 1px solid {self.BTN_PRIMARY_EDGE};
+    color: {self.BTN_PRIMARY_FG};
     font-weight: 600;
 }}
 QPushButton[role="primary"]:hover {{
-    background: {ac(0.30)};
-    border-color: {ac(0.55)};
-    color: {self.FG_BLUE_LIGHT};
+    background: {self.BTN_PRIMARY_HOVER};
+    border-color: {self.BTN_PRIMARY_EDGE_HOVER};
+    color: {self.BTN_PRIMARY_FG_HOVER};
 }}
-QPushButton[role="primary"]:pressed {{ background: {ac(0.44)}; }}
+QPushButton[role="primary"]:pressed {{ background: {self.BTN_PRIMARY_DOWN}; }}
 QPushButton[role="primary"]:disabled {{
-    background: {ac(0.07)};
-    border-color: {ac(0.12)};
-    color: {ac(0.30)};
+    background: {self.BTN_PRIMARY_DISABLED_BG};
+    border-color: {self.BTN_PRIMARY_DISABLED_EDGE};
+    color: {self.BTN_PRIMARY_DISABLED_FG};
 }}
 QScrollBar:vertical {{
     background: transparent; width: 4px; margin: 0; border: none;

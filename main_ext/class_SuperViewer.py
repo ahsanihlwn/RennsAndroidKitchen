@@ -171,73 +171,30 @@ class SuperViewer(DeferredCloseViewer, QWidget):
             self.list_a.blockSignals(False)
 
     def extract_partition(self, part_name, out_dir):
-        LPUNPACK = resolve_binary(BIN_PATH, "lpunpack.exe")
-        if not LPUNPACK:
-            return False, "LPUNPACK NOT FOUND"
-        cmd = [
-            LPUNPACK,
-            "-p",
-            part_name,
-            self.img,
-            out_dir
-        ]
+        from core.native_backend import super_extract
+
         print(f"[SUPER_DBG][WORKER] START part={part_name!r} out={out_dir!r}", flush=True)
-        print(f"[SUPER_DBG][WORKER] CMD part={part_name!r} cmd={cmd!r}", flush=True)
-
-        p = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            creationflags=CREATE_NO_WINDOW
-        )
-
-        for line in p.stdout:
-            print("[SUPER][RAW]", line.rstrip(), flush=True)
         try:
-            p.stdout.close()
-        except Exception:
-            pass
-        rc = p.wait()
+            super_extract(self.img, out_dir, partitions=[part_name], normalize=False)
+        except Exception as exc:
+            print(f"[SUPER_DBG][WORKER] ERR part={part_name!r}: {exc}", flush=True)
+            return False, f"lpunpack failed: {exc}"
         out_path = os.path.join(out_dir, part_name + ".img")
         print(
-            f"[SUPER_DBG][WORKER] EXIT part={part_name!r} rc={rc} exists={os.path.exists(out_path)}",
+            f"[SUPER_DBG][WORKER] EXIT part={part_name!r} exists={os.path.exists(out_path)}",
             flush=True,
         )
-        if rc != 0:
-            return False, f"lpunpack failed ({rc})"
         return True, part_name
 
     def extract_all_partitions(self, out_dir):
-        LPUNPACK = resolve_binary(BIN_PATH, "lpunpack.exe")
-        if not LPUNPACK:
-            return False, "LPUNPACK NOT FOUND"
-        cmd = [
-            LPUNPACK,
-            self.img,
-            out_dir
-        ]
+        from core.native_backend import super_extract
+
         print(f"[SUPER_DBG][WORKER] ALL_START out={out_dir!r}", flush=True)
-        print(f"[SUPER_DBG][WORKER] ALL_CMD cmd={cmd!r}", flush=True)
-
-        p = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            creationflags=CREATE_NO_WINDOW
-        )
-
-        for line in p.stdout:
-            print("[SUPER][RAW]", line.rstrip(), flush=True)
         try:
-            p.stdout.close()
-        except Exception:
-            pass
-        rc = p.wait()
-        print(f"[SUPER_DBG][WORKER] ALL_EXIT rc={rc}", flush=True)
-        if rc != 0:
-            return False, f"lpunpack failed ({rc})"
+            super_extract(self.img, out_dir, normalize=False)
+        except Exception as exc:
+            print(f"[SUPER_DBG][WORKER] ALL_ERR: {exc}", flush=True)
+            return False, f"lpunpack failed: {exc}"
         return True, None
 
     def _refresh_out_dir(self, out_dir, part_name=None):
@@ -417,54 +374,13 @@ class SuperViewer(DeferredCloseViewer, QWidget):
             run_in_thread(worker, None, callback=self.guard_task_callback(after))
 
     def read_super_info(self):
-        info = {
-            "raw": [],
-            "partitions": [],
-            "active_slot": None
-        }
-        LPUNPACK = resolve_binary(BIN_PATH, "lpunpack.exe")
-        if not LPUNPACK:
-            print("LPUNPACK ERROR")
-            return
-        cmd = [
-            LPUNPACK,
-            self.img,
-            "--info"
-        ]
+        from core.super_logic import read_super_info as _read_super_info
 
-        print("[SUPER][DEBUG] LPUNPACK =", LPUNPACK)
-        print("[SUPER][DEBUG] IMG =", self.img)
-        print("[SUPER][DEBUG] CMD =", cmd)
-
-        p = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            creationflags=CREATE_NO_WINDOW
-        )
-
-        current_name = None
-
-        for line in p.stdout:
-            print("[SUPER][RAW]", line.rstrip())
-            line = line.rstrip()
-            info["raw"].append(line)
-
-            # ambil nama partition
-            m_name = SUPER_NAME_RE.match(line)
-            if m_name:
-                current_name = m_name.group(1)
-                info["partitions"].append(current_name)
-                continue
-
-            # deteksi slot aktif dari group
-            m_group = SUPER_GROUP_RE.match(line)
-            if m_group:
-                grp = m_group.group(1)
-                if grp.endswith("_a"):
-                    info["active_slot"] = "A"
-                elif grp.endswith("_b"):
-                    info["active_slot"] = "B"
-
-        return info
+        data = _read_super_info(self.img)
+        if not isinstance(data, tuple):
+            return {
+                "raw": data.raw.splitlines(),
+                "partitions": list(data.partitions),
+                "active_slot": data.active_slot,
+            }
+        return {"raw": [], "partitions": [], "active_slot": None}

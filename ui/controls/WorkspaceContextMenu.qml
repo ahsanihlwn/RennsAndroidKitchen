@@ -13,10 +13,24 @@ C.Popup {
     readonly property var c: preferences.colors
     readonly property color tintBase: c.BG2
     readonly property string kind: details.menuKind || "single"
+    readonly property bool animationsEnabled: !!(preferences && preferences.settings && preferences.settings.animations)
     parent: hostWindow.contentItem
     popupType: C.Popup.Item
     width: Math.min(metrics.width,hostWindow.width-1); height: Math.min(metrics.height,hostWindow.height-1)
     margins: 0; padding: 4; focus: true; modal: false; dim: false
+    transformOrigin: Item.TopLeft
+    enter: Transition {
+        ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: menu.animationsEnabled?120:0; easing.type: Easing.OutCubic }
+            NumberAnimation { property: "scale"; from: 0.94; to: 1; duration: menu.animationsEnabled?120:0; easing.type: Easing.OutCubic }
+        }
+    }
+    exit: Transition {
+        ParallelAnimation {
+            NumberAnimation { property: "opacity"; from: 1; to: 0; duration: menu.animationsEnabled?90:0; easing.type: Easing.InCubic }
+            NumberAnimation { property: "scale"; from: 1; to: 0.94; duration: menu.animationsEnabled?90:0; easing.type: Easing.InCubic }
+        }
+    }
     closePolicy: C.Popup.CloseOnEscape|C.Popup.CloseOnPressOutside
     onAboutToShow: workspace.setContextMenuActive(true)
     onClosed: {subMenu.close();workspace.setContextMenuActive(false)}
@@ -94,6 +108,19 @@ C.Popup {
         parent: menu.hostWindow.contentItem; popupType: C.Popup.Item
         width: Math.min(metrics.width,menu.hostWindow.width-1); height: Math.min(metrics.height,menu.hostWindow.height-1)
         margins: 0; padding: 4; focus: true; modal: false; dim: false
+        transformOrigin: Item.TopLeft
+        enter: Transition {
+            ParallelAnimation {
+                NumberAnimation { property: "opacity"; from: 0; to: 1; duration: menu.animationsEnabled?110:0; easing.type: Easing.OutCubic }
+                NumberAnimation { property: "scale"; from: 0.94; to: 1; duration: menu.animationsEnabled?110:0; easing.type: Easing.OutCubic }
+            }
+        }
+        exit: Transition {
+            ParallelAnimation {
+                NumberAnimation { property: "opacity"; from: 1; to: 0; duration: menu.animationsEnabled?85:0; easing.type: Easing.InCubic }
+                NumberAnimation { property: "scale"; from: 1; to: 0.94; duration: menu.animationsEnabled?85:0; easing.type: Easing.InCubic }
+            }
+        }
         closePolicy: C.Popup.CloseOnEscape
         onClosed: anchorButton=null
         background: LiveGlass {

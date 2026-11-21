@@ -339,14 +339,6 @@ def unpack_boot_image(img_path):
     if not os.path.isfile(img_path):
         return False, f"Image not found: {img_path}"
 
-    try:
-        magiskboot = mbt.find_magiskboot(None)
-    except SystemExit:
-        return False, (
-            "magiskboot.exe not installed. Install it via the bin manager "
-            f"(expected under {BIN_PATH})."
-        )
-
     base_dir = os.path.dirname(img_path)
     name = os.path.splitext(os.path.basename(img_path))[0]
     kind = _boot_kind_from_magic(img_path)
@@ -363,6 +355,7 @@ def unpack_boot_image(img_path):
     meta_dir.mkdir(parents=True, exist_ok=True)
     mbt.set_hidden(meta_dir)
 
+    magiskboot = mbt.find_magiskboot(None)
     try:
         # All magiskboot work happens inside the hidden meta dir.
         shutil.copy2(img_path, meta_dir / mbt.SOURCE_IMAGE)
@@ -450,13 +443,7 @@ def repack_boot_image(folder_path):
     except SystemExit:
         return False, f"{mbt.META_NAME} missing in {meta_dir}; re-unpack the boot image."
 
-    try:
-        magiskboot = mbt.find_magiskboot(None)
-    except SystemExit:
-        return False, (
-            "magiskboot.exe not installed. Install it via the bin manager "
-            f"(expected under {BIN_PATH})."
-        )
+    magiskboot = mbt.find_magiskboot(None)
 
     compression = meta.get("ramdisk_compression", "raw")
     has_ramdisk = meta.get("has_ramdisk", False)
@@ -485,23 +472,6 @@ def repack_boot_image(folder_path):
         _recompile_dtb(meta_dir, out_dir)
 
         desired_modes = load_boot_desired_modes(base_dir, name)
-
-        # Handle Vendor Boot Header v4 with multi-ramdisk table
-        from core import v4_boot
-        is_v4, _v4_info = v4_boot.is_vendor_boot_v4(source)
-        if is_v4:
-            if not (meta_dir / v4_boot.V4_META_NAME).is_file():
-                v4_boot.prepare_v4_meta_from_source(meta_dir, magiskboot)
-            if os.path.exists(staged_img):
-                os.unlink(staged_img)
-            ok, res = v4_boot.repack_vendor_boot_v4(
-                meta_dir, visible_ramdisk, staged_img, magiskboot, manifest,
-                desired_modes=desired_modes,
-            )
-            if not ok:
-                return False, res
-            os.replace(staged_img, out_img)
-            return True, str(out_img)
 
         if has_ramdisk:
             if use_patch:

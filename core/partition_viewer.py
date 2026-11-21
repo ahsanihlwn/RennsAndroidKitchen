@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 """Payload and Super viewer operations without their QWidget owners."""
 import re
-from core import kitchen_process as subprocess
 
 
 def payload_partitions(path):
@@ -28,27 +27,55 @@ def extract_payload(path,partition,out_dir):
 
 
 def _super_command(*arguments):
-    from core.app_paths import BIN_DIR
-    from core.binary_handler import resolve_binary
-    from core.proc_util import CREATE_NO_WINDOW
-    binary=resolve_binary(BIN_DIR,'lpunpack.exe')
-    if not binary:raise FileNotFoundError('LPUNPACK NOT FOUND')
-    with subprocess.Popen([binary,*arguments],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,creationflags=CREATE_NO_WINDOW) as process:
-        lines=[]
-        for line in process.stdout:
-            lines.append(line.rstrip());print('[SUPER][RAW]',line.rstrip(),flush=True)
-        process.stdout.close();rc=process.wait()
-    if rc:
-        from core.command_context import OperationError
-        raise OperationError(f'lpunpack failed ({rc}): '+str(arguments)+'\n'+'\n'.join(lines))
-    return lines
+    from core.command_context import OperationError
+    from core.native_backend import super_extract, super_info as native_super_info
+
+    args = list(arguments)
+    show_info = False
+    partitions = []
+    positionals = []
+    i = 0
+    while i < len(args):
+        arg = str(args[i])
+        if arg == '--info':
+            show_info = True
+        elif arg == '-p' and i + 1 < len(args):
+            i += 1
+            partitions.extend(p.strip() for p in str(args[i]).split(',') if p.strip())
+        elif arg.startswith('-p') and len(arg) > 2:
+            partitions.extend(p.strip() for p in arg[2:].split(',') if p.strip())
+        else:
+            positionals.append(arg)
+        i += 1
+
+    if not positionals:
+        raise OperationError('lpunpack missing super image argument')
+
+    img_path = positionals[0]
+    try:
+        if show_info:
+            info = native_super_info(img_path)
+            lines = info.get('raw', '').splitlines()
+            for line in lines:
+                print('[SUPER][RAW]', line, flush=True)
+            return lines
+        out_dir = positionals[1] if len(positionals) > 1 else '.'
+        super_extract(img_path, out_dir, partitions=partitions or None, normalize=False)
+        return []
+    except Exception as error:
+        raise OperationError(f'lpunpack failed: {arguments}\n{error}') from error
 
 
 def super_info(path):
-    lines=_super_command(path,'--info');partitions=[];active=''
+    lines=_super_command(path,'--info');partitions=[];active='';in_partition_table=True
     for line in lines:
-        match=re.match(r'^\s*Name:\s+([a-zA-Z0-9_]+)',line)
-        if match:partitions.append(match[1]);continue
+        stripped=line.strip()
+        if stripped=='Partition table:':in_partition_table=True;continue
+        if stripped in ('Super partition layout:','Block device table:','Group table:'):
+            in_partition_table=False;continue
+        if in_partition_table:
+            match=re.match(r'^\s*Name:\s+([a-zA-Z0-9_]+)',line)
+            if match:partitions.append(match[1]);continue
         match=re.match(r'^\s*Group:\s+([a-zA-Z0-9_]+)',line)
         if match and match[1].endswith(('_a','_b')):active=match[1][-1].upper()
     return {'partitions':partitions,'active_slot':active,'raw':lines}

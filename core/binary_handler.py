@@ -144,6 +144,11 @@ def _get_watcher(bin_root):
 
 
 def resolve_binary(bin_root, binary_name):
+    from core.native_tools import resolve_native_tool
+
+    native = resolve_native_tool(binary_name)
+    if native:
+        return native
     watcher = _get_watcher(bin_root)
     if not watcher:
         return _resolve_from_package(bin_root, binary_name)

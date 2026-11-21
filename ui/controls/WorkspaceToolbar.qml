@@ -107,10 +107,7 @@ Item {
                 opacity: toolbar.inlineOpacity
                 visible: opacity>0
                 preferences: toolbar.preferences; iconKey: modelData.icon
-                toolTip: (modelData.key === "layout" && toolbar.workspace) ?
-                    (toolbar.workspace.layoutMode === 1 ? "Layout: Single Tree" :
-                     toolbar.workspace.layoutMode === 2 ? "Layout: Side-by-Side Split" :
-                     "Layout: Top-Bottom Split") : modelData.tip
+                toolTip: (modelData.key === "layout" && toolbar.workspace) ? toolbar.workspace.layoutLabel : modelData.tip
                 layoutMode: (toolbar.workspace && toolbar.workspace.layoutMode !== undefined) ? toolbar.workspace.layoutMode : 2
                 fillColor: modelData.key==="agentInbox" && toolbar.workspace.agentChat.opened ? toolbar.preferences.colors.b08 : "transparent"
                 SmoothRectangle {visible: modelData.key==="agentInbox" && toolbar.workspace.agentInbox.notificationCount>0;x: parent.width-7;y: 3;width: 5;height: 5;radius: 2.5;color: toolbar.c.accent_hex}
@@ -208,10 +205,7 @@ Item {
                             required property var modelData
                             objectName: "workspaceExpandedAction_"+modelData.key
                             preferences: toolbar.preferences; iconKey: modelData.icon
-                            toolTip: (modelData.key === "layout" && toolbar.workspace) ?
-                                (toolbar.workspace.layoutMode === 1 ? "Layout: Single Tree" :
-                                 toolbar.workspace.layoutMode === 2 ? "Layout: Side-by-Side Split" :
-                                 "Layout: Top-Bottom Split") : modelData.tip
+                            toolTip: (modelData.key === "layout" && toolbar.workspace) ? toolbar.workspace.layoutLabel : modelData.tip
                             layoutMode: (toolbar.workspace && toolbar.workspace.layoutMode !== undefined) ? toolbar.workspace.layoutMode : 2
                             fillColor: modelData.key==="agentInbox" && toolbar.workspace.agentChat.opened ? toolbar.preferences.colors.b08 : "transparent"
                             SmoothRectangle {visible: modelData.key==="agentInbox" && toolbar.workspace.agentInbox.notificationCount>0;x: parent.width-7;y: 3;width: 5;height: 5;radius: 2.5;color: toolbar.c.accent_hex}

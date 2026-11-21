@@ -268,7 +268,7 @@ class ChoiceMorphPopup(QWidget):
         morph.finished.connect(self._animation_finished)
         morph._group.finished.connect(morph.finished.emit)
         tint, border = self.card._tint, self.card._border
-        morph._card_surface.setStyleSheet(f'QWidget#{self.card.objectName()} {{background:rgba({tint.red()},{tint.green()},{tint.blue()},{tint.alpha()}); border:1px solid rgba({border.red()},{border.green()},{border.blue()},{border.alpha()}); border-radius:10px;}}')
+        morph._card_surface.setStyleSheet(f'QWidget#{self.card.objectName()} {{background:rgba({tint.red()},{tint.green()},{tint.blue()},{tint.alpha()}); border:none; border-radius:10px;}}')
         morph.start()
 
     def closeEvent(self, event):

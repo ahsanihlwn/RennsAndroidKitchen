@@ -25,9 +25,9 @@ class Protocol:
         self.pending={};self.requests={};self._part=0;self.effort=''
 
     def event(self, kind, **fields): self.emit({'type':kind, **fields})
-    def rpc(self, method, params, callback=None, *, optional=False):
+    def rpc(self, method, params, callback=None, *, optional=False, on_error=None):
         self.serial+=1;key=self.serial
-        self.pending[key]=(method,callback,optional)
+        self.pending[key]=(method,callback,optional,on_error)
         self.send({'jsonrpc':'2.0','id':key,'method':method,'params':params})
         return key
 
@@ -35,9 +35,12 @@ class Protocol:
         if 'method' in message or 'id' not in message: return False
         pending=self.pending.pop(message['id'],None)
         if pending is None:return True
-        method,callback,optional=pending
+        method,callback,optional,on_error=pending
         if 'error' in message:
-            self.event('notice' if optional else 'error',text=method+': '+str(message['error'].get('message',message['error'])))
+            err=message['error']
+            text=str(err.get('message',err)) if isinstance(err,dict) else str(err)
+            if on_error and on_error(text,err):return True
+            self.event('notice' if optional else 'error',text=method+': '+text)
         elif callback:callback(message.get('result') or {})
         return True
 
@@ -56,14 +59,32 @@ class CodexProtocol(Protocol):
     def start(self):
         self.rpc('initialize',{'clientInfo':{'name':'renns_kitchen','title':'Renns Android Kitchen','version':'1.0.0'}},self._initialized)
 
+    def _thread_params(self):
+        params={'cwd':self.cwd,'developerInstructions':self.instructions}
+        if self.model:params['model']=self.model
+        return params
+
+    def _start_thread(self):
+        self.rpc('thread/start',self._thread_params(),self._thread)
+
+    def _on_resume_error(self, text, _raw):
+        lower=text.lower()
+        if any(token in lower for token in ('no rollout found','not found','unknown thread','does not exist','no such thread')):
+            self.session=''
+            self.event('notice',text='Previous Codex session could not be resumed ('+text+'). Started a new conversation.',resume_fallback=True)
+            self._start_thread()
+            return True
+        return False
+
     def _initialized(self, result):
         self.send({'method':'initialized','params':{}})
         self.rpc('model/list',{'limit':100},self._models,optional=True)
         self.rpc('account/read',{},lambda r:self.event('account',authenticated=bool(r.get('account')),method=(r.get('account') or {}).get('type','')),optional=True)
-        params={'cwd':self.cwd,'developerInstructions':self.instructions}
-        if self.model:params['model']=self.model
-        if self.session:params['threadId']=self.session
-        self.rpc('thread/resume' if self.session else 'thread/start',params,self._thread)
+        if self.session:
+            params=self._thread_params();params['threadId']=self.session
+            self.rpc('thread/resume',params,self._thread,on_error=self._on_resume_error)
+        else:
+            self._start_thread()
 
     def _models(self, result):
         self.event('models',rows=[{'id':m.get('id',m.get('model','')),'label':m.get('displayName',m.get('id','')),'description':m.get('description',''),
@@ -159,7 +180,7 @@ class CodexProtocol(Protocol):
 
 class AcpProtocol(Protocol):
     def __init__(self,*args,**kwargs):
-        super().__init__(*args,**kwargs);self.capabilities={};self.configs=[];self._message=0
+        super().__init__(*args,**kwargs);self.capabilities={};self.configs=[];self._message=0;self.mode=''
 
     def start(self):
         self.rpc('initialize',{'protocolVersion':1,'clientInfo':{'name':'renns_kitchen','version':'1.0.0'},
@@ -171,12 +192,16 @@ class AcpProtocol(Protocol):
         if self.session and self.capabilities.get('loadSession'):
             params['sessionId']=self.session;method='session/load'
         else:
-            if self.session:self.event('notice',text='This ACP backend cannot load the previous session. A new conversation was created.')
+            if self.session:self.event('notice',text='This ACP backend cannot load the previous session. A new conversation was created.',resume_fallback=True)
             method='session/new'
         self.rpc(method,params,self._session)
 
     def _session(self,result):
-        self.session=result.get('sessionId',self.session);self._configuration(result);self.ready()
+        self.session=result.get('sessionId',self.session);self._configuration(result)
+        if self.mode:
+            try:self.set_mode(self.mode)
+            except Exception:pass
+        self.ready()
 
     def _configuration(self,result):
         def clean_label(val):
@@ -220,9 +245,13 @@ class AcpProtocol(Protocol):
         else:self.rpc('session/set_model',{'sessionId':self.session,'modelId':model},done)
 
     def set_mode(self,mode):
+        self.mode=mode
         config=next((c for c in self.configs if c.get('category')=='mode' or c.get('id')=='mode'),None)
-        if config:self.rpc('session/set_config_option',{'sessionId':self.session,'configId':config['id'],'value':mode},lambda r:self.event('mode',mode=mode))
-        else:self.rpc('session/set_mode',{'sessionId':self.session,'modeId':mode},lambda r:self.event('mode',mode=mode))
+        def done(r):
+            if isinstance(r,dict) and ('configOptions' in r or 'modes' in r):self._configuration(r)
+            self.event('mode',mode=mode)
+        if config:self.rpc('session/set_config_option',{'sessionId':self.session,'configId':config['id'],'value':mode},done)
+        else:self.rpc('session/set_mode',{'sessionId':self.session,'modeId':mode},done)
 
     def set_effort(self,effort):
         config=next((c for c in self.configs if c.get('category')=='thought_level' or c.get('id') in ('effort','variant')),None)
@@ -267,7 +296,10 @@ class AcpProtocol(Protocol):
 
 
 class ClaudeProtocol(Protocol):
-    def __init__(self,*args,**kwargs):super().__init__(*args,**kwargs);self.message_id='claude';self._turn_serial=0;self._thinking_blocks={};self._tool_blocks={}
+    def __init__(self,*args,**kwargs):
+        super().__init__(*args,**kwargs)
+        self.message_id='claude';self._turn_serial=0;self._thinking_blocks={};self._tool_blocks={}
+        self._streamed_text_messages=set()
 
     def _tool_use(self,block):
         inputs=block.get('input') or {};inputs=inputs if isinstance(inputs,dict) else {}
@@ -289,6 +321,7 @@ class ClaudeProtocol(Protocol):
 
     def prompt(self,text):
         self._turn_serial+=1;self.turn=str(self._turn_serial)
+        self._streamed_text_messages.clear()
         self.send({'type':'user','session_id':self.session,'message':{'role':'user','content':text},'parent_tool_use_id':None})
         self.event('turn_started',turn=self.turn)
 
@@ -325,6 +358,7 @@ class ClaudeProtocol(Protocol):
             event=message.get('event') or {};etype=event.get('type');index=event.get('index',0)
             if etype=='message_start':self.message_id=event.get('message',{}).get('id',self.message_id);self._tool_blocks.clear()
             elif etype=='content_block_delta' and event.get('delta',{}).get('type')=='text_delta':
+                self._streamed_text_messages.add(self.message_id)
                 self.event('text',id=self.message_id+':'+str(index),text=event['delta'].get('text',''),append=True)
             elif etype=='content_block_delta' and event.get('delta',{}).get('type')=='input_json_delta' and index in self._tool_blocks:
                 block=self._tool_blocks[index];block['partial']=(block['partial']+event['delta'].get('partial_json',''))[-2*1024*1024:]
@@ -343,9 +377,12 @@ class ClaudeProtocol(Protocol):
                 self._tool_use(block)
         elif kind=='assistant':
             m=message.get('message') or {}
+            msg_id=m.get('id',self.message_id)
+            already_streamed=msg_id in self._streamed_text_messages
             for index,block in enumerate(m.get('content',[])):
                 if block.get('type')=='text' and not message.get('parent_tool_use_id'):
-                    self.event('text',id=m.get('id',self.message_id)+':'+str(index),text=block.get('text',''),append=False)
+                    if not already_streamed:
+                        self.event('text',id=msg_id+':'+str(index),text=block.get('text',''),append=False)
                 elif block.get('type')=='tool_use':self._tool_use(block)
         elif kind=='user':
             for block in (message.get('message') or {}).get('content',[]):

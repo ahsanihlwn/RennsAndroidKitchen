@@ -284,6 +284,26 @@ class ErrorReportingTests(unittest.TestCase):
             self.app.processEvents();self.assertEqual(messages,[])
         finally:unregister_error_presenter(legacy)
 
+    def test_agent_error_does_not_open_operation_or_fatal_dialog(self):
+        agent_logger = logging.getLogger('ui.agent_chat')
+        msg = 'Agent opencode: session/prompt: Internal error: Free usage limit reached. Free models work in OpenCode (https://opencode.ai)'
+        agent_logger.error('%s', msg)
+        self.app.processEvents()
+        time.sleep(0.05)
+        self.app.processEvents()
+        self.assertEqual(self.presenter.messages, [])
+        self.assertEqual(self.presenter.operations, [])
+        self.assertIn('Free usage limit reached', self.console.getvalue())
+
+    def test_report_fatal_with_agent_error_suppresses_dialog(self):
+        report_fatal('Agent chat protocol\n\nSimulated protocol defect', owner=self.presenter, application_error=True)
+        self.app.processEvents()
+        time.sleep(0.05)
+        self.app.processEvents()
+        self.assertEqual(self.presenter.messages, [])
+        self.assertEqual(self.presenter.operations, [])
+
+
 
 if __name__ == '__main__':
     unittest.main()

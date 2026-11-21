@@ -17,6 +17,10 @@ pub(crate) struct PathRow {
     pub path: PathBuf,
     pub is_dir: bool,
     pub is_link: bool,
+    #[serde(skip)]
+    pub size: Option<u64>,
+    #[serde(skip)]
+    pub mtime_ns: Option<i128>,
 }
 
 struct Snapshot {
@@ -49,7 +53,13 @@ impl Cursor {
             let is_link = kind.is_symlink() || is_reparse(&entry);
             let is_dir = kind.is_dir();
             if is_dir && !is_link { self.descendants.push(path.clone()); }
-            self.rows.push(PathRow { name: entry.file_name().to_string_lossy().into_owned(), path, is_dir, is_link });
+            let (size, mtime_ns) = if is_dir {
+                (Some(0), Some(0))
+            } else {
+                let info = entry.metadata().ok();
+                (info.as_ref().map(fs::Metadata::len), info.as_ref().and_then(directory::entry_mtime_ns))
+            };
+            self.rows.push(PathRow { name: entry.file_name().to_string_lossy().into_owned(), path, is_dir, is_link, size, mtime_ns });
             if Instant::now() >= deadline { break; }
         }
         Ok(false)
@@ -224,11 +234,22 @@ impl PathIndex {
         self.shared.wake.notify_all();
     }
 
-    #[pyo3(signature = (path, root, refresh=false))]
-    fn entries_json(&self, py: Python<'_>, path: PathBuf, root: PathBuf, refresh: bool) -> PyResult<String> {
+    #[pyo3(signature = (path, root, refresh=false, include_magic=true))]
+    fn entries_json(&self, py: Python<'_>, path: PathBuf, root: PathBuf, refresh: bool, include_magic: bool) -> PyResult<String> {
         py.detach(|| {
             let rows = self.rows(&path, refresh)?;
-            let entries = directory::enrich_paths(rows.iter().map(|row| (row.path.clone(), row.is_dir, row.name.clone())), &root)?;
+            let entries = directory::enrich_raw(
+                rows.iter().map(|row| directory::RawEntry {
+                    path: row.path.clone(),
+                    is_dir: row.is_dir,
+                    is_native_link: row.is_link,
+                    name: row.name.clone(),
+                    size: row.size,
+                    mtime_ns: row.mtime_ns,
+                }),
+                &root,
+                include_magic,
+            )?;
             serde_json::to_string(&entries).map_err(std::io::Error::other)
         }).map_err(|error| PyOSError::new_err(error.to_string()))
     }

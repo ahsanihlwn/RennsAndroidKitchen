@@ -27,6 +27,8 @@ class ProcessTerminalManager:
     def observe(self,process,command):
         self._processes.add(process)
         self.feed('\n> '+command+'\n')
+    def observe_native(self,job,command):
+        self.observe(job,command)
     def launch(self,process,program,args):
         self.observe(process,subprocess.list2cmdline([os.path.basename(program),*map(str,args)]))
         process.finished.connect(lambda code,*_:self.complete(process,code))
@@ -42,7 +44,7 @@ class ProcessTerminalManager:
         elif len(self._processes)==1:
             process=next(iter(self._processes))
             if hasattr(process,'write'):process.write(text.encode('utf-8'))
-            elif process.stdin:
+            elif hasattr(process,'stdin') and process.stdin:
                 process.stdin.write(text if process.text_mode else text.encode('utf-8'));process.stdin.flush()
 
 

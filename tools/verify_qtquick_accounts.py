@@ -64,7 +64,7 @@ def main():
         wait_for(lambda:dialog.property("visible") and dialog.property("opacity")==1)
         assert (dialog.property("width"),dialog.property("height"))==(360,378)
         popup_frame(window,dialog).save(str(artifacts/'profile.png'))
-        click(dialog,'profileAvatarEdit');QTest.qWait(20)
+        click(dialog,'profileAvatarEdit');QTest.qWait(220)
         popup_frame(window,dialog).save(str(artifacts/'avatars.png'))
         choice=profile.avatars[-1]['key']
         # Select a visible second registry avatar; cancelling only the picker

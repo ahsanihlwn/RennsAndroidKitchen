@@ -27,6 +27,27 @@ from ui.runtime import create_launcher, WindowLifetime
 from ui.loading import QuickLoadingWindow
 
 
+def _forward_child_stream(stream, text):
+    """Forward child process output when a console stream is attached."""
+    if stream is None or not text:
+        return
+    try:
+        stream.write(text)
+        stream.flush()
+    except Exception:
+        pass
+
+
+def _consume_child_stdout_lines(buf_ref, chunk, on_line):
+    """Buffer partial stdout chunks and dispatch complete lines."""
+    if not chunk:
+        return
+    buf_ref[0] += chunk
+    while "\n" in buf_ref[0]:
+        line, buf_ref[0] = buf_ref[0].split("\n", 1)
+        on_line(line.rstrip("\r"))
+
+
 class AccountState(AppFeatures, QObject):
     """Reuse account verification/session services without building account widgets."""
     official_authorization_finished = Signal(bool)
@@ -183,12 +204,19 @@ class LauncherApplication(QObject):
         screen = app.primaryScreen()
         if screen is not None:
             self.window.setPosition(screen.availableGeometry().center() - QPoint(self.window.width() // 2, self.window.height() // 2))
+        if private_bundle_enabled():
+            win_screen = self.window.screen()
+            if win_screen is not None and win_screen is not screen:
+                from rennsproject.assets import sync_active_avatars_for_screen
+                report = sync_active_avatars_for_screen(win_screen)
+                if report and report.get("processed", 0) > 0:
+                    self._refresh_profile()
         self._trash_timer = QTimer(self)
         self._trash_timer.setInterval(60_000)
         self._trash_timer.timeout.connect(self._maintain_trash)
         self._disk_timer = QTimer(self)
-        self._disk_timer.setInterval(1500)
-        self._disk_timer.timeout.connect(self._scan_disks)
+        self._disk_timer.setInterval(30_000)
+        self._disk_timer.timeout.connect(lambda: self._scan_disks(periodic=True))
         if start_services:
             self.engine._frame_presenter.presented.connect(self._maybe_start_services)
             self.window.contentPrepared.connect(self._maybe_start_services)
@@ -224,8 +252,11 @@ class LauncherApplication(QObject):
                 QTimer.singleShot(100, self._login)
         QTimer.singleShot(500, self._maintain_trash)
         QTimer.singleShot(0, self._prepare_startup)
-        # Account completion alone does not make the launcher interactive yet.
-        # Keep the splash over imports, initial drives and the first final layout.
+        if not getattr(self, "_in_process_workspace", False) and os.environ.get("RAK_TEST_IN_PROCESS") != "1":
+            QTimer.singleShot(0, self._spawn_standby_worker)
+        # Reveal the real launcher as soon as the UI content and initial
+        # drives are ready; never hold the skeleton on network/prewarm work.
+        QTimer.singleShot(900, self._startup_disks_timeout)
         QTimer.singleShot(0, self._reveal_startup)
 
     @Slot()
@@ -241,24 +272,28 @@ class LauncherApplication(QObject):
         # configuration process while its original SVG glint keeps animating.
         def prepare():
             manager = None
-            try:
-                from services.process_manager import get_manager
-                manager = get_manager()
-                manager.start_process()
-            except Exception:
-                logging.exception("Cannot prewarm the configuration service")
+            if self._services_enabled:
+                try:
+                    from services.process_manager import get_manager
+                    manager = get_manager()
+                    manager.start_process()
+                except Exception:
+                    if not self._quitting:
+                        logging.exception("Cannot prewarm the configuration service")
             error = ""
             try:
                 import main  # noqa: F401
                 from icons.handler import warm_icon_catalog
                 warm_icon_catalog()
-                if manager is not None:
+                if manager is not None and not self._quitting:
                     manager.wait_ready()
             except Exception as exception:
-                error = str(exception)
-                logging.exception("Cannot prewarm the editor")
+                if not self._quitting:
+                    error = str(exception)
+                    logging.exception("Cannot prewarm the editor")
             try:
-                self.startupPrepared.emit(error)
+                if not self._quitting:
+                    self.startupPrepared.emit(error)
             except RuntimeError:
                 pass
         self._prewarm_thread = threading.Thread(target=prepare, name="rak-quick-editor-import", daemon=True)
@@ -274,6 +309,23 @@ class LauncherApplication(QObject):
         if not error and not self._quitting:
             QTimer.singleShot(0, self._spawn_standby_worker)
 
+    def _resolve_workspace_command(self, extra_args):
+        is_compiled = getattr(sys, "frozen", False) or "__compiled__" in globals() or (
+            Path(sys.executable).suffix.lower() == ".exe" and
+            not Path(sys.executable).name.lower().startswith("python")
+        )
+        if is_compiled:
+            program = sys.executable
+            args = list(extra_args)
+            working_dir = str(Path(sys.executable).resolve().parent)
+        else:
+            program = sys.executable
+            repo_root = Path(__file__).resolve().parents[1]
+            app_script = str(repo_root / "app.py")
+            args = [app_script, *extra_args]
+            working_dir = str(repo_root)
+        return program, args, working_dir
+
     def _spawn_standby_worker(self):
         """Pre-spawn a worker process that pre-compiles Workspace.qml.
 
@@ -281,22 +333,13 @@ class LauncherApplication(QObject):
         process instead of spawning a new one, eliminating the QML compilation
         delay (~10 s) from the perceived open time.
         """
-        if self._quitting or getattr(self, "_standby_worker", None) is not None:
+        if (self._quitting or not self._services_enabled or
+                getattr(self, "_in_process_workspace", False) or
+                os.environ.get("RAK_TEST_IN_PROCESS") == "1" or
+                getattr(self, "_standby_worker", None) is not None):
             return
         from PySide6.QtCore import QProcess, QProcessEnvironment
-        is_compiled = getattr(sys, "frozen", False) or "__compiled__" in globals() or (
-            Path(sys.executable).suffix.lower() == ".exe" and
-            Path(sys.executable).name.lower() not in ("python.exe", "pythonw.exe")
-        )
-        if is_compiled:
-            program = sys.executable
-            worker_args = ["--workspace-worker"]
-            working_dir = str(Path(sys.executable).resolve().parent)
-        else:
-            program = sys.executable
-            app_script = str(Path(__file__).resolve().parents[1] / "app.py")
-            worker_args = [app_script, "--workspace-worker"]
-            working_dir = str(Path(__file__).resolve().parents[1])
+        program, worker_args, working_dir = self._resolve_workspace_command(["--workspace-worker"])
 
         proc = QProcess(self)
         proc.setProgram(program)
@@ -308,20 +351,29 @@ class LauncherApplication(QObject):
         self._standby_worker = proc
         self._standby_worker_ready = False
         self._standby_worker_stderr = []
+        stdout_buf = [""]
+
+        def handle_standby_line(line):
+            if "[RAK_WORKSPACE_STANDBY_READY]" in line:
+                logging.debug("Standby worker ready")
+                self._standby_worker_ready = True
+            else:
+                _forward_child_stream(sys.stdout, line + "\n")
 
         def on_standby_stdout():
             data = bytes(proc.readAllStandardOutput()).decode("utf-8", errors="replace")
-            for line in data.splitlines():
-                if "[RAK_WORKSPACE_STANDBY_READY]" in line:
-                    logging.debug("Standby worker ready")
-                    self._standby_worker_ready = True
+            _consume_child_stdout_lines(stdout_buf, data, handle_standby_line)
 
         def on_standby_stderr():
             data = bytes(proc.readAllStandardError()).decode("utf-8", errors="replace")
             if data:
                 self._standby_worker_stderr.append(data)
+                _forward_child_stream(sys.stderr, data)
 
         def on_standby_finished(exit_code, exit_status):
+            if stdout_buf[0]:
+                handle_standby_line(stdout_buf[0].rstrip("\r"))
+                stdout_buf[0] = ""
             if self._standby_worker is proc:
                 self._standby_worker = None
                 self._standby_worker_ready = False
@@ -352,10 +404,15 @@ class LauncherApplication(QObject):
                 pass
 
     @Slot()
+    def _startup_disks_timeout(self):
+        if not self._startup_disks_ready:
+            self._startup_disks_ready = True
+            self._reveal_startup()
+
+    @Slot()
     def _reveal_startup(self):
         if (self._quitting or self._startup_ready or self._startup_reveal_pending
-                or not self._services_started or self._startup_verification_pending
-                or not self._prewarm_complete or not self._startup_disks_ready):
+                or not self._services_started or not self._startup_disks_ready):
             return
         self._startup_reveal_pending = True
         self.window.frameSwapped.connect(self._startup_frame_ready,Qt.QueuedConnection)
@@ -435,6 +492,8 @@ class LauncherApplication(QObject):
     @Slot(str)
     def _operation_error(self,text):
         if self._quitting:return
+        from core.error_reporting import is_agent_error
+        if is_agent_error(text):return
         if not self.window.property('contentLoaded'):
             self.window.contentPrepared.connect(lambda text=text:self._operation_error(text),Qt.SingleShotConnection);return
         from html import escape
@@ -443,6 +502,8 @@ class LauncherApplication(QObject):
     @Slot(str)
     def _fatal_message(self,text):
         if self._quitting:return
+        from core.error_reporting import is_agent_error
+        if is_agent_error(text):return
         if not self.window.property('contentLoaded'):
             self.window.contentPrepared.connect(lambda text=text:self._fatal_message(text),Qt.SingleShotConnection)
             return
@@ -518,7 +579,7 @@ class LauncherApplication(QObject):
             elif command == "projectAction" and not self.model.busy:
                 self._project_action(data)
             elif command == "restoreProject" and not self.model.busy:
-                self._job(lambda: self.store.trash.restore(data["id"]))
+                self._job(lambda: self.store.trash.restore(data["id"]), lambda *_: self._scan_disks())
             elif command == "confirm":
                 operation, self._confirmation = self._confirmation, None
                 self._confirmation_cancel = None
@@ -551,8 +612,10 @@ class LauncherApplication(QObject):
     def _project(self, path):
         return next(row for row in self.store.projects() if os.path.normcase(row["path"]) == os.path.normcase(path))
 
-    def _scan_disks(self):
+    def _scan_disks(self, *, periodic: bool = False):
         if self._quitting:
+            return
+        if periodic and self.window is not None and not self.window.isVisible():
             return
         def start(kind, operation):
             if kind in self._disk_scanning:
@@ -570,8 +633,12 @@ class LauncherApplication(QObject):
                     pass
             threading.Thread(target=run, name="rak-quick-disks-" + kind, daemon=True).start()
         from core.disk_monitor import list_windows_disk_usage
-        start("windows", list_windows_disk_usage)
-        if time.monotonic() - self._last_wsl_scan >= 60:
+        if periodic:
+            cached = list(self._windows_usage)
+            start("windows", lambda: list_windows_disk_usage(include_rotational=False, cached_rows=cached))
+        else:
+            start("windows", list_windows_disk_usage)
+        if self._services_enabled and time.monotonic() - self._last_wsl_scan >= 60:
             self._last_wsl_scan = time.monotonic()
             from core.wsl_manager import list_disk_usage, save_disk_usage_cache
             def scan_wsl():
@@ -626,7 +693,7 @@ class LauncherApplication(QObject):
     def _project_action(self, data):
         action, identifier = data["action"], data.get("id")
         if action == "restore":
-            self._job(lambda: self.store.trash.restore(identifier))
+            self._job(lambda: self.store.trash.restore(identifier), lambda *_: self._scan_disks())
         elif action == "open" and not identifier:
             self._open_project(self._project(data["path"]))
         elif action == "pin" and not identifier:
@@ -710,6 +777,8 @@ class LauncherApplication(QObject):
             self.model.setBusy(False)
         if self._quitting:
             return
+        if deleting:
+            self._scan_disks()
         if not ok:
             if getattr(result, "code", "") == "RecycleError" and delete_path and os.path.exists(delete_path):
                 project_name = os.path.basename(delete_path)
@@ -765,6 +834,7 @@ class LauncherApplication(QObject):
         self._reload()
 
     def _created(self, record):
+        self._scan_disks()
         self._pending_created = record
         self.model.presentationRequested.emit("created", {})
         # Full-page creation has no popup to dismiss.
@@ -800,8 +870,9 @@ class LauncherApplication(QObject):
         from PySide6.QtCore import QProcess, QProcessEnvironment
 
         # ── fast path: reuse the pre-warmed standby worker ──────────────────
-        if getattr(self, "_standby_worker_ready", False) and self._standby_worker is not None:
-            proc = self._standby_worker
+        standby = getattr(self, "_standby_worker", None)
+        if standby is not None and standby.state() != QProcess.NotRunning:
+            proc = standby
             self._standby_worker = None
             self._standby_worker_ready = False
             self._workspace_process = proc
@@ -825,6 +896,7 @@ class LauncherApplication(QObject):
                 "lang": self.model._language,
             }) + "\n"
             proc.write(payload.encode("utf-8"))
+            print(f"[APP STAGE] sent open command to standby worker ({(time.perf_counter()-opened_at)*1000:.1f}ms)", flush=True)
             logging.debug("Reused standby worker for %s", record["path"])
             # Spawn a replacement standby worker for the next open.
             QTimer.singleShot(0, self._spawn_standby_worker)
@@ -834,25 +906,12 @@ class LauncherApplication(QObject):
         process = QProcess(self)
         self._workspace_process = process
 
-        is_compiled = getattr(sys, "frozen", False) or "__compiled__" in globals() or (
-            Path(sys.executable).suffix.lower() == ".exe" and
-            Path(sys.executable).name.lower() not in ("python.exe", "pythonw.exe")
-        )
-
         args = ["--workspace", record["path"], record["port1"]]
         if record.get("port2"):
             args.append(record["port2"])
         args.extend(["--palette", self.model.paletteName, "--lang", self.model._language])
 
-        if is_compiled:
-            program = sys.executable
-            working_dir = str(Path(sys.executable).resolve().parent)
-        else:
-            program = sys.executable
-            repo_root = str(Path(__file__).resolve().parents[1])
-            app_script = str(Path(__file__).resolve().parents[1] / "app.py")
-            args.insert(0, app_script)
-            working_dir = repo_root
+        program, args, working_dir = self._resolve_workspace_command(args)
 
         process.setWorkingDirectory(working_dir)
         process.setProgram(program)
@@ -863,30 +922,42 @@ class LauncherApplication(QObject):
         process.setProcessEnvironment(env)
 
         self._wire_workspace_process_signals(process, record, origin, opened_at)
+        print(f"[APP STAGE] spawning cold workspace process ({(time.perf_counter()-opened_at)*1000:.1f}ms)", flush=True)
         process.start()
 
     def _wire_workspace_process_signals(self, process, record, origin, opened_at, extra_stderr=None):
         """Connect stdout/stderr/finished/error signals for a workspace process."""
         return_requested = [False]
         stderr_lines = list(extra_stderr) if extra_stderr else []
+        stdout_buf = [""]
+
+        def handle_stdout_line(line):
+            if "[RAK_WORKSPACE_READY]" in line:
+                self._on_workspace_process_ready(record["path"], opened_at, origin)
+            elif "[RAK_WORKSPACE_RETURN]" in line:
+                return_requested[0] = True
+            elif "[RAK_WORKSPACE_QUIT]" in line:
+                pass
+            elif "[RAK_WORKSPACE_FAILED]" in line:
+                err = line.partition("[RAK_WORKSPACE_FAILED]")[2].strip()
+                self._on_workspace_process_failed(err)
+            else:
+                _forward_child_stream(sys.stdout, line + "\n")
 
         def on_stdout():
             data = bytes(process.readAllStandardOutput()).decode("utf-8", errors="replace")
-            for line in data.splitlines():
-                if "[RAK_WORKSPACE_READY]" in line:
-                    self._on_workspace_process_ready(record["path"], opened_at, origin)
-                elif "[RAK_WORKSPACE_RETURN]" in line:
-                    return_requested[0] = True
-                elif "[RAK_WORKSPACE_FAILED]" in line:
-                    err = line.partition("[RAK_WORKSPACE_FAILED]")[2].strip()
-                    self._on_workspace_process_failed(err)
+            _consume_child_stdout_lines(stdout_buf, data, handle_stdout_line)
 
         def on_stderr():
             data = bytes(process.readAllStandardError()).decode("utf-8", errors="replace")
             if data:
                 stderr_lines.append(data)
+                _forward_child_stream(sys.stderr, data)
 
         def on_finished(exit_code, exit_status):
+            if stdout_buf[0]:
+                handle_stdout_line(stdout_buf[0].rstrip("\r"))
+                stdout_buf[0] = ""
             self._workspace_process = None
             if return_requested[0] or exit_code == 42:
                 self.on_return_from_editor()
@@ -907,6 +978,7 @@ class LauncherApplication(QObject):
         process.errorOccurred.connect(on_error)
 
     def _on_workspace_process_ready(self, project_root, opened_at, origin):
+        print(f"[APP STAGE] workspace ready path={project_root} (+{(time.perf_counter()-opened_at)*1000:.1f}ms)", flush=True)
         self._log_project_entered(project_root, opened_at, origin)
         self.model.setOpeningPath("")
         if not self.model.settings["animations"]:
@@ -1015,8 +1087,6 @@ class LauncherApplication(QObject):
         if not self.model.openingPath or self._quitting:
             return
         if self._prewarm_thread is not None and not self._prewarm_complete:
-            # Importing Main here while the prewarm owns its import lock would
-            # freeze the GUI/spinner. Resume from its queued completion instead.
             self._pending_editor = (record, origin, opened_at)
             return
         try:
@@ -1074,6 +1144,7 @@ class LauncherApplication(QObject):
         self._reload()
         self.window.setOpacity(1)
         self.show()
+        self._scan_disks()
 
     def _open_dialog(self, kind):
         self.model.presentationRequested.emit("showDialog",{"kind":kind})
@@ -1106,7 +1177,9 @@ class LauncherApplication(QObject):
 
     def _logout(self):
         from rennsproject.core.account_manager import clear_account
+        from rennsproject.avatar.handler import clear_google_avatar
         clear_account()
+        clear_google_avatar()
         try:
             from rennsproject.core.secure_store import clear_session
             from rennsproject.core.supabase_client import logout

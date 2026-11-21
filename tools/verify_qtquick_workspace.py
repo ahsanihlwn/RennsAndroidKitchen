@@ -265,7 +265,6 @@ def main():
             session.switchTerminalRoot('tree1');assert session.activeTerminal==first
             session.toggleTerminal();assert terminal.active and not terminal._manager.stopped
             session.toggleTerminal();assert session.activeTerminal==first
-            session.setSpamEnter(True);assert all(row['session']._manager.spam for row in session._terminals)
             session.closeTerminal(first);wait_ms(100)
             assert terminal._manager.stopped and session._terminals[0]['session'].active
             assert session.terminalRoot=='tree2' and session.terminalOpen

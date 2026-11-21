@@ -1,0 +1,13 @@
+/target
+**/*.rs.bk
+*.img
+*.cpio
+*.bin
+*.dec
+*.arc
+header
+kernel*
+ramdisk*
+bootconfig
+dtb
+.magiskboot_v4.json

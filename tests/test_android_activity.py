@@ -9,7 +9,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from PySide6.QtCore import QCoreApplication,QObject,Signal,QProcess
+from PySide6.QtCore import QCoreApplication,QObject,Signal
 from shiboken6 import isValid
 from ui.android_tools import AndroidTools
 from ui.workspace_tasks import WorkspaceTasks
@@ -35,33 +35,57 @@ class AndroidActivityTests(unittest.TestCase):
         self.owner=Owner(str(self.root));self.backend=self.owner._android_tools
         self.addCleanup(self.owner._tasks.close);self.addCleanup(self.backend.close)
         self.case='normal';self.calls=[]
-        self.program=self.root/'device_fixture.py'
-        self.program.write_text('''import sys,time
-protocol,case=sys.argv[1:3];args=sys.argv[3:]
-if args==['getvar','all']:
- if case=='late-adb':sys.exit(1)
- if case in ('empty','adb'):
-  print('< waiting for any device >',flush=True);time.sleep(.2);sys.exit(1)
- print('(bootloader) partition-size:system_a:0x400000',flush=True)
- print('(bootloader) battery-part-status:unsupported',flush=True)
- sys.exit(1 if case=='partial' else 0)
-elif args==['devices']:
- if case=='late-adb':time.sleep(.15)
- print('List of devices attached')
- if case in ('adb','late-adb'):print('FIXTURE\\tdevice')
-elif args and args[0]=='flash':
- print("Sending sparse 'system' 1/2",flush=True);time.sleep(.07)
- print("Writing 'system' OKAY",flush=True);time.sleep(.07)
- if args[1]=='vendor':
-  print('FAILED (AdbWriteEndpointSync failed: The semaphore timeout period has expired. (121))',flush=True);sys.exit(1)
- print("Sending sparse 'system' 2/2",flush=True);print("Writing 'system' OKAY",flush=True)
-''',encoding='utf-8')
-        original=self.backend._launch
-        def launch(program,args,callback,**options):
-            protocol=Path(program).stem
-            self.calls.append((protocol,list(args)))
-            return original(sys.executable,[str(self.program),protocol,self.case,*args],callback,**options)
-        self.backend._launch=launch
+        def sleep_cancelable(seconds,cancel):
+            deadline=time.monotonic()+seconds
+            while time.monotonic()<deadline:
+                if cancel is not None and cancel.is_cancelled():
+                    return True
+                time.sleep(0.01)
+            return cancel is not None and cancel.is_cancelled()
+
+        def run_native(tool,args,*,cwd=None,timeout_ms=None,cancel=None,on_output=None,on_progress=None):
+            arg_list=list(args)
+            self.calls.append((tool,arg_list))
+            out=[]
+            def emit(text):
+                out.append(text)
+                if on_output:on_output(text)
+            if arg_list==['getvar','all']:
+                if self.case=='late-adb':
+                    return {'exit_code':1,'stdout':'','stderr':'','output':''}
+                if self.case in ('empty','adb'):
+                    emit('< waiting for any device >\n')
+                    sleep_cancelable(0.2,cancel)
+                    return {'exit_code':1,'stdout':'','stderr':'','output':''.join(out)}
+                emit('(bootloader) partition-size:system_a:0x400000\n')
+                emit('(bootloader) battery-part-status:unsupported\n')
+                return {'exit_code':1 if self.case=='partial' else 0,'stdout':''.join(out),'stderr':'','output':''.join(out)}
+            if arg_list==['devices']:
+                if self.case=='late-adb':
+                    sleep_cancelable(0.15,cancel)
+                emit('List of devices attached\n')
+                if self.case in ('adb','late-adb'):
+                    emit('FIXTURE\tdevice\n')
+                return {'exit_code':0,'stdout':''.join(out),'stderr':'','output':''.join(out)}
+            if arg_list and arg_list[0]=='flash':
+                emit("Sending sparse 'system' 1/2\n")
+                if on_progress and self.case=='smooth':
+                    on_progress({'partition':arg_list[1],'stage':'downloading','chunk_index':1,'chunk_total':2,'bytes_sent':256,'bytes_total':1024,'percent':25.0,'speed_bps':102400.0,'detail':'downloading'})
+                sleep_cancelable(0.07,cancel)
+                emit("Writing 'system' OKAY\n")
+                if on_progress and self.case=='smooth':
+                    on_progress({'partition':arg_list[1],'stage':'writing','chunk_index':1,'chunk_total':2,'bytes_sent':512,'bytes_total':1024,'percent':50.0,'speed_bps':102400.0,'detail':'writing'})
+                sleep_cancelable(0.07,cancel)
+                if arg_list[1]=='vendor':
+                    emit('FAILED (AdbWriteEndpointSync failed: The semaphore timeout period has expired. (121))\n')
+                    return {'exit_code':1,'stdout':'','stderr':''.join(out),'output':''.join(out)}
+                emit("Sending sparse 'system' 2/2\n")
+                if on_progress and self.case=='smooth':
+                    on_progress({'partition':arg_list[1],'stage':'downloading','chunk_index':2,'chunk_total':2,'bytes_sent':900,'bytes_total':1024,'percent':88.0,'speed_bps':102400.0,'detail':'downloading'})
+                emit("Writing 'system' OKAY\n")
+                return {'exit_code':0,'stdout':''.join(out),'stderr':'','output':''.join(out)}
+            return {'exit_code':0,'stdout':'OKAY\n','stderr':'','output':'OKAY\n'}
+        self.backend._run_native=run_native
     def wait(self,predicate):
         end=time.monotonic()+6
         while not predicate():
@@ -98,12 +122,28 @@ elif args and args[0]=='flash':
             self.assertEqual(resolve.call_args.args[1],'fastboot.exe')
     def test_closing_with_live_probes_does_not_deliver_stale_callbacks(self):
         errors=[];self.case='empty';self.backend.refresh()
-        processes=tuple(self.backend._processes)
+        jobs=tuple(self.backend._processes)
         with patch.object(sys,'excepthook',side_effect=lambda *error:errors.append(error)):
             self.backend.close()
-            self.wait(lambda:all(not isValid(process) or process.state()==QProcess.NotRunning for process in processes))
+            self.wait(lambda:all(not isValid(job) or not job.isRunning() for job in jobs))
             self.app.processEvents()
         self.assertEqual(errors,[])
+
+    def test_smooth_byte_progress_updates_flash_progress_and_loading(self):
+        self.case='smooth';tasks=self.owner._tasks;samples=[]
+        tasks.changed.connect(lambda:samples.extend(row.get('progress') for row in tasks.loading.get_activity() if row['label'].startswith('Flash')))
+        self.backend.assign('system','system.img',str(self.root/'system.img'))
+        self.backend.flashAll()
+        self.wait(lambda:not self.backend.running)
+        self.assertIn(25,samples)
+        self.assertIn(88,samples)
+        self.assertEqual(self.backend.flashProgress,100)
+
+    def test_no_qprocess_in_android_tools_or_toolkit(self):
+        repo=Path(__file__).resolve().parents[1]
+        for rel in ('ui/android_tools.py','ui/toolkit.py'):
+            src=(repo/rel).read_text(encoding='utf-8')
+            self.assertNotIn('QProcess',src,f'Unexpected QProcess reference in {rel}')
     def test_flash_bypasses_file_queue_but_reports_main_loading_progress(self):
         tasks=self.owner._tasks
         tasks.enqueue('Held file operation',lambda:True,lambda *_:None)

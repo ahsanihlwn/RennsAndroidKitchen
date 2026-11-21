@@ -37,6 +37,8 @@ Item {
     property real backdropDim: 0
     property point origin: Qt.point(0,0)
     property bool sampleInSourceCoordinates: false
+    property string fadeEdge: ""
+    property real fadeSize: 24
     readonly property int padding: 32
     property rect sampleRect: Qt.rect(origin.x-padding,origin.y-padding,width+2*padding,height+2*padding)
     // Default samples use window coordinates. Embedded glass can instead
@@ -46,6 +48,8 @@ Item {
     readonly property bool live: texture.live
     readonly property bool rendering: visible && (effectsEnabled || effectMix>.001) && backdropSource !== null && width>0 && height>0
     readonly property bool refracting: rendering && refractionMix>.001 && refractionHeight>0 && refractionAmount>0
+    readonly property bool edgeFading: fadeEdge!=="" && fadeSize>0 && rendering
+    readonly property bool masked: cornerRadius>0 || edgeFading
     // The texture stays on the GPU: no screen grab, QImage readback, timer,
     // or frozen frame. Sample the page alone to avoid blur feedback.
     ShaderEffectSource {
@@ -59,13 +63,33 @@ Item {
         width: glass.width; height: glass.height; radius: glass.cornerRadius
         color: "white"; visible: false
     }
+    Rectangle {
+        id: fadeMask
+        width: glass.width; height: glass.height
+        visible: false; color: "transparent"
+        gradient: Gradient {
+            GradientStop {
+                position: 0.0
+                color: glass.fadeEdge==="top" ? Qt.rgba(1,1,1,1-glass.effectMix) : "#ffffffff"
+            }
+            GradientStop {
+                position: glass.fadeEdge==="top" ? Math.min(.999, glass.fadeSize/Math.max(1,glass.height)) : Math.max(.001, 1-glass.fadeSize/Math.max(1,glass.height))
+                color: "#ffffffff"
+            }
+            GradientStop {
+                position: 1.0
+                color: glass.fadeEdge==="bottom" ? Qt.rgba(1,1,1,1-glass.effectMix) : "#ffffffff"
+            }
+        }
+    }
     ShaderEffectSource {
-        id: maskTexture; sourceItem: maskShape; live: true; hideSource: true; visible: false; smooth: true
-        textureSize: Qt.size(Math.ceil(glass.width*(glass.cornerRadius>0?2:1)*Screen.devicePixelRatio),Math.ceil(glass.height*(glass.cornerRadius>0?2:1)*Screen.devicePixelRatio))
+        id: maskTexture; sourceItem: glass.cornerRadius>0 ? maskShape : (glass.edgeFading ? fadeMask : null); live: true; hideSource: true; visible: false; smooth: true
+        textureSize: glass.cornerRadius>0 ? Qt.size(Math.max(1,Math.ceil(glass.width*2*Screen.devicePixelRatio)),Math.max(1,Math.ceil(glass.height*2*Screen.devicePixelRatio))) : (glass.edgeFading ? Qt.size(Math.max(1,Math.ceil(glass.width*Screen.devicePixelRatio)),Math.max(1,Math.ceil(glass.height*Screen.devicePixelRatio))) : Qt.size(1,1))
     }
     Item {
         anchors.fill: parent
-        layer.enabled: true
+        clip: !glass.masked
+        layer.enabled: glass.masked
         layer.smooth: true
         layer.effect: MultiEffect {
             maskEnabled: true; maskSource: maskTexture

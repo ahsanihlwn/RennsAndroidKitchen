@@ -14,11 +14,19 @@ use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+mod apk;
 mod assets;
+mod avatar;
 mod binary;
+mod brotli_ops;
+mod compare;
 mod config_insert;
 mod directory;
+mod image_tools;
+mod mods;
+mod oem;
 mod path_index;
+mod platform_tools_ops;
 
 // Match Python's UTF-8 errors="ignore", including an incomplete final sequence.
 fn decode_utf8_ignore(mut bytes: &[u8]) -> String {
@@ -212,6 +220,12 @@ fn header_magic(bytes: &[u8]) -> &'static str {
             return "EXT2";
         }
     }
+    if bytes.len() >= 1028 && r32(bytes, 1024) == Some(0xF2F52010) {
+        return "F2FS";
+    }
+    if bytes.starts_with(b"AVB0") {
+        return "VBMETA";
+    }
     ""
 }
 
@@ -221,7 +235,14 @@ fn read_magic(path: &Path) -> String {
     }
     let mut bytes = Vec::with_capacity(65536);
     match File::open(path).and_then(|file| file.take(65536).read_to_end(&mut bytes)) {
-        Ok(_) => header_magic(&bytes).to_owned(),
+        Ok(_) => {
+            let core_kind = header_magic(&bytes);
+            if !core_kind.is_empty() {
+                core_kind.to_owned()
+            } else {
+                oem::detect_oem_magic_file(path)
+            }
+        }
         Err(_) => String::new(),
     }
 }
@@ -374,15 +395,60 @@ fn rak_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
             "directory_snapshots_json",
             "symlink_batch_json",
             "asset_index_json",
+            "compute_avatar_target_dim",
+            "sync_active_avatars_json",
             "config_insert_lines",
             "config_insert_text",
             "binary_analyze_json",
+            "CompareJob",
+            "diff_lines",
+            "oem_detect_magic",
+            "oem_inspect_json",
+            "oem_extract_json",
+            "scan_apks_json",
+            "read_apk_icon_bytes",
+            "patch_fstab_json",
+            "patch_props_json",
+            "selinux_audit_allow_json",
+            "inspect_vbmeta_json",
+            "patch_vbmeta_json",
+            "super_info_json",
+            "super_extract_json",
+            "super_unsparse",
+            "ext_inspect_json",
+            "ext_unpack",
+            "ext_make_fs",
+            "sparse_img2simg",
+            "sparse_simg2img",
+            "pac_list_json",
+            "pac_verify_crc_json",
+            "pac_extract_json",
+            "BrotliFileReader",
+            "brotli_compress_file_json",
+            "brotli_decompress_file_json",
+            "brotli_decompressed_size",
+            "brotli_compress_bytes",
+            "brotli_decompress_bytes",
+            "NativeErofsReader",
+            "erofs_edit_plan_json",
+            "NativeCancelToken",
+            "adb_ensure_server",
+            "adb_shutdown_servers",
+            "adb_run_json",
+            "adb_run_stdio",
+            "fastboot_list_devices_json",
+            "fastboot_run_json",
+            "fastboot_run_stdio",
+            "platform_tool_run_stdio",
+            "platform_tools_version_json",
         ],
     )?;
     module.add_function(wrap_pyfunction!(parse_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(binary::binary_analyze_json, module)?)?;
     module.add_function(wrap_pyfunction!(prescan_json, module)?)?;
     module.add_class::<path_index::PathIndex>()?;
+    module.add_class::<compare::CompareJob>()?;
+    module.add_function(wrap_pyfunction!(compare::diff_lines, module)?)?;
     module.add_function(wrap_pyfunction!(directory::directory_entries_json, module)?)?;
     module.add_function(wrap_pyfunction!(
         directory::directory_snapshots_json,
@@ -390,11 +456,103 @@ fn rak_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(directory::symlink_batch_json, module)?)?;
     module.add_function(wrap_pyfunction!(assets::asset_index_json, module)?)?;
+    module.add_function(wrap_pyfunction!(avatar::compute_avatar_target_dim, module)?)?;
+    module.add_function(wrap_pyfunction!(avatar::sync_active_avatars_json, module)?)?;
     module.add_function(wrap_pyfunction!(
         config_insert::config_insert_lines,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(config_insert::config_insert_text, module)?)?;
+    module.add_function(wrap_pyfunction!(oem::oem_detect_magic, module)?)?;
+    module.add_function(wrap_pyfunction!(oem::oem_inspect_json, module)?)?;
+    module.add_function(wrap_pyfunction!(oem::oem_extract_json, module)?)?;
+    module.add_function(wrap_pyfunction!(apk::scan_apks_json, module)?)?;
+    module.add_function(wrap_pyfunction!(apk::read_apk_icon_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(mods::patch_fstab_json, module)?)?;
+    module.add_function(wrap_pyfunction!(mods::patch_props_json, module)?)?;
+    module.add_function(wrap_pyfunction!(mods::selinux_audit_allow_json, module)?)?;
+    module.add_function(wrap_pyfunction!(mods::inspect_vbmeta_json, module)?)?;
+    module.add_function(wrap_pyfunction!(mods::patch_vbmeta_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::super_info_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::super_extract_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::super_unsparse, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_inspect_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_unpack, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_make_fs, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::sparse_img2simg, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::sparse_simg2img, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::pac_list_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::pac_verify_crc_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::pac_extract_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::boot_inspect_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::boot_unpack_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::boot_repack_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::boot_dtb_patch_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::boot_compress_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::boot_decompress_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::boot_detect_format, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::boot_cpio_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_detect_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_info_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_list_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_stat_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_read_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_unpack, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_pack, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_verify_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_edit_write, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_edit_chmod, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_edit_selinux, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_edit_rm, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_compact, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_usage_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_avb_inspect_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_avb_strip_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::erofs_edit_plan_json, module)?)?;
+    module.add_class::<image_tools::NativeErofsReader>()?;
+    module.add_function(wrap_pyfunction!(image_tools::sdat_transfer_list_info_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::sdat_sdat2img, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::sdat_img2sdat, module)?)?;
+    module.add_class::<brotli_ops::BrotliFileReader>()?;
+    module.add_function(wrap_pyfunction!(
+        brotli_ops::brotli_compress_file_json,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        brotli_ops::brotli_decompress_file_json,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        brotli_ops::brotli_decompressed_size,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(brotli_ops::brotli_compress_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        brotli_ops::brotli_decompress_bytes,
+        module
+    )?)?;
+    module.add_class::<platform_tools_ops::NativeCancelToken>()?;
+    module.add_function(wrap_pyfunction!(platform_tools_ops::adb_ensure_server, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        platform_tools_ops::adb_shutdown_servers,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(platform_tools_ops::adb_run_json, module)?)?;
+    module.add_function(wrap_pyfunction!(platform_tools_ops::adb_run_stdio, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        platform_tools_ops::fastboot_list_devices_json,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(platform_tools_ops::fastboot_run_json, module)?)?;
+    module.add_function(wrap_pyfunction!(platform_tools_ops::fastboot_run_stdio, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        platform_tools_ops::platform_tool_run_stdio,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        platform_tools_ops::platform_tools_version_json,
+        module
+    )?)?;
     Ok(())
 }
 

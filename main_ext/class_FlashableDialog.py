@@ -219,19 +219,19 @@ def _card_qss():
 
 def _ss_primary():
     return f"""
-        QPushButton {{ background:{_th.accent(0.18)}; border:1px solid {_th.accent(0.38)};
-            border-radius:6px; color:{_th.FG_BLUE}; font-size:12px; font-weight:600; padding:0 14px; height:30px; }}
-        QPushButton:hover {{ background:{_th.accent(0.32)}; border-color:{_th.accent(0.60)}; color:{_th.FG_BLUE_LIGHT}; }}
-        QPushButton:pressed {{ background:{_th.accent(0.48)}; }}
+        QPushButton {{ background:{_th.BTN_PRIMARY_BG}; border:1px solid {_th.BTN_PRIMARY_EDGE};
+            border-radius:6px; color:{_th.BTN_PRIMARY_FG}; font-size:12px; font-weight:600; padding:0 14px; height:30px; }}
+        QPushButton:hover {{ background:{_th.BTN_PRIMARY_HOVER}; border-color:{_th.BTN_PRIMARY_EDGE_HOVER}; color:{_th.BTN_PRIMARY_FG_HOVER}; }}
+        QPushButton:pressed {{ background:{_th.BTN_PRIMARY_DOWN}; }}
     """
 
 def _ss_neutral():
     return f"""
-        QPushButton {{ background:{_th.border_color(0.06)}; border:1px solid {_th.border_color(0.10)};
-            border-radius:6px; color:{getattr(_th,'FG3',_th.FG_MUTED)}; font-size:12px; font-weight:400; padding:0 14px; height:30px; }}
-        QPushButton:hover {{ background:{_th.border_color(0.10)}; border-color:{_th.border_color(0.18)}; color:{getattr(_th,'FG_HOVER',_th.FG)}; }}
-        QPushButton:pressed {{ background:{_th.border_color(0.14)}; }}
-        QPushButton:disabled {{ background:{_th.border_color(0.03)}; border-color:{_th.border_color(0.08)}; color:{_th.FG_DESC}; }}
+        QPushButton {{ background:{_th.BTN_SEC_BG}; border:1px solid {_th.BTN_SEC_EDGE};
+            border-radius:6px; color:{_th.BTN_SEC_FG}; font-size:12px; font-weight:400; padding:0 14px; height:30px; }}
+        QPushButton:hover {{ background:{_th.BTN_SEC_HOVER}; border-color:{_th.BTN_SEC_EDGE_HOVER}; color:{_th.BTN_SEC_FG_HOVER}; }}
+        QPushButton:pressed {{ background:{_th.BTN_SEC_DOWN}; }}
+        QPushButton:disabled {{ background:{_th.BTN_SEC_DISABLED_BG}; border-color:{_th.BTN_SEC_DISABLED_EDGE}; color:{_th.BTN_SEC_DISABLED_FG}; }}
     """
 
 def _editor_scrollbar_qss():

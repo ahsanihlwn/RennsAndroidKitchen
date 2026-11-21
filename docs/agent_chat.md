@@ -53,15 +53,14 @@ filesystem sandbox. Existing files are not relocated by this migration.
 
 On Windows, known npm shims resolve to their native executable or Node entry
 point. No user prompt, model name or filename is interpolated into `cmd.exe` or
-PowerShell. On Windows, agent processes and model queries use
-`CREATE_NEW_CONSOLE` with `STARTF_USESHOWWINDOW / SW_HIDE`: the console is hidden
-at creation, and ordinary console descendants inherit it. The previous
-`CREATE_NO_WINDOW` prevented the parent from having a console, allowing a helper
-launched without that flag to allocate a visible one. The transport still uses
-separate pipes through
-`core.kitchen_process.without_console()`. This is the explicit machine-protocol
-exception to the normal Kitchen-tool console presentation, as requested for this
-UI. Regular Kitchen tools still use the shared terminal console. Closing the
+PowerShell. On Windows, agent processes and model queries attach to a dedicated
+background ConPTY host (`core.agent_conpty.AgentTerminalService`) via
+`PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`: the console is headless at creation
+(preventing `CREATE_NEW_CONSOLE` window flicker), and ordinary console
+descendants inherit it. Standard I/O remains on isolated pipes via
+`STARTF_USESTDHANDLES` and `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, rather than
+passing JSON protocols through VT output or the user-facing RAK Terminal tabs.
+Regular Kitchen tools still use the shared terminal console. Closing the
 panel leaves its agent turn running; workspace closure requests a cooperative
 stop, closes input and records unfinished work as interrupted. It does not claim
 that a device process has been killed. A stopping request keeps the stop button

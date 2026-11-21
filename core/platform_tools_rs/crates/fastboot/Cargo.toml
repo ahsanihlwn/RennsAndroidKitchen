@@ -1,0 +1,27 @@
+[package]
+name = "fastboot"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Clean-room MIT Android Fastboot CLI and protocol implementation"
+
+[[bin]]
+name = "fastboot"
+path = "src/main.rs"
+
+[dependencies]
+android-avb = { path = "../android-avb" }
+android-bootimg = { path = "../android-bootimg" }
+android-lp = { path = "../android-lp" }
+android-sparse = { path = "../android-sparse" }
+bytes.workspace = true
+extfs-mkfs = { path = "../extfs-mkfs" }
+f2fs-mkfs = { path = "../f2fs-mkfs" }
+nusb.workspace = true
+pt-common = { path = "../pt-common" }
+tempfile.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+zip.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "etc1tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Encode and decode ETC1 texture images (.png <-> .pkm)"
+
+[[bin]]
+name = "etc1tool"
+path = "src/main.rs"
+
+[dependencies]
+png.workspace = true
+pt-common = { path = "../pt-common" }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

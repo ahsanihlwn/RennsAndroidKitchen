@@ -10,12 +10,11 @@ import re
 import shutil
 import stat
 import struct
-from core import kitchen_process as subprocess
 import sys
 from pathlib import Path
 
 from core import magiskboot_tree as mbt
-from core.proc_util import CREATE_NO_WINDOW
+from core import native_backend as _nb
 
 # Boot header v3+/v4 dropped the offset fields, so these are the conventional
 # defaults twrpdtgen emits for modern images (absolute values, not computed).
@@ -24,24 +23,28 @@ DEFAULT_RAMDISK_OFFSET = 0x26F08000
 DEFAULT_TAGS_OFFSET = 0x07C88000
 
 
-def _run_mb(mb, args, cwd):
-    return subprocess.run([mb, *args], cwd=str(cwd), text=True,
-                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                          encoding="utf-8", errors="replace",
-                          creationflags=CREATE_NO_WINDOW)
-
-
 # boot image probing
 def probe_boot(mb: str, img: Path, work: Path) -> dict:
     work.mkdir(parents=True, exist_ok=True)
-    out = _run_mb(mb, ["unpack", "-h", str(img)], work).stdout
-    info = {}
-    for key in ("HEADER_VER", "KERNEL_SZ", "RAMDISK_SZ", "OS_VERSION",
-                "OS_PATCH_LEVEL", "PAGESIZE", "CMDLINE", "KERNEL_FMT",
-                "RAMDISK_FMT", "NAME", "DTB_SZ"):
-        m = re.search(rf"{key}\s*\[(.*?)\]", out)
-        if m:
-            info[key] = m.group(1)
+    hdr = _nb.boot_inspect(str(img))
+    _nb.boot_unpack(str(img), str(work), skip_decomp=False, dump_hdr=True)
+    info = {
+        "HEADER_VER": str(hdr.get("header_version", 0)),
+        "KERNEL_SZ": str(hdr.get("kernel_size", 0)),
+        "RAMDISK_SZ": str(hdr.get("ramdisk_size", 0)),
+        "PAGESIZE": str(hdr.get("page_size", 0)),
+        "CMDLINE": hdr.get("cmdline", ""),
+        "KERNEL_FMT": hdr.get("kernel_fmt", "raw"),
+        "RAMDISK_FMT": hdr.get("ramdisk_fmt", "raw"),
+    }
+    if hdr.get("os_version"):
+        info["OS_VERSION"] = hdr["os_version"]
+    if hdr.get("os_patch_level"):
+        info["OS_PATCH_LEVEL"] = hdr["os_patch_level"]
+    if hdr.get("name"):
+        info["NAME"] = hdr["name"]
+    if hdr.get("header_version") == 2 or hdr.get("is_vendor"):
+        info["DTB_SZ"] = str(hdr.get("dtb_size", 0))
     hp = work / "header"
     if hp.is_file():
         for line in hp.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -69,10 +72,10 @@ def extract_ramdisk(mb: str, work: Path) -> Path | None:
     if not comp.is_file():
         return None
     dec = work / "ramdisk.dec"
-    _run_mb(mb, ["decompress", "ramdisk.cpio", "ramdisk.dec"], work)
+    mbt.decompress_ramdisk_component(comp, dec, Path(mb))
     if not dec.is_file():
         dec.write_bytes(comp.read_bytes())
-    _run_mb(mb, ["cpio", "ramdisk.dec", "extract"], work)
+    _nb.boot_cpio(str(dec), ["extract"])
     rd = work / "ramdisk"
     return rd if rd.is_dir() else None
 

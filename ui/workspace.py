@@ -6,6 +6,7 @@ from copy import deepcopy
 import json
 import os
 from pathlib import Path
+import subprocess
 import time
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer, QUrl, Qt
@@ -26,7 +27,7 @@ def default_project_settings():
     return {"erofs": {"default": False, "method": "lz4hc", "level": 1},
             "brotli": {"default": True, "level": 1},
             "selinux": {"enabled": False, "ai": False, "plain": True},
-            "super": {"norm": True}, "terminal": {"spam_enter": False},
+            "super": {"norm": True},
             "agent": {"autosave":True,"highlight":True,"ui_triggers":False}}
 
 
@@ -67,7 +68,7 @@ class WorkspaceSession(QObject):
         self._permission_column_width=95
         self._context_menu_active=False
         self._layout = 2 if p2 else 1
-        self._restore_layout = False
+        self._restore_layout = 0
         self._editor = EditorSession(self)
         self._tabs = RowsModel(parent=self)
         self._tab_data = []
@@ -124,12 +125,16 @@ class WorkspaceSession(QObject):
         self._branches=WorkspaceBranches(self)
         from ui.android_tools import AndroidTools
         self._android_tools=AndroidTools(self,self)
+        from ui.toolkit import WorkspaceToolkit
+        self._toolkit=WorkspaceToolkit(self)
         from ui.flashable import FlashableBuilder
         self._flashable=FlashableBuilder(self,self)
         from ui.transfers import WorkspaceTransfers
         self._transfers=WorkspaceTransfers(self)
         from ui.partition_picker import PartitionPicker
         self._partition_picker=PartitionPicker(self)
+        from ui.file_picker import ImportFilePicker
+        self._import_picker=ImportFilePicker(self)
         from ui.private_workspace import PrivateWorkspace
         self._private=PrivateWorkspace(self,profile_provider)
         from ui.mounts import WorkspaceMounts
@@ -167,11 +172,15 @@ class WorkspaceSession(QObject):
     @Property(QObject,constant=True)
     def androidTools(self):return self._android_tools
     @Property(QObject,constant=True)
+    def toolkit(self):return self._toolkit
+    @Property(QObject,constant=True)
     def flashableBuilder(self):return self._flashable
     @Property(QObject,constant=True)
     def transfers(self):return self._transfers
     @Property(QObject,constant=True)
     def partitionPicker(self):return self._partition_picker
+    @Property(QObject,constant=True)
+    def importPicker(self):return self._import_picker
     @Property(QObject,constant=True)
     def privateFeatures(self):return self._private
     @Property(QObject,constant=True)
@@ -199,6 +208,15 @@ class WorkspaceSession(QObject):
     def terminalRows(self): return self._terminal_rows
     @Property(int, notify=changed)
     def layoutMode(self): return self._layout
+    @Property(str, notify=changed)
+    def layoutLabel(self):
+        return {
+            0: "Layout: Hide Trees" if self.p2 else "Layout: Hide Tree",
+            1: "Layout: Single Tree",
+            2: "Layout: Side-by-Side Split",
+            3: "Layout: Top-Bottom Split",
+            4: "Layout: Swapped Split (Tree 2 | Tree 1)",
+        }.get(self._layout, "Layout: Side-by-Side Split")
     @Property(int, notify=changed)
     def activeTreeId(self): return self._active_tree_id
     @Property(float,notify=changed)
@@ -288,8 +306,6 @@ class WorkspaceSession(QObject):
         return self._terminal_views
     @Property(str, notify=terminalsChanged)
     def activeTerminal(self): return self._terminal_active.get(self._terminal_root, "")
-    @Property(bool, notify=settingsChanged)
-    def spamEnter(self): return bool(self._settings["terminal"]["spam_enter"])
     @Property("QVariantMap", notify=settingsChanged)
     def projectSettings(self): return deepcopy(self._settings)
     @Property(str, notify=statusChanged)
@@ -331,11 +347,19 @@ class WorkspaceSession(QObject):
         if not ok:self._tree_failed(str(result));return
         self.preparation_status.emit('Loading project files...')
         bases=[resolve_tree_target(self.project,name) for name in (self.p1,self.p2) if name]
-        self.tree.load(bases[0]);self.tree_mirror.load(bases[0])
-        if self.p2:self.tree2.load(bases[1])
+        self.tree.load(bases[0])
+        if self.p2:
+            self.tree2.load(bases[1])
+            self.tree_mirror.load(bases[0])
 
     def _tree_ready(self, number):
         self._loaded_trees.add(number)
+        if number == 0 and not self.p2 and not self._closing:
+            base = resolve_tree_target(self.project, self.p1)
+            if self.tree.engine is not None:
+                self.tree_mirror.load(base, shared_metadata=(self.tree.engine, self.tree.ctx, self.tree.fs, self.tree.ctx_neocat))
+            else:
+                self.tree_mirror.load(base)
         self._check_ready()
 
     def _tree_failed(self, text):
@@ -347,7 +371,7 @@ class WorkspaceSession(QObject):
     @Slot()
     def _check_ready(self):
         if self._ready or self._closing or self._preparation_error or self._started_at is None: return
-        expected = {0, 2} | ({1} if self.p2 else set())
+        expected = {0} | ({1} if self.p2 else set())
         if not expected.issubset(self._loaded_trees): return
         # File browsing is ready independently of the hidden Monaco renderer.
         # Text documents already queue their buffers until its WebChannel joins.
@@ -388,20 +412,24 @@ class WorkspaceSession(QObject):
 
     @Slot()
     def toggleLayout(self):
-        self._layout = self._layout % 3 + 1
-        self._restore_layout = False
+        if self.p2:
+            order = {2: 3, 3: 4, 4: 0, 0: 2}
+        else:
+            order = {2: 3, 3: 1, 1: 0, 0: 2}
+        self._layout = order.get(self._layout, 2)
+        self._restore_layout = 0
         self.changed.emit()
 
     def _reveal_right(self):
-        if self._layout == 2:
+        if self._layout in (2, 4):
+            self._restore_layout = self._layout
             self._layout = 3
-            self._restore_layout = True
         self.changed.emit()
 
     def _restore_tree(self):
         if not self.rightOpen and self._restore_layout:
-            self._layout = 2
-            self._restore_layout = False
+            self._layout = self._restore_layout
+            self._restore_layout = 0
         self.changed.emit()
 
     @Slot(str)
@@ -589,13 +617,12 @@ class WorkspaceSession(QObject):
     def addTerminal(self):
         return self._create_terminal(self._terminal_root) is not None
 
-    def _create_terminal(self,root,*,cwd=None,title='New Session',icon_key=None,manager=None):
+    def _create_terminal(self,root,*,cwd=None,title='New Session',icon_key=None,manager=None,activate=True):
         base_root=self._linux_source_root if root=='linux' else root
         base = cwd or resolve_tree_target(self.project, self.p2 if base_root == "tree2" else self.p1)
         session = TerminalSession(manager=manager,parent=self) if manager is not None else self._terminal_factory(cwd=base, wsl_mode=root == "linux", parent=self)
         session.warningRaised.connect(lambda title, text: self.message(text, title))
         session.applyTheme(self.preferences.colors)
-        session._manager.set_spam_enter(self.spamEnter)
         if not session.start(): session.deleteLater(); return None
         self._terminal_indices[root] += 1
         key = root + ":" + str(self._terminal_indices[root])
@@ -605,7 +632,8 @@ class WorkspaceSession(QObject):
              "icon":icon_key or random.choice(["icon_sh","icon_zsh","icon_fish"]),"session": session}
         self._terminals.append(row)
         session.firstCommandSubmitted.connect(lambda command,key=key:self._name_terminal(key,command))
-        self._terminal_active[root] = key
+        if activate:
+            self._terminal_active[root] = key
         self._sync_terminals()
         return row
 
@@ -616,11 +644,12 @@ class WorkspaceSession(QObject):
             from core.terminal_execution import ProcessTerminalManager
             root='tree2' if self.activeTreeId==1 and self.p2 else 'tree1'
             row=self._create_terminal(root,cwd=self.project,title='Kitchen',icon_key='terminal',
-                                      manager=ProcessTerminalManager(self.project))
+                                      manager=ProcessTerminalManager(self.project),activate=False)
             if row is None:return None
             self._process_terminal_key=row['key']
-        self._terminal_root=row['root'];self._terminal_active[row['root']]=row['key'];self._terminal_open=True
-        self._sync_terminals();self._reveal_right()
+        if self._terminal_open:
+            self._terminal_root=row['root'];self._terminal_active[row['root']]=row['key']
+            self._sync_terminals()
         return row['session']._manager
 
     def runTerminalProcess(self,process,program,args):
@@ -628,6 +657,12 @@ class WorkspaceSession(QObject):
         if manager is None:return None
         process.setWorkingDirectory(self.project)
         manager.launch(process,program,args)
+        return manager
+
+    def runTerminalNative(self,job,tool,args):
+        manager=self.processTerminal()
+        if manager is None:return None
+        manager.observe_native(job,subprocess.list2cmdline([os.path.basename(str(tool)),*map(str,args)]))
         return manager
 
     def _unique_terminal_title(self,title,root,exclude=''):
@@ -720,12 +755,6 @@ class WorkspaceSession(QObject):
         self._sync_terminals();self._reveal_right()
         row['session'].runCommand(build_run_command(path))
 
-    @Slot(bool)
-    def setSpamEnter(self, enabled):
-        data = self.projectSettings
-        data["terminal"]["spam_enter"] = enabled
-        self.applySettings(data)
-
     def _read_settings(self):
         data = default_project_settings()
         try:
@@ -755,12 +784,13 @@ class WorkspaceSession(QObject):
         temporary.write_text(json.dumps(result, indent=2), encoding="utf-8")
         os.replace(temporary, path)
         self._settings = result
-        for row in self._terminals: row["session"]._manager.set_spam_enter(self.spamEnter)
         self.settingsChanged.emit()
 
     @Slot(str)
     def _present_fatal(self, text):
         if self._closing:return
+        from core.error_reporting import is_agent_error
+        if is_agent_error(text):return
         if text and text not in self._fatal_active and text not in self._fatal_pending:
             self._fatal_pending.append(text)
         if self._fatal_visible or not self._fatal_pending:return
@@ -774,6 +804,8 @@ class WorkspaceSession(QObject):
 
     @Slot(str)
     def _present_operation_error(self,text):
+        from core.error_reporting import is_agent_error
+        if is_agent_error(text):return
         from html import escape
         lines=[line.strip() for line in text.splitlines() if line.strip()]
         summary=next((line for line in lines if 'FAILED' in line or 'error:' in line.lower()),lines[-1] if lines else text)
@@ -987,9 +1019,11 @@ class WorkspaceSession(QObject):
         self._jobs.stop()
         self._search.close()
         self._android_tools.close()
+        self._toolkit.close()
         self._flashable.close()
         self._transfers.close()
         self._partition_picker.close()
+        self._import_picker.close()
         self._private.close()
         self._mounts.close()
         self._tasks.close()

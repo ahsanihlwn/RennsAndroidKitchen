@@ -102,6 +102,12 @@ def detect_fs(path):
         data = f.read(_READ_SIZE)
     if len(data) < 4:
         return ""
+    from core import native_backend
+    try:
+        if native_backend.erofs_detect(path).get("is_erofs"):
+            return "EROFS"
+    except Exception:
+        pass
     if _r32(data, 0) == _SPARSE_MAGIC:
         from core.sparse_reader import SparseReader
         sr = SparseReader(path)
@@ -601,404 +607,91 @@ class ExtReader:
         return nodes
 
 
-EROFS_SUPER_OFFSET = 1024
-EROFS_ISLOTSIZE = 32
+class _CloseProxy:
+    __slots__ = ("_owner",)
 
-# inode layouts
-EROFS_INODE_FLAT_PLAIN     = 0
-EROFS_INODE_FLAT_COMPRESSION_LEGACY = 1
-EROFS_INODE_FLAT_INLINE    = 2
-EROFS_INODE_FLAT_COMPRESSION = 3
-EROFS_INODE_CHUNK_BASED     = 4
+    def __init__(self, owner):
+        self._owner = owner
 
-EROFS_FEATURE_INCOMPAT_48BIT = 0x80
-EROFS_FEATURE_INCOMPAT_METABOX = 0x100
-EROFS_I_NLINK_1_BIT = 4
-EROFS_CHUNK_FORMAT_BLKBITS_MASK = 0x001F
-EROFS_CHUNK_FORMAT_INDEXES = 0x0020
-EROFS_CHUNK_FORMAT_48BIT = 0x0040
-_EROFS_NULL_ADDR_32 = 0xFFFFFFFF
-
-EROFS_FT_DIR = 2
-EROFS_FT_SYMLINK = 7
+    def close(self):
+        self._owner.close()
 
 
-class ErofsReader:
-    def __init__(self, f):
-        self.f = f
-        self._read_super()
-
-    def _read_super(self):
-        # offsets per struct erofs_super_block (fs/erofs/erofs_fs.h)
-        f = self.f
-        f.seek(EROFS_SUPER_OFFSET)
-        sb = f.read(144)
-        if len(sb) < 144:
-            raise ValueError("superblock EROFS terpotong")
-        magic = struct.unpack_from('<I', sb, 0)[0]
-        if magic != _EROFS_MAGIC:
-            raise ValueError("bukan EROFS")
-        self.feature_incompat = struct.unpack_from('<I', sb, 80)[0]
-        self.blkszbits  = sb[12]
-        if not 9 <= self.blkszbits <= 16:
-            raise ValueError(f"ukuran blok EROFS tidak valid: {self.blkszbits}")
-        self.block_size = 1 << self.blkszbits
-        self.inos       = struct.unpack_from('<Q', sb, 16)[0]
-        self.meta_blkaddr  = struct.unpack_from('<I', sb, 40)[0]
-        self.xattr_blkaddr = struct.unpack_from('<I', sb, 44)[0]
-        # EROFS_FEATURE_INCOMPAT_ZERO_PADDING (lz4 0padding) = bit 0
-        self.lz4_0padding = bool(self.feature_incompat & 0x1)
-        self.has_48bit = bool(self.feature_incompat & EROFS_FEATURE_INCOMPAT_48BIT)
-        self.has_metabox = bool(self.feature_incompat & EROFS_FEATURE_INCOMPAT_METABOX)
+def _translate_erofs_error(exc: Exception, internal_path: str = "") -> Exception:
+    msg = str(exc)
+    low = msg.lower()
+    if "path not found:" in low:
+        return FileNotFoundError(internal_path or msg)
+    if "is a directory" in low:
+        return IsADirectoryError(internal_path or msg)
+    if any(tok in low for tok in (
+        "invalid erofs", "corrupted", "edit error", "compaction error",
+        "invalid path", "invalid argument", "unsupported", "magic",
+        "allow_grow", "compress", "read-only", "non-empty",
+    )):
+        return ValueError(msg)
+    return exc
 
 
-        rootnid_2b = struct.unpack_from('<H', sb, 14)[0]
-        rootnid_8b = struct.unpack_from('<Q', sb, 128)[0]
-        self.root_nid = rootnid_8b if self.has_48bit and rootnid_8b else rootnid_2b
-        self.metabox_nid = 0
-        self._metabox_blob = None
-        self._loading_metabox = False
-        if self.has_metabox:
-            # metabox_nid berada di superblock extension. Fitur METABOX
-            # mewajibkan sb_extslots cukup panjang untuk field byte 136..143.
-            if sb[13] < 1:
-                raise ValueError("EROFS METABOX tanpa superblock extension")
-            self.metabox_nid = struct.unpack_from('<Q', sb, 136)[0]
-            if self.metabox_nid >> 63:
-                raise ValueError("EROFS METABOX menunjuk dirinya sendiri")
+def _node_from_erofs_dict(d: dict, *, strip_root_slash: bool = True) -> Node:
+    path = d.get("path", "")
+    if strip_root_slash:
+        path = path.strip("/")
+    return Node(
+        path=path,
+        is_dir=bool(d.get("is_dir")),
+        size=int(d.get("size", 0)),
+        ino=int(d.get("nid", d.get("ino", 0))),
+        mode=int(d.get("mode", 0)),
+        is_link=bool(d.get("is_link")),
+        target=d.get("target") or None,
+        selinux=d.get("selinux") or None,
+    )
 
-    def _nid_to_offset(self, nid):
-        return self.meta_blkaddr * self.block_size + nid * EROFS_ISLOTSIZE
 
-    def _get_metabox_blob(self):
+class _NativeErofsHandle:
+    """Thin adapter around rak_native.NativeErofsReader for mount/browse/read."""
 
-        if not self.has_metabox:
-            raise ValueError("NID METABOX ditemukan tetapi fitur METABOX tidak aktif")
-        if self._metabox_blob is not None:
-            return self._metabox_blob
-        if self._loading_metabox:
-            raise ValueError("referensi METABOX melingkar")
-        if not self.metabox_nid:
-            raise ValueError("EROFS METABOX tidak memiliki metabox_nid")
-        self._loading_metabox = True
-        try:
-            blob = self.read_file(self.metabox_nid)
-            self._metabox_blob = blob
-            return blob
-        finally:
-            self._loading_metabox = False
+    def __init__(self, native_reader):
+        self._native = native_reader
+        self.f = _CloseProxy(self)
 
-    def _read_inode(self, nid):
-        # offsets per struct erofs_inode_compact / _extended
-        f = self.f
-        in_metabox = bool(nid >> 63)
-        slot_nid = nid & ((1 << 63) - 1)
-        if in_metabox:
-            blob = self._get_metabox_blob()
-            off = slot_nid * EROFS_ISLOTSIZE
-            hdr = blob[off:off + 64]
-        else:
-            blob = None
-            off = self._nid_to_offset(slot_nid)
-            f.seek(off)
-            hdr = f.read(64)
-        if len(hdr) < 32:
-            where = "METABOX" if in_metabox else "metadata utama"
-            raise ValueError(f"inode EROFS nid={nid} terpotong di {where}")
-        fmt = struct.unpack_from('<H', hdr, 0)[0]
-        layout = (fmt >> 1) & 0x7
-        is_extended = (fmt & 1) == 1
-        if is_extended and len(hdr) < 64:
-            raise ValueError(f"inode EROFS extended nid={nid} terpotong")
-
-        xattr_count = struct.unpack_from('<H', hdr, 2)[0]   # i_xattr_icount
-        mode = struct.unpack_from('<H', hdr, 4)[0]          # i_mode
-
-        if is_extended:
-            size  = struct.unpack_from('<Q', hdr, 8)[0]     # le64
-            u_raw = struct.unpack_from('<I', hdr, 16)[0]
-            inode_hdr_size = 64
-            start_hi = struct.unpack_from('<H', hdr, 6)[0]
-            addr_mask = (1 << 48) - 1
-        else:
-            size  = struct.unpack_from('<I', hdr, 8)[0]     # le32
-            # struct erofs_inode_compact memiliki i_mtime di byte 12, lalu
-            # union i_u (startblk_lo/chunkformat) di byte 16.
-            u_raw = struct.unpack_from('<I', hdr, 16)[0]
-            inode_hdr_size = 32
-            # Pada compact inode i_nb hanya berarti startblk_hi apabila bit
-            # NLINK_1 aktif pada non-directory. Selain itu ia adalah nlink.
-            if ((mode & S_IFMT) != S_IFDIR and
-                    (fmt & (1 << EROFS_I_NLINK_1_BIT))):
-                start_hi = struct.unpack_from('<H', hdr, 6)[0]
-                addr_mask = (1 << 48) - 1
-            else:
-                start_hi = 0
-                addr_mask = (1 << 32) - 1
-
-        # xattr inline area = 12 + (icount-1)*4 bytes bila icount>0
-        # (mencakup ibody header + shared-index array + inline entries)
-        xattr_off  = off + inode_hdr_size
-        xattr_size = (12 + (xattr_count - 1) * 4) if xattr_count else 0
-
-        data_off = xattr_off + xattr_size
-        return {
-            "layout": layout, "mode": mode, "size": size,
-            "u_raw": u_raw, "startblk": (start_hi << 32) | u_raw,
-            "addr_mask": addr_mask,
-            "data_off": data_off, "nid": nid,
-            "xattr_off": xattr_off, "xattr_count": xattr_count,
-            "xattr_size": xattr_size,
-            "is_extended": is_extended,
-            "u_off": 16,
-            "chunkformat": struct.unpack_from('<H', hdr, 16)[0],
-            "metabox_blob": blob,
-        }
-
-    def _xattr_entry_selinux(self, buf, pos):
-
-        if pos + 4 > len(buf):
-            return None, len(buf)
-        name_len   = buf[pos]
-        name_index = buf[pos + 1]
-        value_size = struct.unpack_from('<H', buf, pos + 2)[0]
-        name  = buf[pos + 4: pos + 4 + name_len]
-        vstart = pos + 4 + name_len
-        value = buf[vstart: vstart + value_size]
-        # next entry dialign 4-byte
-        nxt = vstart + value_size
-        nxt = (nxt + 3) & ~3
-        if name_index == 6 and name == b"selinux":   # EROFS_XATTR_INDEX_SECURITY
-            return value.split(b"\x00", 1)[0].decode("utf-8", "replace"), nxt
-        return None, nxt
-
-    def _shared_entry_selinux(self, index):
-
-        off = self.xattr_blkaddr * self.block_size + index * 4
-        self.f.seek(off)
-        buf = self.f.read(256)   # cukup utk satu entry konteks selinux
-        val, _ = self._xattr_entry_selinux(buf, 0)
-        return val
-
-    def _inode_selinux(self, inode):
-
-        icount = inode["xattr_count"]
-        if not icount:
-            return None
-        if inode.get("metabox_blob") is not None:
-            area = inode["metabox_blob"][inode["xattr_off"]:
-                                         inode["xattr_off"] + inode["xattr_size"]]
-        else:
-            self.f.seek(inode["xattr_off"])
-            area = self.f.read(inode["xattr_size"])
-        if len(area) < 12:
-            return None
-        shared_count = area[4]                       # h_shared_count
-        # 1) shared xattrs (di-dedup di xattr_blkaddr)
-        for i in range(shared_count):
-            ipos = 12 + i * 4
-            if ipos + 4 > len(area):
-                break
-            idx = struct.unpack_from('<I', area, ipos)[0]
-            val = self._shared_entry_selinux(idx)
-            if val is not None:
-                return val
-        # 2) inline xattrs (setelah ibody header + shared array)
-        pos = 12 + shared_count * 4
-        while pos + 4 <= len(area):
-            val, pos = self._xattr_entry_selinux(area, pos)
-            if val is not None:
-                return val
-        return None
-
-    def _inode_data(self, inode):
-
-        layout = inode["layout"]
-        size   = inode["size"]
-        bs     = self.block_size
-
-        if layout == EROFS_INODE_FLAT_PLAIN:
-            start = inode["startblk"]
-            if not size:
-                return b""
-            if ((start ^ ((1 << 48) - 1)) & inode["addr_mask"]) == 0:
-                return b"\x00" * size
-            self.f.seek(start * bs)
-            return self.f.read(size).ljust(size, b"\x00")
-
-        if layout == EROFS_INODE_FLAT_INLINE:
-            full = (size // bs) * bs          # bagian block penuh
-            tail = size - full                # sisa inline
-            out = b""
-            if full:
-                start = inode["startblk"]
-                if ((start ^ ((1 << 48) - 1)) & inode["addr_mask"]) == 0:
-                    out += b"\x00" * full
-                else:
-                    self.f.seek(start * bs)
-                    out += self.f.read(full).ljust(full, b"\x00")
-            if tail:
-                if inode.get("metabox_blob") is not None:
-                    out += inode["metabox_blob"][inode["data_off"]:
-                                                  inode["data_off"] + tail]
-                else:
-                    self.f.seek(inode["data_off"])
-                    out += self.f.read(tail)
-            return out
-
-        # compressed layout (1/3) & chunk-based (4)
-        return None
-
-    def read_file(self, nid):
-
-        inode = self._read_inode(nid)
-        layout = inode["layout"]
-        if layout in (EROFS_INODE_FLAT_PLAIN, EROFS_INODE_FLAT_INLINE):
-            data = self._inode_data(inode)
-            return data[:inode["size"]] if data is not None else b""
-        if layout in (1, 3):
-            if inode.get("metabox_blob") is not None:
-                raise NotImplementedError(
-                    "inode terkompresi di METABOX belum didukung untuk extract")
-            from core import erofs_z
-            sbi = {
-                "block_size": self.block_size,
-                "blkszbits": self.blkszbits,
-                "lz4_0padding": self.lz4_0padding,
-            }
-            return erofs_z.ZInode(self.f, sbi, inode).read()
-        if layout == EROFS_INODE_CHUNK_BASED:
-            return self._read_chunked(inode)
-        raise NotImplementedError(f"layout {layout}")
-
-    def _read_chunked(self, inode):
-
-        bs = self.block_size
-        fmt = inode["chunkformat"]
-        if fmt & ~0x007F:
-            raise NotImplementedError(f"chunk format tidak didukung: 0x{fmt:x}")
-        chunkbits = self.blkszbits + (fmt & EROFS_CHUNK_FORMAT_BLKBITS_MASK)
-        if chunkbits > 31:
-            raise NotImplementedError("ukuran chunk terlalu besar")
-        chunk_size = 1 << chunkbits
-        count = (inode["size"] + chunk_size - 1) // chunk_size
-        unit = 8 if (fmt & EROFS_CHUNK_FORMAT_INDEXES) else 4
-        pos = (inode["data_off"] + unit - 1) & ~(unit - 1)
-        mask = (1 << 48) - 1 if (fmt & EROFS_CHUNK_FORMAT_48BIT) else _EROFS_NULL_ADDR_32
-        out = bytearray()
-        for number in range(count):
-            entry_off = pos + number * unit
-            if inode.get("metabox_blob") is not None:
-                entry = inode["metabox_blob"][entry_off:entry_off + unit]
-            else:
-                self.f.seek(entry_off)
-                entry = self.f.read(unit)
-            if len(entry) != unit:
-                raise ValueError("chunk index EROFS terpotong")
-            if unit == 8:
-                hi, device_id, lo = struct.unpack('<HHI', entry)
-                if device_id:
-                    raise NotImplementedError(
-                        f"chunk memakai device {device_id}; image blob pendamping diperlukan")
-                start = ((hi << 32) | lo) & mask
-            else:
-                start = struct.unpack('<I', entry)[0]
-            want = min(chunk_size, inode["size"] - len(out))
-            if start == mask:
-                out.extend(b"\x00" * want)
-                continue
-            self.f.seek(start * bs)
-            data = self.f.read(want)
-            out.extend(data.ljust(want, b"\x00"))
-        return bytes(out)
-
-    def open_file(self, nid):
-
-        inode = self._read_inode(nid)
-        layout = inode["layout"]
-        if layout in (EROFS_INODE_FLAT_PLAIN, EROFS_INODE_FLAT_INLINE):
-            data = self._inode_data(inode)
-            if data is None:
-                return None
-            return io.BytesIO(data[:inode["size"]])
-        if layout in (1, 3):
-            from core import erofs_z
-            sbi = {
-                "block_size": self.block_size,
-                "blkszbits": self.blkszbits,
-                "lz4_0padding": self.lz4_0padding,
-            }
-            try:
-                z = erofs_z.ZInode(self.f, sbi, inode)
-            except NotImplementedError:
-                return None
-            return erofs_z.ZInodeFile(z)
-        if layout == EROFS_INODE_CHUNK_BASED:
-            return io.BytesIO(self._read_chunked(inode))
-        return None
-
-    def _iter_dir(self, inode):
-        data = self._inode_data(inode)
-        if not data:
-            return
-        total = len(data)
-        # dirents dikelompokkan per block. Block terakhir (tail-inline) bisa partial.
-        bs = self.block_size
-        pos = 0
-        while pos < total:
-            block = data[pos: pos + bs]
-            blen = len(block)
-            if blen < 12:
-                break
-            # nameoff entry pertama = ukuran area dirent -> jumlah entry
-            first_nameoff = struct.unpack_from('<H', block, 8)[0]
-            count = first_nameoff // 12
-            if count == 0 or count * 12 > blen:
-                break
-            for i in range(count):
-                e = i * 12
-                nid     = struct.unpack_from('<Q', block, e)[0]
-                nameoff = struct.unpack_from('<H', block, e + 8)[0]
-                ftype   = block[e + 10]
-                # nama berakhir di nameoff entry berikut, atau akhir block
-                if i + 1 < count:
-                    next_nameoff = struct.unpack_from('<H', block, (i + 1) * 12 + 8)[0]
-                else:
-                    next_nameoff = blen
-                # clamp — block partial tidak boleh baca lewat buffer
-                nameoff      = min(nameoff, blen)
-                next_nameoff = min(next_nameoff, blen)
-                name = block[nameoff:next_nameoff].split(b'\x00', 1)[0].decode('utf-8', 'replace')
-                if name and name not in (".", ".."):
-                    yield nid, name, ftype
-            pos += bs
-
-    def _read_symlink(self, inode):
-        return self._inode_data(inode).split(b'\x00', 1)[0].decode('utf-8', 'replace')
+    @property
+    def root_nid(self) -> int:
+        return int(self._native.root_nid)
 
     def walk(self):
-        nodes = []
-        visited_dirs = set()
+        raw_nodes = json.loads(self._native.walk_json(False))
+        return [
+            _node_from_erofs_dict(item)
+            for item in raw_nodes
+            if item.get("path", "") not in ("", "/")
+        ]
 
-        def recurse(nid, prefix):
-            if nid in visited_dirs:
-                return
-            visited_dirs.add(nid)
-            inode = self._read_inode(nid)
-            for child_nid, name, ftype in self._iter_dir(inode):
-                path = prefix + "/" + name if prefix else name
-                cinode = self._read_inode(child_nid)
-                mode = cinode["mode"]
-                is_dir  = (mode & S_IFMT) == S_IFDIR or ftype == EROFS_FT_DIR
-                is_link = (mode & S_IFMT) == S_IFLNK or ftype == EROFS_FT_SYMLINK
-                target = self._read_symlink(cinode) if is_link else None
-                selinux = self._inode_selinux(cinode)
-                nodes.append(Node(path, is_dir, cinode["size"], child_nid, mode, is_link, target, selinux))
-                if is_dir:
-                    recurse(child_nid, path)
+    def children(self, nid: int):
+        return json.loads(self._native.children_json(int(nid)))
 
-        recurse(self.root_nid, "")
-        return nodes
+    def stat_nid(self, nid: int) -> dict:
+        return json.loads(self._native.stat_nid_json(int(nid)))
+
+    def stat_path(self, internal_path: str) -> Node:
+        return _node_from_erofs_dict(
+            json.loads(self._native.stat_path_json(str(internal_path)))
+        )
+
+    def read_file(self, nid: int) -> bytes:
+        return bytes(self._native.read_file(int(nid)))
+
+    def read_path(self, internal_path: str) -> bytes:
+        return bytes(self._native.read_path(str(internal_path)))
+
+    def open_file(self, nid: int):
+        return io.BytesIO(self.read_file(nid))
+
+    def close(self):
+        native = getattr(self, "_native", None)
+        if native is not None:
+            native.close()
 
 
 def build_nodes(path):
@@ -1070,11 +763,17 @@ def open_reader(path, writable=False):
     if _is_sparse_file(path):
         if writable:
             raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        if fs == "EROFS":
+            from core import native_backend
+            return (fs, _NativeErofsHandle(native_backend.erofs_open_reader(path)))
         from core.sparse_reader import SparseReader
         f = SparseReader(path)
-    else:
-        f = open(path, 'r+b' if writable else 'rb')
-    return (fs, ExtReader(f) if fs == "EXT" else ErofsReader(f))
+        return (fs, ExtReader(f))
+    if fs == "EROFS":
+        from core import native_backend
+        return (fs, _NativeErofsHandle(native_backend.erofs_open_reader(path)))
+    f = open(path, 'r+b' if writable else 'rb')
+    return (fs, ExtReader(f))
 
 
 _TEXT_EXTENSIONS = {
@@ -1132,9 +831,8 @@ def _root_node(fs, reader):
     if fs == "EXT":
         mode, size, _flags, _blocks, raw = reader._read_inode(2)
         return Node("", True, size, 2, mode, selinux=reader._inode_selinux(raw))
-    inode = reader._read_inode(reader.root_nid)
-    return Node("", True, inode["size"], reader.root_nid, inode["mode"],
-                selinux=reader._inode_selinux(inode))
+    info = reader.stat_nid(reader.root_nid)
+    return _node_from_erofs_dict(info, strip_root_slash=True)
 
 
 def resolve_node(path, internal_path):
@@ -1148,6 +846,12 @@ def resolve_node(path, internal_path):
             logging.exception("Reading filesystem root metadata failed: %s", path)
             _close(r)
             raise
+    if fs == "EROFS":
+        try:
+            return r, r.stat_path("/" + internal_path)
+        except Exception as exc:
+            _close(r)
+            raise _translate_erofs_error(exc, internal_path) from exc
     for n in r.walk():
         if n.path == internal_path:
             return r, n
@@ -1177,6 +881,12 @@ def read_path(path, internal_path):
     try:
         if node.is_dir:
             raise IsADirectoryError(internal_path)
+        if isinstance(r, _NativeErofsHandle):
+            try:
+                norm = "/" + internal_path.strip("/").replace("\\", "/")
+                return r.read_path(norm), node
+            except Exception as exc:
+                raise _translate_erofs_error(exc, internal_path) from exc
         return r.read_file(node.ino), node
     finally:
         try:
@@ -1373,78 +1083,110 @@ def preflight_write_path_data(path, internal_path, new_data: bytes,
 
 def _preflight_write_path_data_unlocked(path, internal_path, new_data,
                                         allow_grow=True):
+    norm = internal_path.strip("/").replace("\\", "/")
+    fs = detect_fs(path)
+    if not fs:
+        raise ValueError("magic tidak dikenali (bukan EXT/EROFS)")
+    if fs == "EROFS":
+        if not norm:
+            raise IsADirectoryError(internal_path)
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        erofs_path = "/" + norm
+        try:
+            st = native_backend.erofs_stat(path, erofs_path)
+        except Exception as exc:
+            raise _translate_erofs_error(exc, norm) from exc
+        if st.get("is_dir") or st.get("is_link"):
+            raise IsADirectoryError(norm)
+        try:
+            plan = native_backend.erofs_edit_plan(path, erofs_path, len(new_data))
+        except Exception as exc:
+            raise _translate_erofs_error(exc, norm) from exc
+        if plan.get("mode") == "append" and not allow_grow:
+            raise ValueError("konten baru tidak muat dan allow_grow=False")
+        out = dict(plan)
+        out["grow"] = int(plan.get("grow_bytes", 0))
+        return out
+
     fs, r, node = _resolve_writable(path, internal_path)
     try:
         if node.is_dir or node.is_link:
             raise IsADirectoryError(internal_path)
-        if fs == "EXT":
-            mode, old_size, flags, iblock, _raw = r._read_inode(node.ino)
-            if flags & 0x10000000:
-                raise ValueError("file inline_data — belum didukung untuk write")
-            if (mode & S_IFMT) != S_IFREG:
-                raise ValueError("bukan file reguler")
-            phys = r._file_phys_blocks(iblock, old_size, flags)
-            bs = r.block_size
-            new_size = len(new_data)
-            capacity = len(phys) * bs
-            if new_size > capacity:
-                raise ValueError(
-                    f"konten baru {new_size}B > kapasitas blok teralokasi "
-                    f"{capacity}B ({len(phys)} blok)")
-            needed = (new_size + bs - 1) // bs
-            if 0 in phys[:needed]:
-                raise ValueError("file punya hole di rentang tulis (sparse)")
-            if getattr(r, "has_metadata_csum", False) and new_size != old_size:
-                raise ValueError(
-                    "image pakai metadata_csum: ukuran konten harus sama "
-                    "atau image perlu direpack")
-            return {"mode": "inplace_ext", "old_size": old_size,
-                    "new_size": new_size, "grow": 0}
-
-        from core import erofs_write
-        sb = erofs_write.open_sb(r.f)
-        inode = erofs_write.read_inode(r.f, sb, node.ino)
-        try:
-            plan = erofs_write.plan_write(r.f, sb, inode, len(new_data))
-        except erofs_write.ErofsWriteError as ex:
-            raise ValueError(str(ex)) from ex
-        if plan["mode"] == "append" and not allow_grow:
-            raise ValueError("konten baru tidak muat dan allow_grow=False")
-        return dict(plan, old_size=inode["size"], new_size=len(new_data))
+        mode, old_size, flags, iblock, _raw = r._read_inode(node.ino)
+        if flags & 0x10000000:
+            raise ValueError("file inline_data — belum didukung untuk write")
+        if (mode & S_IFMT) != S_IFREG:
+            raise ValueError("bukan file reguler")
+        phys = r._file_phys_blocks(iblock, old_size, flags)
+        bs = r.block_size
+        new_size = len(new_data)
+        capacity = len(phys) * bs
+        if new_size > capacity:
+            raise ValueError(
+                f"konten baru {new_size}B > kapasitas blok teralokasi "
+                f"{capacity}B ({len(phys)} blok)")
+        needed = (new_size + bs - 1) // bs
+        if 0 in phys[:needed]:
+            raise ValueError("file punya hole di rentang tulis (sparse)")
+        if getattr(r, "has_metadata_csum", False) and new_size != old_size:
+            raise ValueError(
+                "image pakai metadata_csum: ukuran konten harus sama "
+                "atau image perlu direpack")
+        return {"mode": "inplace_ext", "old_size": old_size,
+                "new_size": new_size, "grow": 0}
     finally:
         _close(r)
 
 
 def _write_path_data_unlocked(path, internal_path, new_data: bytes,
                               allow_grow=True, strip_avb=True):
+    norm = internal_path.strip("/").replace("\\", "/")
+    fs = detect_fs(path)
+    if not fs:
+        raise ValueError("magic tidak dikenali (bukan EXT/EROFS)")
+    if fs == "EROFS":
+        if not norm:
+            raise IsADirectoryError(internal_path)
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        erofs_path = "/" + norm
+        try:
+            st = native_backend.erofs_stat(path, erofs_path)
+        except Exception as exc:
+            raise _translate_erofs_error(exc, norm) from exc
+        if st.get("is_dir") or st.get("is_link"):
+            raise IsADirectoryError(norm)
+        try:
+            res = native_backend.erofs_edit_write(
+                path,
+                erofs_path,
+                new_data,
+                allow_grow=allow_grow,
+                strip_avb=strip_avb,
+            )
+        except Exception as exc:
+            raise _translate_erofs_error(exc, norm) from exc
+        return int(res["new_size"])
 
     fs, r, node = _resolve_writable(path, internal_path)
     try:
         if node.is_dir or node.is_link:
             raise IsADirectoryError(internal_path)
-        if fs == "EXT":
-            n = r.write_file(node.ino, new_data)
-            if len(new_data) < node.size:
-
-
-                from core import ext_write
-                try:
-                    w = ext_write.ExtWriter(r)
-                    w.shrink_to(node.ino, len(new_data), old_size=node.size)
-                    w.flush()
-                except ext_write.ExtWriteError:
-                    # image tak memenuhi syarat tulis struktural (metadata_csum
-                    # / journal): isi tetap tertulis, blok sisanya tak dilepas.
-                    pass
-            return n
-        from core import erofs_write
-        try:
-            res = erofs_write.write_file(r.f, node.ino, new_data,
-                                         allow_grow=allow_grow,
-                                         strip_avb=strip_avb)
-        except erofs_write.ErofsWriteError as e:
-            raise ValueError(str(e)) from e
-        return res["new_size"]
+        n = r.write_file(node.ino, new_data)
+        if len(new_data) < node.size:
+            from core import ext_write
+            try:
+                w = ext_write.ExtWriter(r)
+                w.shrink_to(node.ino, len(new_data), old_size=node.size)
+                w.flush()
+            except ext_write.ExtWriteError:
+                # image tak memenuhi syarat tulis struktural (metadata_csum
+                # / journal): isi tetap tertulis, blok sisanya tak dilepas.
+                pass
+        return n
     finally:
         _close(r)
 
@@ -1452,19 +1194,19 @@ def _write_path_data_unlocked(path, internal_path, new_data: bytes,
 def plan_path_write(path, internal_path, new_len):
 
     internal_path = internal_path.strip("/").replace("\\", "/")
-    fs, r = open_reader(path)
+    fs = detect_fs(path)
+    if fs != "EROFS":
+        return None
+    if not internal_path:
+        raise IsADirectoryError(internal_path)
+    from core import native_backend
     try:
-        if fs != "EROFS":
-            return None
-        node = next((n for n in r.walk() if n.path == internal_path), None)
-        if node is None:
-            raise FileNotFoundError(internal_path)
-        from core import erofs_write
-        sb = erofs_write.open_sb(r.f)
-        inode = erofs_write.read_inode(r.f, sb, node.ino)
-        return erofs_write.plan_write(r.f, sb, inode, new_len)
-    finally:
-        _close(r)
+        plan = native_backend.erofs_edit_plan(path, "/" + internal_path, int(new_len))
+    except Exception as exc:
+        raise _translate_erofs_error(exc, internal_path) from exc
+    out = dict(plan)
+    out["grow"] = int(plan.get("grow_bytes", 0))
+    return out
 
 
 def set_perm(path, internal_path, perm_octal):
@@ -1477,15 +1219,23 @@ def _set_perm_unlocked(path, internal_path, perm_octal):
 
     if isinstance(perm_octal, str):
         perm_octal = int(perm_octal, 8)
+    norm = internal_path.strip("/").replace("\\", "/")
+    fs = detect_fs(path)
+    if not fs:
+        raise ValueError("magic tidak dikenali (bukan EXT/EROFS)")
+    if fs == "EROFS":
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        erofs_path = "/" + norm if norm else "/"
+        try:
+            return native_backend.erofs_edit_chmod(path, erofs_path, perm_octal)
+        except Exception as exc:
+            raise _translate_erofs_error(exc, norm) from exc
+
     fs, r, node = _resolve_writable(path, internal_path)
     try:
-        if fs == "EXT":
-            return r.write_mode(node.ino, perm_octal)
-        from core import erofs_write
-        try:
-            return erofs_write.write_mode(r.f, node.ino, perm_octal)
-        except erofs_write.ErofsWriteError as e:
-            raise ValueError(str(e)) from e
+        return r.write_mode(node.ino, perm_octal)
     finally:
         _close(r)
 
@@ -1498,15 +1248,23 @@ def set_selinux(path, internal_path, new_ctx):
 
 def _set_selinux_unlocked(path, internal_path, new_ctx):
 
+    norm = internal_path.strip("/").replace("\\", "/")
+    fs = detect_fs(path)
+    if not fs:
+        raise ValueError("magic tidak dikenali (bukan EXT/EROFS)")
+    if fs == "EROFS":
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        erofs_path = "/" + norm if norm else "/"
+        try:
+            return native_backend.erofs_edit_selinux(path, erofs_path, new_ctx)
+        except Exception as exc:
+            raise _translate_erofs_error(exc, norm) from exc
+
     fs, r, node = _resolve_writable(path, internal_path)
     try:
-        if fs == "EXT":
-            return r.write_selinux(node.ino, new_ctx)
-        from core import erofs_write
-        try:
-            return erofs_write.write_selinux(r.f, node.ino, new_ctx)
-        except erofs_write.ErofsWriteError as e:
-            raise ValueError(str(e)) from e
+        return r.write_selinux(node.ino, new_ctx)
     finally:
         _close(r)
 
@@ -1570,49 +1328,33 @@ def _delete_path_unlocked(path, internal_path, recursive=True):
     if not internal_path:
         raise ValueError("root image tak bisa dihapus")
 
+    fs = detect_fs(path)
+    if not fs:
+        raise ValueError("magic tidak dikenali (bukan EXT/EROFS)")
+
+    if fs == "EROFS":
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        try:
+            res = native_backend.erofs_edit_rm(
+                path, "/" + internal_path, recursive=bool(recursive), strip_avb=True
+            )
+        except Exception as exc:
+            raise _translate_erofs_error(exc, internal_path) from exc
+        return {
+            "removed": internal_path,
+            "was_dir": bool(res.get("was_dir", False)),
+            "entries_before": int(res.get("entries_before", 0)),
+            "entries_after": int(res.get("entries_after", 0)),
+            "mode": res.get("mode", "unlink"),
+            "grew": bool(res.get("grew_bytes", 0)),
+            "grew_bytes": int(res.get("grew_bytes", 0)),
+        }
+
     fs, r = open_reader(path, writable=True)
     try:
-        if fs == "EXT":
-            return _delete_path_ext(r, internal_path, recursive)
-
-        from core import erofs_write
-        sb = erofs_write.open_sb(r.f)
-
-        # cari node target + nid direktori induknya
-        target = None
-        for n in r.walk():
-            if n.path == internal_path:
-                target = n
-                break
-        if target is None:
-            raise FileNotFoundError(internal_path)
-
-        parent_path = internal_path.rsplit("/", 1)[0] if "/" in internal_path else ""
-        if parent_path:
-            pnode = next((n for n in r.walk() if n.path == parent_path), None)
-            if pnode is None:
-                raise FileNotFoundError(parent_path)
-            parent_nid = pnode.ino
-        else:
-            parent_nid = r.root_nid
-
-        if target.is_dir and not recursive:
-            kids = erofs_write.read_dir(r.f, target.ino, sb=sb)
-            if any(nm not in (".", "..") for (_n, nm, _t) in kids):
-                raise ValueError(f"folder tidak kosong: {internal_path}")
-
-        name = internal_path.rsplit("/", 1)[-1]
-        try:
-            res = erofs_write.unlink(r.f, parent_nid, name, sb=sb)
-        except erofs_write.ErofsWriteError as e:
-            raise ValueError(str(e)) from e
-
-        return {"removed": internal_path,
-                "was_dir": target.is_dir,
-                "entries_before": res["entries_before"],
-                "entries_after": res["entries_after"],
-                "mode": res["mode"],
-                "grew": res["grew"]}
+        return _delete_path_ext(r, internal_path, recursive)
     finally:
         _close(r)
 
@@ -1624,8 +1366,21 @@ def usage_report(path, progress=None):
         raise ValueError("magic tidak dikenali (bukan EXT/EROFS)")
 
     if fs == "EROFS":
-        from core import erofs_write
-        return erofs_write.usage_report(path, progress=progress)
+        from core import native_backend
+        try:
+            rep = native_backend.erofs_usage(path)
+        except Exception as exc:
+            raise _translate_erofs_error(exc) from exc
+        data_blocks = int(rep.get("data_blocks", 0))
+        meta_blocks = int(rep.get("meta_blocks", 0))
+        wasted_blocks = int(rep.get("wasted_blocks", 0))
+        data_bytes = int(rep.get("data_bytes", 0))
+        meta_bytes = int(rep.get("meta_bytes", 0))
+        rep.setdefault("used_blocks", data_blocks + meta_blocks)
+        rep.setdefault("free_blocks", wasted_blocks)
+        rep.setdefault("used_bytes", data_bytes + meta_bytes)
+        rep.setdefault("links", int(rep.get("symlinks", 0)))
+        return rep
 
 
     r = None
@@ -1679,11 +1434,13 @@ def _compact_image_unlocked(path, progress=None, dry_run=False):
     if fs != "EROFS":
         raise NotImplementedError(
             "compact hanya untuk EROFS; pada EXT ruang sudah bebas saat hapus")
-    from core import erofs_compact
+    if _is_sparse_file(path):
+        raise NotImplementedError("write in-place tidak didukung untuk sparse")
+    from core import native_backend
     try:
-        return erofs_compact.compact(path, progress=progress, dry_run=dry_run)
-    except erofs_compact.CompactError as e:
-        raise ValueError(str(e)) from e
+        return native_backend.erofs_compact(path, dry_run=bool(dry_run))
+    except Exception as exc:
+        raise _translate_erofs_error(exc) from exc
 
 
 def list_image(path):

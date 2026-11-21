@@ -5,9 +5,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor,QFont,QFontMetrics
 
 _TONES={"EROFS":("accent_hex",0),"EXT2":("accent_hex",-45),"EXT3":("accent_hex",35),
-        "EXT4":("accent_hex",70),"SUPER":("_gauge_warn",0),"SPARSE":("_gauge_warn",25),
+        "EXT4":("accent_hex",70),"F2FS":("accent_hex",110),"VBMETA":("_gauge_danger",0),
+        "SUPER":("_gauge_warn",0),"SPARSE":("_gauge_warn",25),
         "PAYLOAD":("_gauge_safe",-25),"BOOT":("_gauge_safe",-70),"VNDRBOOT":("_gauge_danger",25),
-        "BR":("_gauge_danger",-20),"DAT":("_gauge_warn",-30),"DAT.BR":("_gauge_safe",60)}
+        "BR":("_gauge_danger",-20),"DAT":("_gauge_warn",-30),"DAT.BR":("_gauge_safe",60),
+        "OZIP":("_gauge_warn",45),"OFP":("_gauge_warn",45),"OFP_QC":("_gauge_warn",45),"OFP_MTK":("_gauge_warn",45),"OFP_ZIP":("_gauge_warn",45),"OPS":("_gauge_warn",45),
+        "KDZ":("_gauge_safe",15),"DZ":("_gauge_safe",15),"UPDATE_APP":("_gauge_safe",15),
+        "PAC":("_gauge_safe",15),"CPB":("_gauge_safe",15),"AMLOGIC":("_gauge_warn",-15),
+        "ALLWINNER":("_gauge_warn",-15),"ROMFS":("accent_hex",-80),"SQUASHFS":("accent_hex",-80)}
 
 
 @lru_cache(maxsize=3)

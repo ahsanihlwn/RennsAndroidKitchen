@@ -8,8 +8,9 @@ T.Switch {
     ContentHitRegion { id: hitRegion; item: control }
     containmentMask: hitRegion.viewport?hitRegion:null
     property var preferences: typeof rakPreferences!=="undefined" ? rakPreferences : null
-    property color accentColor: "#2ecc8e"
-    property color offColor: "#454545"
+    readonly property var palette: preferences ? preferences.colors : null
+    property color accentColor: palette && palette.TOGGLE_ON ? palette.TOGGLE_ON : "#2ecc8e"
+    property color offColor: palette && palette.TOGGLE_OFF ? palette.TOGGLE_OFF : "#454545"
     property bool animationsEnabled: preferences ? preferences.settings.animations : true
     readonly property real knobPosition: Math.max(0,Math.min(1,positionMotion.value))
     readonly property real colorPosition: mirrored?1-knobPosition:knobPosition
@@ -35,11 +36,6 @@ T.Switch {
                            control.offColor.b + control.colorPosition * (control.accentColor.b - control.offColor.b),
                            control.offColor.a + control.colorPosition * (control.accentColor.a - control.offColor.a))
         }
-        SmoothRectangle {
-            width: parent.height - 4; height: width; radius: width / 2
-            y: 3.5; x: 2.5 + control.knobPosition * (parent.width - width - 4)
-            color: "#50000000"
-        }
         LiquidKnob {
             objectName: "switchKnob_"+control.objectName
             width: parent.height - 4
@@ -47,7 +43,7 @@ T.Switch {
             y: 2
             x: 2 + control.knobPosition * (parent.width - width - 4)
             trackSource: track; preferences: control.preferences
-            knobColor: "white"; enabled: control.enabled; pressed: control.thumbActive
+            knobColor: control.palette && control.palette.TOGGLE_KNOB ? control.palette.TOGGLE_KNOB : "white"; enabled: control.enabled; pressed: control.thumbActive
             pressedScaleX: 1.8; pressedScaleY: 1.35
             position: control.knobPosition; animationsEnabled: control.animationsEnabled
         }

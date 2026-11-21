@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
 import QtQuick.Templates as T
+import "../motion.js" as Motion
 
 T.Button {
     id: control
@@ -71,8 +72,10 @@ T.Button {
     }
     onPressFeedbackChanged: {
         pressAnimation.stop()
-        pressAnimation.to = animatePress && pressFeedback ? .96 : 1
-        pressAnimation.duration = animatePress ? (pressFeedback ? 110 : 170) : 0
+        const target = animatePress && pressFeedback ? .96 : 1
+        const base = pressFeedback ? 1 : .96
+        pressAnimation.to = target
+        pressAnimation.duration = animatePress ? Motion.remainingDuration(pressFeedback ? 110 : 170, pressScale, base, target) : 0
         pressAnimation.start()
     }
     onPressed: {

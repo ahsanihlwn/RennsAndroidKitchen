@@ -130,14 +130,14 @@ class ImageSource:
         from core.imgfs import S_IFMT, S_IFDIR, S_IFLNK
         reader = self._reader
         if self._fs == "EROFS":
-            inode = reader._read_inode(ino)
-            for child_nid, name, _ftype in reader._iter_dir(inode):
-                cinode = reader._read_inode(child_nid)
-                mode = cinode["mode"]
-                is_dir = (mode & S_IFMT) == S_IFDIR
-                is_link = (mode & S_IFMT) == S_IFLNK
-                yield (child_nid, name, KIND_DIR if is_dir else KIND_FILE,
-                      cinode["size"], is_link)
+            for ent in reader.children(ino):
+                yield (
+                    ent["nid"],
+                    ent["name"],
+                    KIND_DIR if ent["is_dir"] else KIND_FILE,
+                    ent["size"],
+                    bool(ent["is_link"]),
+                )
         else:
             for child_ino, name, _ftype in reader._iter_dir(ino):
                 mode, size, _flags, _iblock, _raw = reader._read_inode(child_ino)
@@ -236,8 +236,7 @@ class ImageSource:
             return None
         try:
             if self._fs == "EROFS":
-                inode = self._reader._read_inode(ent[2])
-                target = self._reader._read_symlink(inode)
+                target = self._reader.stat_nid(ent[2]).get("target")
             else:
                 target = self._reader._read_symlink_target(ent[2])
         except Exception:                   # noqa: BLE001
@@ -259,8 +258,7 @@ class ImageSource:
         node_id = ent[2]
         try:
             if self._fs == "EROFS":
-                inode = self._reader._read_inode(node_id)
-                return self._reader._inode_selinux(inode) or ""
+                return self._reader.stat_nid(node_id).get("selinux") or ""
             _mode, _size, _flags, _ib, raw = self._reader._read_inode(node_id)
             return self._reader._inode_selinux(raw) or ""
         except Exception:                    # noqa: BLE001 - xattr rusak
@@ -303,7 +301,8 @@ class ApexSource(ImageSource):
         try:
             import io as _io
             import zipfile as _zip
-            from core.imgfs import _detect_fs_bytes, ExtReader, ErofsReader
+            from core.imgfs import _detect_fs_bytes, _NativeErofsHandle, ExtReader
+            from core import native_backend
 
             PAYLOAD = "apex_payload.img"
             ORIGINAL = "original_apex"
@@ -344,7 +343,10 @@ class ApexSource(ImageSource):
             if fs == "EXT":
                 self._fs, self._reader = "EXT", ExtReader(f)
             elif fs == "EROFS":
-                self._fs, self._reader = "EROFS", ErofsReader(f)
+                self._fs = "EROFS"
+                self._reader = _NativeErofsHandle(
+                    native_backend.erofs_open_bytes_reader(f.read())
+                )
             else:
                 self._failed = True
                 self.error = f"unknown payload fs ({fs or '?'})"

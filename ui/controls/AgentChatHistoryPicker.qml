@@ -31,40 +31,76 @@ RakButton {
         }
     }
 
+    property string pickedChat: ""
+    property bool triggerNewChat: false
+    property Component returnCaption: Component {
+        Item {
+            Image {
+                anchors.centerIn: parent
+                width: 14; height: 14; sourceSize: Qt.size(16, 16)
+                source: "image://rak/history?color=" + encodeURIComponent(control.labelColor)
+            }
+        }
+    }
+
     function positionPopup() {
         const window = control.Window.window
         if (!window) return
-        const anchor = control.mapToItem(window.contentItem, 0, 0)
-        menu.x = Math.max(10, Math.min(anchor.x + control.width - menu.width, window.width - menu.width - 10))
-        menu.y = Math.max(10, Math.min(anchor.y + control.height + 4, window.height - menu.height - 10))
+        const host = window.contentItem
+        const bounds = control.panelItem ? control.panelItem.mapToItem(host, 0, 0, control.panelItem.width, control.panelItem.height) : Qt.rect(0, 0, host.width, host.height)
+        const anchor = control.mapToItem(host, 0, 0, control.width, control.height)
+        menu.width = Math.min(260, Math.max(180, bounds.width - 20))
+        menu.height = Math.min(body.implicitHeight + 16, Math.min(420, bounds.height - 24))
+        menu.x = Math.max(bounds.x + 8, Math.min(anchor.x + anchor.width - menu.width, bounds.x + bounds.width - menu.width - 8))
+        menu.y = Math.max(bounds.y + 8, Math.min(anchor.y + anchor.height + 4, bounds.y + bounds.height - menu.height - 8))
     }
 
     function openChoices() {
+        control.resetPressFeedback()
         positionPopup()
         menu.open()
     }
 
+    onVisibleChanged: if (!visible) menu.dismissImmediate()
     Connections {
         target: control.Window.window
-        function onWidthChanged() { if (menu.opened) Qt.callLater(control.positionPopup) }
-        function onHeightChanged() { if (menu.opened) Qt.callLater(control.positionPopup) }
+        function onWidthChanged() { menu.dismissImmediate() }
+        function onHeightChanged() { menu.dismissImmediate() }
+        function onXChanged() { menu.dismissImmediate() }
+        function onYChanged() { menu.dismissImmediate() }
+    }
+    Connections {
+        target: control.chat
+        function onChanged() {
+            if (menu.visible) control.positionPopup()
+        }
     }
 
     onClicked: openChoices()
 
-    C.Popup {
+    MorphPopup {
         id: menu
+        z: 10000
         objectName: "agentChatHistoryPopup"
         parent: control.Window.window ? control.Window.window.contentItem : null
-        width: Math.min(260, control.panelItem ? Math.max(180, control.panelItem.width - 20) : 260)
-        height: Math.min(body.implicitHeight + 16, control.Window.window ? Math.min(420, control.Window.window.height - 24) : 400)
-        padding: 8
+        sourceItem: control
+        springMotion: false
+        morphOnClose: false
+        animationsEnabled: control.preferences && typeof control.preferences.settings !== "undefined" ? control.preferences.settings.animations : control.animatePress
+        backdropSource: control.Window.window ? control.Window.window.backdropSurface : null
+        effectsEnabled: typeof rakPreferences !== "undefined" ? rakPreferences.settings.effects !== "low" : true
+        panelColor: control.colors.BG_MODAL
+        tintBaseColor: control.colors.BG2
+        panelBorder: typeof rakPreferences !== "undefined" ? rakPreferences.panelBorder : control.colors.b10
+        panelRadius: 12
+        padding: 0
         modal: true
         dim: false
         focus: true
         closePolicy: C.Popup.CloseOnEscape | C.Popup.CloseOnPressOutside
-        onHeightChanged: if (opened) control.positionPopup()
         onAboutToShow: {
+            control.pickedChat = ""
+            control.triggerNewChat = false
             if (control.Window.window && control.Window.window.dialogStack) {
                 control.Window.window.dialogStack.registerPopup(menu)
             }
@@ -73,16 +109,20 @@ RakButton {
             if (control.Window.window && control.Window.window.dialogStack) {
                 control.Window.window.dialogStack.unregisterPopup(menu)
             }
-        }
-        background: SmoothRectangle {
-            radius: 12
-            color: control.colors.BG2
-            border.width: 1
-            border.color: control.colors.b14
+            if (control.triggerNewChat) {
+                control.triggerNewChat = false
+                control.chat.newChat()
+                control.newConversationRequested()
+            } else if (control.pickedChat.length > 0) {
+                const id = control.pickedChat
+                control.pickedChat = ""
+                control.chat.selectChat(id)
+            }
         }
         Column {
             id: body
-            width: menu.availableWidth
+            x: 8; y: 8
+            width: menu.width - 16
             spacing: 4
 
             RakButton {
@@ -115,9 +155,8 @@ RakButton {
                     }
                 }
                 onClicked: {
-                    control.chat.newChat()
+                    control.triggerNewChat = true
                     menu.close()
-                    control.newConversationRequested()
                 }
             }
 
@@ -153,42 +192,87 @@ RakButton {
                     spacing: 2
                     Repeater {
                         model: control.chat.chats
-                        delegate: RakButton {
-                            id: chatItem
+                        delegate: Item {
+                            id: chatRowItem
                             required property var modelData
-                            objectName: "agentChatHistoryItem_" + modelData.id
-                            width: chatRows.width; height: 32
-                            leftPadding: 9; rightPadding: 9; edgeWidth: 0; cornerRadius: 7
-                            enabled: !control.chat.busy
+                            width: chatRows.width
+                            height: 32
+                            implicitWidth: chatRows.width
+                            implicitHeight: 32
+
                             readonly property bool isSelected: control.chat.selectedChat === modelData.id
-                            fillColor: isSelected ? control.colors.b07 : "transparent"
-                            hoverFillColor: control.colors.b09
-                            toolTip: chatItem.modelData.label || ""
-                            contentItem: Item {
-                                RakLabel {
-                                    anchors.left: parent.left
-                                    anchors.right: checkIcon.visible ? checkIcon.left : parent.right
-                                    anchors.rightMargin: checkIcon.visible ? 6 : 0
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    text: chatItem.modelData.label || control.tr.new
-                                    font.pixelSize: 11
-                                    font.weight: chatItem.isSelected ? Font.DemiBold : Font.Normal
-                                    color: chatItem.isSelected ? control.colors.FG_BRIGHT : (chatItem.visualHovered ? control.colors.FG_BRIGHT : control.colors.FG)
-                                    elide: Text.ElideRight
+
+                            RakButton {
+                                id: chatItem
+                                objectName: "agentChatHistoryItem_" + chatRowItem.modelData.id
+                                anchors.fill: parent
+                                leftPadding: 9
+                                rightPadding: (chatRowItem.isSelected ? 54 : 36)
+                                edgeWidth: 0; cornerRadius: 7
+                                enabled: !control.chat.busy
+                                fillColor: chatRowItem.isSelected ? control.colors.b07 : "transparent"
+                                hoverFillColor: control.colors.b09
+                                toolTip: chatRowItem.modelData.label || ""
+                                contentItem: Item {
+                                    RakLabel {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: chatRowItem.modelData.label || control.tr.new
+                                        font.pixelSize: 11
+                                        font.weight: chatRowItem.isSelected ? Font.DemiBold : Font.Normal
+                                        color: chatRowItem.isSelected ? control.colors.FG_BRIGHT : (chatItem.visualHovered ? control.colors.FG_BRIGHT : control.colors.FG)
+                                        elide: Text.ElideRight
+                                    }
                                 }
+                                onClicked: {
+                                    control.pickedChat = chatRowItem.modelData.id
+                                    menu.close()
+                                }
+                            }
+
+                            Row {
+                                id: actionRow
+                                anchors.right: parent.right
+                                anchors.rightMargin: 6
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: 4
+
                                 Image {
                                     id: checkIcon
-                                    visible: chatItem.isSelected
-                                    anchors.right: parent.right
+                                    visible: chatRowItem.isSelected
                                     anchors.verticalCenter: parent.verticalCenter
                                     width: 13; height: 13
                                     sourceSize: Qt.size(16, 16)
                                     source: "image://rak/check_white?color=" + encodeURIComponent(control.colors.FG2)
                                 }
-                            }
-                            onClicked: {
-                                control.chat.selectChat(modelData.id)
-                                menu.close()
+
+                                RakButton {
+                                    id: deleteBtn
+                                    objectName: "agentChatDelete_" + chatRowItem.modelData.id
+                                    width: 22; height: 22
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    cornerRadius: 5
+                                    edgeWidth: 0
+                                    enabled: !control.chat.busy
+                                    fillColor: visualHovered ? (control.colors.b12 || "#25272d") : "transparent"
+                                    hoverFillColor: control.colors.b12 || "#25272d"
+                                    toolTip: control.tr.delete || "Hapus"
+                                    opacity: (chatItem.visualHovered || deleteBtn.visualHovered) ? 1.0 : 0.0
+                                    visible: opacity > 0.01
+                                    Behavior on opacity { enabled: !control.preferences || !control.preferences.settings || control.preferences.settings.animations; NumberAnimation { duration: (!control.preferences || !control.preferences.settings || control.preferences.settings.animations) ? 120 : 0 } }
+                                    contentItem: Item {
+                                        Image {
+                                            anchors.centerIn: parent
+                                            width: 13; height: 13
+                                            sourceSize: Qt.size(16, 16)
+                                            source: "image://rak/project_trash?color=" + encodeURIComponent(deleteBtn.visualHovered ? (control.colors.red_alt || "#ef4444") : control.colors.FG_MUTED)
+                                        }
+                                    }
+                                    onClicked: {
+                                        control.chat.deleteChat(chatRowItem.modelData.id)
+                                    }
+                                }
                             }
                         }
                     }

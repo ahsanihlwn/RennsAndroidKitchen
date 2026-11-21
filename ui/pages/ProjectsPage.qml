@@ -17,18 +17,25 @@ Item {
     property alias importButton: importProject
     readonly property var identityItem: footer.identityItem
     function identityEndpoint(host) { return footer.identityEndpoint(host) }
+    readonly property var activeList: page.trash ? trashProjects : projects
     function menuAnchor(path) {
-        for (let i=0;i<projects.count;++i) {
-            const card=projects.itemAtIndex(i)
+        const list = activeList
+        for (let i=0;i<list.count;++i) {
+            const card=list.itemAtIndex(i)
             if (card && card.modelData.path===path) return card.menuAnchor
         }
         return null
     }
     function revealBands() {
+        const list = activeList
         let cuts=[0,headerGlass.height], result=[]
-        for (let row=0; row<projects.count; ++row) {
-            let bottom=projects.y+row*74+66-projects.contentY
-            if (bottom>=projects.y && bottom<=projects.y+projects.height) cuts.push(bottom)
+        let visibleRow = 0
+        for (let row=0; row<list.count; ++row) {
+            const item = list.itemAtIndex(row)
+            if (item && (!item.visible || item.height <= 0)) continue
+            let bottom=list.y+visibleRow*74+66-list.contentY
+            if (bottom>=list.y && bottom<=list.y+list.height) cuts.push(bottom)
+            ++visibleRow
         }
         cuts.push(height)
         cuts.sort((a,b)=>a-b)
@@ -36,35 +43,59 @@ Item {
         return result
     }
     property bool trash: false
-    function toggleTrash() {
-        if (model.busy || projectMotion.active) return
-        const before=projects.model.snapshot()
-        const after=trash ? model.projectRows.snapshot() : model.trashRows.snapshot()
-        projectMotion.begin(before,after,true,null)
-        trash=!trash
-        projects.forceLayout()
-        projectMotion.layoutApplied()
-    }
-
-    function toggleFavorites() {
-        if (model.busy || projectMotion.active) return
-        if (trash) {
-            if (!model.favoriteFilter) model.toggleFavoriteFilter()
-            toggleTrash()
+    property real trashProgress: 0
+    onTrashChanged: {
+        trashProgressAnim.stop()
+        const target = trash ? 1 : 0
+        const dur = page.model.settings.animations ? Motion.remainingDuration(200, trashProgress, trash ? 0 : 1, target) : 0
+        if (dur <= 0) {
+            trashProgress = target
         } else {
-            model.toggleFavoriteFilter()
+            trashProgressAnim.to = target
+            trashProgressAnim.duration = dur
+            trashProgressAnim.start()
+        }
+    }
+    NumberAnimation { id: trashProgressAnim; target: page; property: "trashProgress"; easing.type: Easing.OutCubic }
+    Connections {
+        target: page.model
+        function onSettingsChanged() {
+            if (!page.model.settings.animations) {
+                trashProgressAnim.stop()
+                page.trashProgress = page.trash ? 1 : 0
+            }
         }
     }
 
-    function clearFilter() {
-        if (model.busy || projectMotion.active) return
-        if (trash) toggleTrash()
-        if (model.favoriteFilter) model.toggleFavoriteFilter()
+    function setFilterMode(mode) {
+        if (model.busy) return
+        const currentMode = trash ? "trash" : (model.favoriteFilter ? "favorites" : "all")
+        if (mode === currentMode) return
+
+        if (projectMotion.active) projectMotion.cancel()
+
+        if (mode === "trash") {
+            trash = true
+        } else {
+            const wantFav = (mode === "favorites")
+            if (model.favoriteFilter !== wantFav) {
+                model.setFavoriteFilter(wantFav)
+            }
+            trash = false
+        }
     }
+
+    function toggleTrash() { setFilterMode(trash ? "all" : "trash") }
+    function toggleFavorites() { setFilterMode((!trash && model.favoriteFilter) ? "all" : "favorites") }
+    function clearFilter() { setFilterMode("all") }
     Connections {
         target: page.trash ? page.model.trashRows : page.model.projectRows
-        function onAboutToReplace(before,after,animate) { projectMotion.begin(before,after,animate,projects.model) }
-        function onReplaced() { projects.forceLayout(); projectMotion.layoutApplied() }
+        function onAboutToReplace(before,after,animate) {
+            const visBefore = (!page.trash && page.model.favoriteFilter) ? before.filter(row => !!row.pinned) : before
+            const visAfter = (!page.trash && page.model.favoriteFilter) ? after.filter(row => !!row.pinned) : after
+            projectMotion.begin(visBefore, visAfter, animate, page.activeList.model)
+        }
+        function onReplaced() { page.activeList.forceLayout(); projectMotion.layoutApplied() }
         function onCancelMotion() { projectMotion.cancel() }
     }
     property string driveKeys: model.drives.map(row=>row.key).join(",")
@@ -76,7 +107,7 @@ Item {
         id: heading
         opacity: page.headingOpacity
         z: 2
-        x: 32; y: 28; height: 44
+        x: 16; y: 16; height: 32
         text: page.s.hdr_my_projects
         font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG
     }
@@ -97,34 +128,268 @@ Item {
         id: search
         opacity: page.headingOpacity
         z: 2
-        enabled: !page.model.busy && opacity>.99
+        enabled: !page.trash && !page.model.busy && opacity>.99
         objectName: "projectSearch"
-        anchors.right: parent.right; anchors.rightMargin: 32
+        anchors.right: parent.right
+        anchors.rightMargin: 16 + marginOffset
         anchors.verticalCenter: filterBar.verticalCenter
-        width: Math.min(220, Math.max(140, page.width / 4)); height: 32
+
+        property bool expanded: false
+        property real targetWidth: Math.min(260, Math.max(160, page.width / 3.4))
+        property real animWidth: 32
+        property real marginOffset: 0
+
+        width: Math.max(32, animWidth)
+        height: 32
+        cornerRadius: 16
+        readOnly: !expanded
+        cursorVisible: expanded && activeFocus
+
         placeholderText: page.s.placeholder_search
-        font.pixelSize: 11; leftPadding: 34; rightPadding: 10
-        cornerRadius: 16; fillColor: page.c.BG2; focusFillColor: page.c.BG_INPUT
-        edgeColor: page.c.b08; focusEdgeColor: page.c.a45; hintColor: page.c.placeholder; labelColor: page.c.FG
+        font.pixelSize: 11
+        leftPadding: expanded ? 34 : 16
+        rightPadding: (expanded && text.length > 0) ? 30 : 10
+
+        fillColor: activeFocus ? page.c.BG_INPUT : (searchHover.hovered ? page.c.b06 : page.c.BG2)
+        focusFillColor: page.c.BG_INPUT
+        edgeColor: activeFocus ? page.c.a45 : (searchHover.hovered ? page.c.b12 : page.c.b08)
+        focusEdgeColor: page.c.a45
+        hintColor: expanded ? (page.c.placeholder || "#666c80") : "transparent"
+        labelColor: expanded ? page.c.FG : "transparent"
         selectionColor: page.c.a35
-        Image {
-            sourceSize.width: width; sourceSize.height: height
-            x: 11; anchors.verticalCenter: parent.verticalCenter
-            width: 14; height: 14
-            source: page.model.icon("project_search", page.c.FG_MUTED)
+
+        Behavior on leftPadding {
+            NumberAnimation {
+                duration: page.model.settings.animations ? 240 : 0
+                easing.type: Easing.OutCubic
+            }
         }
+
+        // --- ANIMASI BUKA (EXPAND) ---
+        // Kurva Bezier elastis: akselerasi halus, meluncur deras, dan akhiran overshoots super mulus!
+        NumberAnimation {
+            id: widthExpandAnim
+            target: search
+            property: "animWidth"
+            from: 32
+            to: search.targetWidth
+            duration: page.model.settings.animations ? 380 : 0
+            easing.type: Easing.Bezier
+            easing.bezierCurve: [0.3, 1.6, 0.4, 1.0, 1.0, 1.0]
+        }
+
+        SequentialAnimation {
+            id: expandMarginAnim
+            NumberAnimation {
+                target: search
+                property: "marginOffset"
+                to: 12
+                duration: 140
+                easing.type: Easing.OutQuad
+            }
+            NumberAnimation {
+                target: search
+                property: "marginOffset"
+                to: 0
+                duration: 240
+                easing.type: Easing.Bezier
+                easing.bezierCurve: [0.3, 1.3, 0.4, 1.0, 1.0, 1.0]
+            }
+        }
+
+        NumberAnimation {
+            id: iconExpandWidthAnim
+            target: searchIcon
+            property: "width"
+            to: 14
+            duration: page.model.settings.animations ? 350 : 0
+            easing.type: Easing.Bezier
+            easing.bezierCurve: [0.3, 1.5, 0.4, 1.0, 1.0, 1.0]
+        }
+
+        NumberAnimation {
+            id: iconExpandXAnim
+            target: searchIcon
+            property: "x"
+            to: 11
+            duration: page.model.settings.animations ? 350 : 0
+            easing.type: Easing.Bezier
+            easing.bezierCurve: [0.3, 1.5, 0.4, 1.0, 1.0, 1.0]
+        }
+
+        // --- ANIMASI TUTUP (COLLAPSE / OUT) ---
+        // Kurva Bezier decelerasi sutra: meluncur kembali dan mendarat sangat lembut di 32px tanpa lonjong!
+        NumberAnimation {
+            id: widthCollapseAnim
+            target: search
+            property: "animWidth"
+            from: search.width
+            to: 32
+            duration: page.model.settings.animations ? 280 : 0
+            easing.type: Easing.Bezier
+            easing.bezierCurve: [0.25, 0.1, 0.1, 1.0, 1.0, 1.0]
+        }
+
+        NumberAnimation {
+            id: iconCollapseWidthAnim
+            target: searchIcon
+            property: "width"
+            to: 18
+            duration: page.model.settings.animations ? 260 : 0
+            easing.type: Easing.Bezier
+            easing.bezierCurve: [0.25, 0.1, 0.1, 1.0, 1.0, 1.0]
+        }
+
+        NumberAnimation {
+            id: iconCollapseXAnim
+            target: searchIcon
+            property: "x"
+            to: 7
+            duration: page.model.settings.animations ? 260 : 0
+            easing.type: Easing.Bezier
+            easing.bezierCurve: [0.25, 0.1, 0.1, 1.0, 1.0, 1.0]
+        }
+
+        SequentialAnimation {
+            id: collapseMarginAnim
+            NumberAnimation {
+                target: search
+                property: "marginOffset"
+                to: 8
+                duration: 120
+                easing.type: Easing.OutQuad
+            }
+            NumberAnimation {
+                target: search
+                property: "marginOffset"
+                to: 0
+                duration: 160
+                easing.type: Easing.Bezier
+                easing.bezierCurve: [0.25, 0.1, 0.1, 1.0, 1.0, 1.0]
+            }
+        }
+
+        onExpandedChanged: {
+            if (page.model.settings.animations) {
+                if (expanded) {
+                    widthCollapseAnim.stop()
+                    iconCollapseWidthAnim.stop()
+                    iconCollapseXAnim.stop()
+                    collapseMarginAnim.stop()
+
+                    widthExpandAnim.restart()
+                    iconExpandWidthAnim.restart()
+                    iconExpandXAnim.restart()
+                    expandMarginAnim.restart()
+                } else {
+                    widthExpandAnim.stop()
+                    iconExpandWidthAnim.stop()
+                    iconExpandXAnim.stop()
+                    expandMarginAnim.stop()
+
+                    widthCollapseAnim.restart()
+                    iconCollapseWidthAnim.restart()
+                    iconCollapseXAnim.restart()
+                    collapseMarginAnim.restart()
+                }
+            } else {
+                animWidth = expanded ? targetWidth : 32
+                searchIcon.width = expanded ? 14 : 18
+                searchIcon.x = expanded ? 11 : 7
+                marginOffset = 0
+            }
+        }
+
+        HoverHandler {
+            id: searchHover
+            enabled: search.enabled
+            cursorShape: search.expanded ? Qt.IBeamCursor : Qt.PointingHandCursor
+        }
+
+        MouseArea {
+            id: expandClickArea
+            anchors.fill: parent
+            enabled: search.enabled && !search.expanded
+            cursorShape: Qt.PointingHandCursor
+            hoverEnabled: true
+            onClicked: {
+                search.expanded = true
+                Qt.callLater(search.forceActiveFocus)
+            }
+        }
+
+        Image {
+            id: searchIcon
+            anchors.verticalCenter: parent.verticalCenter
+            sourceSize.width: Math.round(width)
+            sourceSize.height: Math.round(height)
+            width: search.expanded ? 14 : 18
+            height: width
+            x: search.expanded ? 11 : 7
+            source: page.model.icon("project_search", (search.expanded || searchHover.hovered) ? (page.c.accent_hex || page.c.FG) : page.c.FG_MUTED)
+        }
+
+        RakButton {
+            id: clearBtn
+            anchors.right: parent.right
+            anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            width: 20; height: 20
+            cornerRadius: 10
+            visible: search.expanded && search.text.length > 0
+            opacity: visible ? 1 : 0
+            text: "\u2715"
+            font.pixelSize: 10
+            labelColor: page.c.FG_MUTED
+            hoverLabelColor: page.c.FG
+            hoverFillColor: page.c.b10
+            onClicked: {
+                search.text = ""
+                page.model.search("")
+                search.focus = false
+                search.expanded = false
+            }
+        }
+
+        onActiveFocusChanged: {
+            if (!activeFocus && text.trim().length === 0) {
+                expanded = false
+            }
+        }
+
+        Keys.onEscapePressed: {
+            text = ""
+            page.model.search("")
+            focus = false
+            expanded = false
+        }
+
         onTextEdited: page.model.search(text)
+    }
+
+    TapHandler {
+        target: null
+        enabled: search.expanded && search.text.trim().length === 0
+        onTapped: (eventPoint) => {
+            const p = eventPoint.position
+            const sp = search.mapFromItem(page, p.x, p.y)
+            if (sp.x < 0 || sp.x > search.width || sp.y < 0 || sp.y > search.height) {
+                search.focus = false
+                search.expanded = false
+            }
+        }
     }
     // Filter Pills Bar (Semua, Favorit, Sampah)
     Row {
         id: filterBar
         z: 2
         opacity: page.headingOpacity
-        x: 32; y: 74
+        x: 16; y: 60
         spacing: 8
 
         // Pill: Semua
         RakButton {
+            objectName: "allProjectsDrive"
             height: 32
             cornerRadius: 16
             fillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a14 : page.c.BG2
@@ -133,7 +398,7 @@ Item {
             edgeColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a35 : page.c.b08
             edgeWidth: 1
             animatePress: page.model.settings.animations
-            onClicked: page.clearFilter()
+            onClicked: page.setFilterMode("all")
 
             contentItem: Row {
                 anchors.centerIn: parent
@@ -178,7 +443,7 @@ Item {
             edgeColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#f59e0b" : "#5a4520") : page.c.b08
             edgeWidth: 1
             animatePress: page.model.settings.animations
-            onClicked: page.toggleFavorites()
+            onClicked: page.setFilterMode("favorites")
 
             contentItem: Row {
                 anchors.centerIn: parent
@@ -223,7 +488,7 @@ Item {
             edgeColor: page.trash ? (page.c.is_light ? "#fca5a5" : "#552424") : page.c.b08
             edgeWidth: 1
             animatePress: page.model.settings.animations
-            onClicked: page.toggleTrash()
+            onClicked: page.setFilterMode("trash")
 
             contentItem: Row {
                 anchors.centerIn: parent
@@ -265,48 +530,134 @@ Item {
     ListView {
         id: projects
         objectName: "projectList"
-        x: 32; y: 120; width: Math.max(0, parent.width - 64); height: Math.max(0, parent.height - 120 - 80)
+        opacity: 1 - page.trashProgress
+        visible: opacity > 0.001
+        enabled: !page.trash
+        x: 16 - page.trashProgress * 14; y: 100; width: Math.max(0, parent.width - 32); height: Math.max(0, parent.height - 100 - footer.height)
         clip: !page.glassChrome; spacing: 0; boundsBehavior: Flickable.StopAtBounds
-        displayMarginBeginning: page.glassChrome?120:0
-        displayMarginEnd: page.glassChrome?80:0
-        model: page.trash ? page.model.trashRows : page.model.projectRows
+        displayMarginBeginning: page.glassChrome?100:0
+        displayMarginEnd: page.glassChrome?footer.height:0
+        model: page.model.projectRows
+        interactive: !projectMotion.active
+        onContentHeightChanged: {
+            if (!dragging && !flicking) {
+                const maxScroll = Math.max(0, contentHeight - height)
+                if (contentY > maxScroll) contentY = maxScroll
+            }
+        }
+        delegate: Item {
+            id: rowDelegate
+            required property var modelData
+            required property int index
+            readonly property var menuAnchor: cardLoader.item ? cardLoader.item.menuAnchor : null
+            readonly property real pathOffset: cardLoader.item ? cardLoader.item.pathOffset : 0
+            readonly property bool hiddenByFavorite: page.model.favoriteFilter && !modelData.pinned
+            property bool everShown: false
+            property real reveal: 1
+            Component.onCompleted: {
+                reveal = hiddenByFavorite ? 0 : 1
+                if (!hiddenByFavorite) everShown = true
+            }
+            onHiddenByFavoriteChanged: {
+                if (!hiddenByFavorite) everShown = true
+                revealAnim.stop()
+                const target = hiddenByFavorite ? 0 : 1
+                const dur = (page.model.settings.animations && !page.trash)
+                    ? Motion.remainingDuration(190, reveal, hiddenByFavorite ? 1 : 0, target)
+                    : 0
+                if (dur <= 0) {
+                    reveal = target
+                } else {
+                    revealAnim.to = target
+                    revealAnim.duration = dur
+                    revealAnim.start()
+                }
+            }
+            NumberAnimation { id: revealAnim; target: rowDelegate; property: "reveal"; easing.type: Easing.OutCubic }
+            Connections {
+                target: page.model
+                function onSettingsChanged() {
+                    if (!page.model.settings.animations) {
+                        revealAnim.stop()
+                        rowDelegate.reveal = rowDelegate.hiddenByFavorite ? 0 : 1
+                    }
+                }
+            }
+            visible: reveal > 0.001
+            width: projects.width; height: Math.round(74 * reveal)
+            clip: reveal < 0.999
+            Loader {
+                id: cardLoader
+                anchors.left: parent.left; anchors.right: parent.right
+                y: Math.round((1 - rowDelegate.reveal) * -6)
+                height: 66
+                active: rowDelegate.everShown
+                visible: rowDelegate.reveal > 0.001
+                opacity: rowDelegate.reveal
+                transform: Scale {
+                    origin.x: cardLoader.width / 2
+                    origin.y: 33
+                    xScale: 0.96 + 0.04 * rowDelegate.reveal
+                    yScale: 0.96 + 0.04 * rowDelegate.reveal
+                }
+                sourceComponent: ProjectCard {
+                    model: page.model; trash: false
+                    modelData: rowDelegate.modelData; index: rowDelegate.index
+                    width: cardLoader.width
+                    interactive: !rowDelegate.hiddenByFavorite && !projectMotion.active
+                    opacity: projectMotion.active ? 0 : 1
+                }
+            }
+        }
+        RakLabel {
+            anchors.centerIn: parent; width: parent.width - 32
+            visible: page.model.favoriteFilter && page.model.visibleProjectsCount === 0 && !projectMotion.active; text: page.s.favorites_empty; color: page.c.FG3
+            horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 11
+        }
+    }
+    ListView {
+        id: trashProjects
+        objectName: "trashList"
+        opacity: page.trashProgress
+        visible: opacity > 0.001
+        enabled: page.trash
+        x: 16 + (1 - page.trashProgress) * 14; y: 100; width: Math.max(0, parent.width - 32); height: Math.max(0, parent.height - 100 - footer.height)
+        clip: !page.glassChrome; spacing: 0; boundsBehavior: Flickable.StopAtBounds
+        displayMarginBeginning: page.glassChrome?100:0
+        displayMarginEnd: page.glassChrome?footer.height:0
+        model: page.model.trashRows
         interactive: !projectMotion.active
         delegate: Item {
             required property var modelData
             required property int index
             property alias menuAnchor: card.menuAnchor
             readonly property real pathOffset: card.pathOffset
-            width: projects.width; height: 74
+            width: trashProjects.width; height: 74
             ProjectCard {
                 id: card
-                model: page.model; trash: !!parent.modelData._trash_id
+                model: page.model; trash: true
                 modelData: parent.modelData; index: parent.index
-                width: projects.width
+                width: trashProjects.width
                 interactive: !projectMotion.active
                 opacity: projectMotion.active ? 0 : 1
             }
         }
         RakLabel {
             anchors.centerIn: parent; width: parent.width - 32
-            visible: page.trash && projects.count === 0 && !projectMotion.active; text: page.s.trash_empty; color: page.c.FG3
-            horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 11
-        }
-        RakLabel {
-            anchors.centerIn: parent; width: parent.width - 32
-            visible: !page.trash && page.model.favoriteFilter && projects.count === 0 && !projectMotion.active; text: page.s.favorites_empty; color: page.c.FG3
+            visible: trashProjects.count === 0 && !projectMotion.active; text: page.s.trash_empty; color: page.c.FG3
             horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 11
         }
     }
     ProjectListMotion {
         id: projectMotion
         x: projects.x; y: projects.y; width: projects.width; height: projects.height
-        model: page.model; view: projects; trash: page.trash
+        model: page.model; view: page.activeList; trash: page.trash
         clip: !page.glassChrome
     }
     PageRevealMask { anchors.fill: parent; motion: page.presentationMotion; page: page; topInset: headerGlass.height; bottomInset: footer.height }
     }
-    GlassBand { id: headerGlass; objectName: "projectsHeaderGlass"; z: 1; width: parent.width; height: 120; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,0) }
-    GlassBand { objectName: "projectsFooterGlass"; z: 1; y: parent.height-80; width: parent.width; height: 80; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,y) }
+    GlassBand { id: headerGlass; objectName: "projectsHeaderGlass"; z: 1; width: parent.width; height: 100; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,0) }
+    GlassBand { objectName: "projectsFooterGlass"; z: 1; y: parent.height-footer.height; width: parent.width; height: footer.height; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,y) }
     PageFooter {
         id: footer
         z: 2
@@ -324,6 +675,7 @@ Item {
         ActionButton {
             id: newProject
             objectName: "createButton"
+            primary: true
             width: 121; height: 32; colors: page.c; text: page.s.btn_create_project
             iconKey: "plus"
             iconWidth: 15; iconHeight: 15

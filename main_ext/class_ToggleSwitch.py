@@ -80,8 +80,8 @@ def build_card(title, subtitle, toggle_btn):
             font-size: 12px;
         }}
         QComboBox {{
-            background-color: {_th.border_color(0.05)};
-            border: 1px solid {_th.border_color(0.10)};
+            background-color: transparent;
+            border: none;
             border-radius: 6px;
             padding: 4px 24px 4px 8px;
             color: {_th.FG};
@@ -89,11 +89,11 @@ def build_card(title, subtitle, toggle_btn):
             min-height: 26px;
         }}
         QComboBox:hover {{
-            background-color: {_th.border_color(0.08)};
-            border-color: {_th.border_color(0.16)};
+            background-color: {_th.border_color(0.06)};
+            border: none;
         }}
         QComboBox:focus {{
-            border-color: {_th.accent(0.55)};
+            border: none;
         }}
         QComboBox::drop-down {{
             width: 18px;

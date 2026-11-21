@@ -15,18 +15,29 @@ def viewer_kind(path):
     if ext in IMAGE_EXT: return "image"
     if ext in AUDIO_EXT: return "audio"
     if ext in VIDEO_EXT: return "video"
+    if ext in (".ofp", ".ops", ".ozip", ".kdz", ".dz", ".cpb", ".pac") or os.path.basename(path).upper() == "UPDATE.APP":
+        from core.oem_containers import OEM_CONTAINER_KINDS, detect_oem_kind
+        try:
+            if detect_oem_kind(path) in OEM_CONTAINER_KINDS:
+                return "oem"
+        except OSError:
+            pass
     if ext in ARCHIVE_EXT: return "archive"
     if ext in ('.so','.elf','.exe','.dll','.dylib','.o') or '.so.' in os.path.basename(path): return 'elf'
-    if ext in (".bin", ".fsm", ".ccu", ".blob"):
+    if ext in (".bin", ".fsm", ".ccu", ".blob", ".img", ".romfs", ".sqsh", ".squashfs"):
         from core.header_magic import check_magic
         try: magic = check_magic(path)
         except OSError: magic = ""
         if magic == "PAYLOAD": return "payload"
+        if magic == "SUPER": return "super"
+        from core.oem_containers import OEM_CONTAINER_KINDS
+        if magic in OEM_CONTAINER_KINDS: return "oem"
         from core.binary_core import identify
         try:
             if identify(path): return 'elf'
         except OSError:pass
-        return "hex"
+        if ext != ".img":
+            return "hex"
     name=os.path.basename(path)
     if ext in TEXT_EXT or ext in ('.json','.jsonc','.kt','.kts','.smali','.rs','.php','.php3','.php4','.php5','.phtml','.qss','.h','.hpp','.hxx','.hh','.sh','.bash','.zsh','.fish','.ksh','.csh','.tcsh','.dash') or name.endswith(('_file_contexts','_fs_config','_fs_options','_info')):
         return "editor"

@@ -1,0 +1,18 @@
+[package]
+name = "f2fs-mkfs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Clean-room MIT F2FS filesystem formatter library (v1.16 on-disk specification)"
+
+[dependencies]
+android-sparse = { path = "../android-sparse" }
+crc32fast.workspace = true
+getrandom.workspace = true
+pt-common = { path = "../pt-common" }
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

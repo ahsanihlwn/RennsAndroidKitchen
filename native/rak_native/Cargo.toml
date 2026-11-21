@@ -2,7 +2,7 @@
 name = "rak-native"
 version = "0.3.3"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MPL-2.0"
 description = "Read-only filesystem scanning and Android metadata parsing for RAK"
 
@@ -18,6 +18,37 @@ serde_json = "1"
 goblin = "=0.10.7"
 sha2 = "0.10"
 cpp_demangle = "0.4"
+rayon = "1"
+similar = "3"
+aes = "0.8"
+ecb = "0.1"
+cfb-mode = "0.8"
+md-5 = "0.10"
+flate2 = "1"
+crc32fast = "1"
+xml-rs = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate", "aes-crypto"] }
+backhand = { version = "0.25", default-features = false, features = ["gzip", "lz4", "zstd", "xz", "parallel"] }
+zstd = "0.13"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
+fast_image_resize = { version = "6", features = ["image"] }
+lp_tools = { path = "../../core/lpunpack" }
+ext_cli = { path = "../../core/ext_cli" }
+make_ext4fs_rs = { path = "../../core/make_ext4fs" }
+pac-extractor = { path = "../../core/pac_extractor" }
+magiskboot = { path = "../../core/magiskboot" }
+erofs_rs = { package = "erofs-rs", path = "../../core/erofs_rs" }
+sdatimg = { path = "../../core/sdatimg" }
+brotli_rs = { package = "brotli-rs", path = "../../core/brotli_rs" }
+adb = { path = "../../core/platform_tools_rs/crates/adb" }
+fastboot = { path = "../../core/platform_tools_rs/crates/fastboot" }
+pt-common = { path = "../../core/platform_tools_rs/crates/pt-common" }
+extfs-mkfs = { path = "../../core/platform_tools_rs/crates/extfs-mkfs" }
+f2fs-mkfs = { path = "../../core/platform_tools_rs/crates/f2fs-mkfs" }
+etc1tool = { path = "../../core/platform_tools_rs/crates/etc1tool" }
+hprof-conv = { path = "../../core/platform_tools_rs/crates/hprof-conv" }
+sqlite3 = { path = "../../core/platform_tools_rs/crates/sqlite3" }
+tokio = { version = "1.43", features = ["rt-multi-thread", "time", "net", "sync"] }
 
 [profile.release]
 lto = "thin"

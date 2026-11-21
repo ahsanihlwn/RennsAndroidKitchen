@@ -1,15 +1,96 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Qt Quick Android Tools state; QProcess owns every device command."""
+"""Qt Quick Android Tools state backed in-process by rak_native platform-tools."""
 import os
 import re
+import threading
 from contextvars import copy_context
 
-from PySide6.QtCore import QObject,Property,Signal,Slot,QProcess,QTimer,QFileSystemWatcher
+from PySide6.QtCore import QObject,Property,Signal,Slot,Qt,QTimer,QFileSystemWatcher
 from shiboken6 import isValid
+from core import native_backend
 from core.android_tools import parse_fastboot_output,_fmt_size,_fmt_sz2,_parse_size_arg,flow_layout
 from core.app_paths import BIN_DIR
 from services.async_jobs import AsyncJobs
 from ui.rows import RowsModel
+
+
+class _FallbackCancelToken:
+    def __init__(self):
+        self._event=threading.Event()
+    def cancel(self):
+        self._event.set()
+    def is_cancelled(self):
+        return self._event.is_set()
+
+
+class _NativeDeviceJob(QObject):
+    outputChunk=Signal(str)
+    progressEvent=Signal(object)
+    finished=Signal(int,str)
+    _rawOutput=Signal(str)
+    _rawProgress=Signal(object)
+    _rawFinished=Signal(int,str)
+
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        try:
+            self.cancel_token=native_backend.platform_cancel_token()
+        except Exception:
+            self.cancel_token=_FallbackCancelToken()
+        self._running=False
+        self._lock=threading.Lock()
+        self._thread=None
+        self._rawOutput.connect(self._deliver_output,Qt.QueuedConnection)
+        self._rawProgress.connect(self._deliver_progress,Qt.QueuedConnection)
+        self._rawFinished.connect(self._deliver_finished,Qt.QueuedConnection)
+
+    @Slot(str)
+    def _deliver_output(self,text):
+        self.outputChunk.emit(text)
+
+    @Slot(object)
+    def _deliver_progress(self,payload):
+        self.progressEvent.emit(payload)
+
+    @Slot(int,str)
+    def _deliver_finished(self,code,text):
+        self.finished.emit(code,text)
+
+    def isRunning(self):
+        with self._lock:
+            return self._running
+
+    def kill(self):
+        try:
+            self.cancel_token.cancel()
+        except Exception:
+            pass
+
+    def emit_output(self,text):
+        if isValid(self):
+            self._rawOutput.emit(str(text))
+
+    def emit_progress(self,payload):
+        if isValid(self):
+            self._rawProgress.emit(payload)
+
+    def start(self,runner):
+        with self._lock:
+            self._running=True
+        def target():
+            code=-1
+            text=''
+            try:
+                code,text=runner()
+            except Exception as exc:
+                code,text=-1,str(exc)
+            finally:
+                with self._lock:
+                    self._running=False
+                if isValid(self):
+                    self._rawFinished.emit(int(code),str(text or ''))
+        self._thread=threading.Thread(target=target,daemon=True,name='RAK-NativeDevice')
+        self._thread.start()
 
 
 class AndroidTools(QObject):
@@ -146,48 +227,93 @@ class AndroidTools(QObject):
         from core.binary_handler import resolve_binary
         return resolve_binary(BIN_DIR,name+'.exe') or name
 
-    def _launch(self,program,args,callback,*,timeout=15000,stream=None,report_errors=True):
+    def _normalize_tool(self,tool):
+        raw=str(tool or '').strip()
+        low=raw.lower()
+        if low in ('adb','fastboot'):return low
+        stem=os.path.splitext(os.path.basename(low))[0]
+        if 'fastboot' in stem:return 'fastboot'
+        if 'adb' in stem:return 'adb'
+        return stem or 'fastboot'
+
+    def _run_native(self,tool,args,*,cwd=None,timeout_ms=None,cancel=None,on_output=None,on_progress=None):
+        tool_name=self._normalize_tool(tool)
+        if tool_name=='adb':
+            return native_backend.adb_run(args,cwd=cwd,timeout_ms=timeout_ms,cancel=cancel,on_output=on_output,on_progress=on_progress)
+        if tool_name=='fastboot':
+            return native_backend.fastboot_run(args,cwd=cwd,timeout_ms=timeout_ms,cancel=cancel,on_output=on_output,on_progress=on_progress)
+        raise ValueError(f'Unsupported native device tool: {tool_name}')
+
+    def _launch(self,program,args,callback,*,timeout=15000,stream=None,on_progress=None,report_errors=True):
+        tool_name=self._normalize_tool(program)
+        self._program(tool_name)
         context=copy_context()
-        process=QProcess(self)
-        process.setProcessChannelMode(QProcess.MergedChannels)
-        self._processes.add(process)
+        job=_NativeDeviceJob(self)
+        self._processes.add(job)
         output=[];buffer=[''];settled=[False]
         terminal=[None]
-        timer=QTimer(process);timer.setSingleShot(True)
-        timer.timeout.connect(process.kill)
-        def read():
-            if self._closed or not isValid(process):return
-            value=bytes(process.readAllStandardOutput()).decode('utf-8',errors='replace')
+        arg_list=[str(a) for a in args]
+        def read(value):
+            if self._closed or settled[0]:return
             output.append(value)
             if terminal[0] is not None:terminal[0].feed(value)
             if stream:
                 buffer[0]+=value.replace('\r\n','\n').replace('\r','\n')
                 while '\n' in buffer[0]:
                     line,buffer[0]=buffer[0].split('\n',1);stream(line.rstrip())
-        def finish(code,*_):
-            if settled[0] or self._closed or not isValid(process):return
-            settled[0]=True;timer.stop();read()
+        def progress_cb(payload):
+            if self._closed or settled[0] or not on_progress:return
+            on_progress(payload)
+        def finish(code,final_text=''):
+            if settled[0]:return
+            settled[0]=True
+            self._processes.discard(job)
+            self._probe_processes.discard(job)
+            if self._closed:
+                if isValid(job):job.deleteLater()
+                return
+            if not output and final_text:
+                read(final_text)
             if stream and buffer[0]:stream(buffer[0])
-            self._processes.discard(process)
-            self._probe_processes.discard(process)
-            if not self._closed:
-                from core.error_reporting import error_checkpoint, error_reported_since, report_fatal
-                checkpoint = error_checkpoint()
-                try:
-                    callback(code,''.join(output))
-                finally:
-                    if report_errors and code and not error_reported_since(checkpoint, ''.join(output).strip() or process.errorString()):
-                        report_fatal('Android tools: '+os.path.basename(program)+'\n\n'+(''.join(output).strip() or process.errorString()),owner=self,application_error=False)
-            process.deleteLater()
-        process.readyReadStandardOutput.connect(lambda:context.copy().run(read))
-        process.finished.connect(lambda *args:context.copy().run(finish,*args))
-        process.errorOccurred.connect(lambda error:context.copy().run(finish,-1) if error==QProcess.FailedToStart else None)
-        process.setProgram(program);process.setArguments(args)
-        if hasattr(self.workspace,'runTerminalProcess'):
-            terminal[0]=self.workspace.runTerminalProcess(process,program,args)
-        else:process.start()
-        if timeout:timer.start(timeout)
-        return process
+            if terminal[0] is not None:terminal[0].complete(job,code)
+            from core.error_reporting import error_checkpoint, error_reported_since, report_fatal
+            checkpoint = error_checkpoint()
+            full_output = ''.join(output)
+            try:
+                callback(code,full_output)
+            finally:
+                if report_errors and code and not error_reported_since(checkpoint, full_output.strip() or f'exit code {code}'):
+                    report_fatal('Android tools: '+tool_name+'\n\n'+(full_output.strip() or f'exit code {code}'),owner=self,application_error=False)
+            if isValid(job):job.deleteLater()
+        job.outputChunk.connect(lambda value:context.copy().run(read,value))
+        if on_progress is not None:
+            job.progressEvent.connect(lambda payload:context.copy().run(progress_cb,payload))
+        job.finished.connect(lambda code,text:context.copy().run(finish,code,text))
+        if hasattr(self.workspace,'runTerminalNative'):
+            terminal[0]=self.workspace.runTerminalNative(job,tool_name,arg_list)
+        elif hasattr(self.workspace,'runTerminalProcess'):
+            manager=self.workspace.processTerminal()
+            if manager is not None:
+                import subprocess
+                manager.observe_native(job,subprocess.list2cmdline([tool_name,*arg_list]))
+                terminal[0]=manager
+        def runner():
+            result=self._run_native(
+                tool_name,
+                arg_list,
+                cwd=self.workspace.project,
+                timeout_ms=timeout or None,
+                cancel=job.cancel_token,
+                on_output=lambda text,_is_err=False:job.emit_output(text),
+                on_progress=(lambda ev:job.emit_progress(ev)) if on_progress is not None else None,
+            )
+            if isinstance(result,dict):
+                code=int(result.get('exit_code',-1))
+                text=str(result.get('output') or result.get('stdout') or result.get('stderr') or '')
+                return code,text
+            return -1,str(result or '')
+        job.start(runner)
+        return job
 
     @Slot()
     def refresh(self):
@@ -211,15 +337,15 @@ class AndroidTools(QObject):
                     self._status='ADB device detected — reboot buttons switched to adb mode.'
                     self._placeholder='';self.changed.emit();self.deviceChanged.emit()
             if winner[0]:
-                for process in tuple(self._probe_processes & self._processes):
-                    if process.state()!=QProcess.NotRunning:process.kill()
+                for job in tuple(self._probe_processes & self._processes):
+                    if job.isRunning():job.kill()
             elif len(finished)==2:
                 self._refreshing=False;self._mode='';self._badge='no device'
                 self._status='No device connected.';self._placeholder=self._status
                 self._parsed={};self._chart=flow_layout({});self._partitions.replace([],animate=False)
                 self.changed.emit();self.chartChanged.emit()
-        probes.append(self._launch(self._program('fastboot'),['getvar','all'],lambda code,output:done('fastboot',code,output),timeout=5000,report_errors=False))
-        probes.append(self._launch(self._program('adb'),['devices'],lambda code,output:done('adb',code,output),timeout=5000,report_errors=False))
+        probes.append(self._launch('fastboot',['getvar','all'],lambda code,output:done('fastboot',code,output),timeout=5000,report_errors=False))
+        probes.append(self._launch('adb',['devices'],lambda code,output:done('adb',code,output),timeout=5000,report_errors=False))
         self._probe_processes.update(probes)
 
     def applyDevice(self,parsed):
@@ -318,10 +444,10 @@ class AndroidTools(QObject):
                 pending.intersection_update(self._processes)
                 if not pending and not self._closed:
                     self._flash_task=None;self.flashAll()
-            for process in tuple(pending):
-                process.finished.connect(stopped)
-                if process.state()!=QProcess.NotRunning:process.kill()
-                else:pending.discard(process)
+            for job in tuple(pending):
+                job.finished.connect(stopped)
+                if job.isRunning():job.kill()
+                else:pending.discard(job)
             self._probe_processes.clear()
             if pending:
                 self._flash_task='stopping probes';self.changed.emit();return
@@ -332,14 +458,45 @@ class AndroidTools(QObject):
         self._failed=False;self._queue.replace(rows,animate=False);self._node_state(row['partition'],'flashing')
         self._status=f'{row["partition"]}  {index+1}/{len(rows)}'
         chunks=[0,0];error=[''];completion=[None];progress=[None]
+        def on_progress(ev):
+            if self._closed or not isinstance(ev,dict):return
+            stage=str(ev.get('stage') or '')
+            pct=ev.get('percent')
+            if pct is not None:
+                try:row['progress']=max(row['progress'],max(0,min(99,int(round(float(pct))))))
+                except (TypeError,ValueError):pass
+            part=str(ev.get('partition') or row['partition'])
+            c_idx=int(ev.get('chunk_index') or 0)
+            c_tot=int(ev.get('chunk_total') or 0)
+            b_sent=int(ev.get('bytes_sent') or 0)
+            b_tot=int(ev.get('bytes_total') or 0)
+            speed=float(ev.get('speed_bps') or 0.0)
+            detail=str(ev.get('detail') or '').strip()
+            if stage=='downloading' and b_tot>0:
+                chunk_txt=f' ({c_idx}/{c_tot})' if c_tot>1 else ''
+                speed_txt=f'  ·  {_fmt_size(int(speed))}/s' if speed>0 else ''
+                pct_val=row['progress'] if row['progress']>=0 else 0
+                status_text=f"Sending '{part}'{chunk_txt} — {_fmt_size(b_sent)} / {_fmt_size(b_tot)} ({pct_val}%){speed_txt}"
+            elif stage=='writing':
+                chunk_txt=f' ({c_idx}/{c_tot})' if c_tot>1 else ''
+                status_text=detail or f"Writing '{part}'{chunk_txt}…"
+            else:
+                status_text=detail or self._status
+            self._status=status_text
+            current=self._queue.snapshot()
+            if index<len(current):
+                current[index]=dict(row)
+                self._queue.replace(current,animate=False)
+            self.changed.emit()
+            if progress[0]:progress[0](row['progress'],status_text)
         def stream(line):
             self._status=line
             if 'Sending sparse' in line:
                 match=re.search(r'(\d+)/(\d+)',line)
                 if match:
-                    chunks[0]=int(match[2]);row['progress']=int((int(match[1])-1)/chunks[0]*100) if chunks[0] else -1
+                    chunks[0]=int(match[2]);row['progress']=max(row['progress'],int((int(match[1])-1)/chunks[0]*100)) if chunks[0] else row['progress']
             elif 'Writing' in line and 'OKAY' in line and chunks[0]:
-                chunks[1]+=1;row['progress']=min(99,int(chunks[1]/chunks[0]*100))
+                chunks[1]+=1;row['progress']=max(row['progress'],min(99,int(chunks[1]/chunks[0]*100)))
             if 'FAILED' in line or 'ERROR' in line:error[0]=line
             current=self._queue.snapshot();current[index]=dict(row);self._queue.replace(current,animate=False);self.changed.emit()
             if progress[0]:progress[0](row['progress'],line)
@@ -358,7 +515,7 @@ class AndroidTools(QObject):
         def start(completed,updated):
             completion[0]=completed;progress[0]=updated
             updated(-1,'Starting fastboot')
-            self._flash=self._launch(self._program('fastboot'),['flash',row['partition'],row['path']],done,timeout=0,stream=stream)
+            self._flash=self._launch('fastboot',['flash',row['partition'],row['path']],done,timeout=0,stream=stream,on_progress=on_progress)
         self._flash_task='starting'
         self._flash_task=self.workspace._tasks.enqueue_external('Flash '+row['partition'],start,lambda *_:None)
         self.changed.emit()
@@ -372,4 +529,4 @@ class AndroidTools(QObject):
 
     def close(self):
         self._closed=True;self.dismiss();self._next_timer.stop();self._jobs.stop()
-        for process in tuple(self._processes):process.kill()
+        for job in tuple(self._processes):job.kill()

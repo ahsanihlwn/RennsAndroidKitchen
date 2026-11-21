@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
 import sys
+import time
 import json
 import shutil
 import re
@@ -142,6 +143,7 @@ def prescan_task(base, recursive=False):
 
 
 def load_neocat_ctx(base):
+    t0 = time.perf_counter()
 
     def _load_dir(cache_dir):
         return _load_metadata_directory(cache_dir, "_file_contexts", "contexts")
@@ -171,7 +173,7 @@ def load_neocat_ctx(base):
                 continue
             branch_neocat = neocat_cache_dir(base, fs_root_name, active_branch)
             neocat.update(_load_dir(branch_neocat))
-    print(f"[NEOCAT] loaded {len(neocat)} AppData cache entries for {os.path.basename(base)}")
+    print(f"[NEOCAT] loaded {len(neocat)} AppData cache entries for {os.path.basename(base)} ({(time.perf_counter()-t0)*1000:.1f}ms)", flush=True)
     return neocat
 
 
@@ -220,11 +222,16 @@ def nb_overlay(base, ctx, fs):
 
 
 def load_full_state(base):
-
+    t0 = time.perf_counter()
     ctx = load_file_context(base)
+    t_ctx = time.perf_counter()
     fs = load_fs_config(base)
+    t_fs = time.perf_counter()
     neocat = load_neocat_ctx(base)
+    t_nc = time.perf_counter()
     ctx, fs = nb_overlay(base, ctx, fs)
+    t_ov = time.perf_counter()
+    print(f"[META STAGE] load_full_state project={os.path.basename(base)} ctx={len(ctx)} ({(t_ctx-t0)*1000:.1f}ms) fs={len(fs)} ({(t_fs-t_ctx)*1000:.1f}ms) neocat={len(neocat)} ({(t_nc-t_fs)*1000:.1f}ms) overlay=({(t_ov-t_nc)*1000:.1f}ms) total=({(t_ov-t0)*1000:.1f}ms)", flush=True)
     return {"ctx": ctx, "fs": fs, "neocat": neocat}
 
 

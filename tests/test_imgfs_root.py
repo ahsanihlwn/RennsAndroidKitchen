@@ -4,14 +4,29 @@ import unittest
 from types import SimpleNamespace
 from unittest import mock
 
-from core import imgfs, rak_img_cli
+from core import imgfs, native_backend, rak_img_cli
 
 
 class ImageRootTests(unittest.TestCase):
     def erofs_reader(self):
-        reader = SimpleNamespace(f=io.BytesIO(), root_nid=56)
-        reader._read_inode = mock.Mock(return_value={"size": 512, "mode": 0o40755})
-        reader._inode_selinux = mock.Mock(return_value="u:object_r:rootfs:s0")
+        reader = SimpleNamespace(root_nid=56, closed=False)
+
+        def _close():
+            reader.closed = True
+
+        reader.close = _close
+        reader.f = SimpleNamespace(close=_close)
+        reader.stat_nid = mock.Mock(
+            return_value={
+                "path": "/",
+                "nid": 56,
+                "size": 512,
+                "mode": 0o40755,
+                "is_dir": True,
+                "is_link": False,
+                "selinux": "u:object_r:rootfs:s0",
+            }
+        )
         reader.walk = mock.Mock(side_effect=AssertionError("root is absent from walk"))
         return reader
 
@@ -34,12 +49,12 @@ class ImageRootTests(unittest.TestCase):
         self.assertEqual(node.ino, 2)
 
     def test_root_selinux_write_reaches_root_inode(self):
-        reader = self.erofs_reader()
-        with mock.patch.object(imgfs, "open_reader", return_value=("EROFS", reader)), \
-             mock.patch("core.erofs_write.write_selinux", return_value="u:object_r:rootfs:s0") as write:
-            imgfs._set_selinux_unlocked("image.img", "/", "u:object_r:rootfs:s0")
-        write.assert_called_once_with(reader.f, 56, "u:object_r:rootfs:s0")
-        self.assertTrue(reader.f.closed)
+        with mock.patch.object(imgfs, "detect_fs", return_value="EROFS"), \
+             mock.patch.object(imgfs, "_is_sparse_file", return_value=False), \
+             mock.patch.object(native_backend, "erofs_edit_selinux", return_value="u:object_r:rootfs:s0") as write:
+            res = imgfs._set_selinux_unlocked("image.img", "/", "u:object_r:rootfs:s0")
+        write.assert_called_once_with("image.img", "/", "u:object_r:rootfs:s0")
+        self.assertEqual(res, "u:object_r:rootfs:s0")
 
     def test_stat_accepts_directory_without_reading_its_file_data(self):
         reader = self.erofs_reader()
@@ -51,16 +66,16 @@ class ImageRootTests(unittest.TestCase):
             ok, result = rak_img_cli.cmd_stat(["image.img", "/", "--json"], ".")
         self.assertTrue(ok)
         self.assertEqual(json.loads(result)["selinux"], "u:object_r:rootfs:s0")
-        self.assertTrue(reader.f.closed)
+        self.assertTrue(reader.closed)
 
     def test_failed_root_read_closes_reader_and_logs(self):
         reader = self.erofs_reader()
-        reader._read_inode.side_effect = ValueError("damaged inode")
+        reader.stat_nid.side_effect = ValueError("damaged inode")
         with mock.patch.object(imgfs, "open_reader", return_value=("EROFS", reader)), \
              mock.patch("logging.exception") as log:
             with self.assertRaises(ValueError):
                 imgfs.resolve_node("image.img", "/")
-        self.assertTrue(reader.f.closed)
+        self.assertTrue(reader.closed)
         log.assert_called_once()
 
 

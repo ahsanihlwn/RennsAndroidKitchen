@@ -17,16 +17,16 @@ from main_ext.class_ThemeUi import theme
 def _button_style():
     return f"""
         QPushButton {{
-            background: {theme.border_color(0.05)};
-            border: 1px solid {theme.border_color(0.09)};
+            background: transparent;
+            border: none;
             border-radius: 6px;
-            color: {theme.FG_BLUE_MUTED};
+            color: {theme.FG};
             font-size: 12px;
             padding: 0;
             text-align: left;
         }}
-        QPushButton:hover {{ background: {theme.border_color(0.09)}; border-color: {theme.border_color(0.15)}; color: {theme.FG}; }}
-        QPushButton:pressed {{ background: {theme.border_color(0.13)}; }}
+        QPushButton:hover {{ background: {theme.border_color(0.06)}; border: none; color: {theme.FG_BRIGHT}; }}
+        QPushButton:pressed {{ background: {theme.border_color(0.10)}; border: none; }}
     """
 
 
@@ -43,7 +43,7 @@ class ChoiceDropdown(PressAnimatedButton):
         layout.setSpacing(5)
         self.caption = QLabel(self)
         self.caption.setAttribute(Qt.WA_TransparentForMouseEvents)
-        bind_style(self.caption, lambda: f"color:{theme.FG_BLUE_MUTED}; background:transparent; border:none; font-size:12px;")
+        bind_style(self.caption, lambda: f"color:{theme.FG}; background:transparent; border:none; font-size:12px;")
         self.arrow = QLabel(self)
         self.arrow.setFixedSize(9, 9)
         self.arrow.setAttribute(Qt.WA_TransparentForMouseEvents)

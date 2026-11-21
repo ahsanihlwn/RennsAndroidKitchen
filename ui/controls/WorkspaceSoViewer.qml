@@ -86,13 +86,23 @@ Item {
                 ViewerField { id: symbolFilter; objectName: "soSymbolFilter"; colors: viewer.c; width: Math.max(40,symbolTools.width-symbolCaption.width-kindCaption.width-kind.width-mangled.width-symbolCount.width-30); placeholderText: viewer.s.so_filter_symbols; onTextChanged: viewer.refreshSymbols() }
                 RakLabel { id: kindCaption; text: viewer.s.so_kind; width: Math.ceil(implicitWidth); height: 30; color: viewer.c.FG2; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter }
                 ViewerCombo { id: kind; objectName: "soSymbolKind"; y: 1; colors: viewer.c; model: [viewer.s.so_kind_all,"export","import","local"]; onActivated: viewer.refreshSymbols() }
-                C.CheckBox {
-                    id: mangled; objectName: "soMangled"; y: 3; height: 24; spacing: 6; padding: 3
-                    implicitWidth: mangledMetrics.advanceWidth+26
-                    TextMetrics { id: mangledMetrics; text: viewer.s.so_mangled; font: mangledText.font }
+                RakButton {
+                    id: mangled; objectName: "soMangled"; y: 3; height: 24; implicitHeight: 24
+                    checkable: true; leftPadding: 3; rightPadding: 6; cornerRadius: 5; edgeWidth: 0
+                    fillColor: "transparent"; hoverFillColor: viewer.c.b05; downFillColor: viewer.c.b09
+                    implicitWidth: mangledContent.implicitWidth + leftPadding + rightPadding
                     onToggled: viewer.refreshSymbols()
-                    contentItem: RakLabel { id: mangledText; text: viewer.s.so_mangled; leftPadding: 20; font.pixelSize: 11; color: viewer.c.FG_MUTED; verticalAlignment: Text.AlignVCenter }
-                    indicator: SmoothRectangle { x: 3; y: 4; width: 16; height: 16; radius: 4; color: mangled.checked?viewer.c.a20:"transparent"; border.width: 1; border.color: mangled.checked?viewer.c.accent_hex:viewer.c.FG_MUTED; RakLabel { anchors.centerIn: parent; text: "✓"; color: viewer.c.accent_hex; visible: mangled.checked; font.pixelSize: 12 } }
+                    contentItem: Row {
+                        id: mangledContent; spacing: 6
+                        SmoothRectangle {
+                            anchors.verticalCenter: parent.verticalCenter
+                            width: 16; height: 16; radius: 4
+                            color: mangled.checked ? viewer.c.a20 : "transparent"
+                            border.width: 1; border.color: mangled.checked ? viewer.c.accent_hex : viewer.c.FG_MUTED
+                            RakLabel { anchors.centerIn: parent; text: "✓"; color: viewer.c.accent_hex; visible: mangled.checked; font.pixelSize: 12; transformed: mangled.transformed }
+                        }
+                        RakLabel { anchors.verticalCenter: parent.verticalCenter; text: viewer.s.so_mangled; font.pixelSize: 11; color: mangled.visualHovered ? viewer.c.FG : viewer.c.FG_MUTED; transformed: mangled.transformed }
+                    }
                 }
                 RakLabel { id: symbolCount; text: document.symbolCount; width: Math.ceil(implicitWidth); height: 30; font.pixelSize: 11; color: viewer.c.FG_MUTED; verticalAlignment: Text.AlignVCenter }
             }

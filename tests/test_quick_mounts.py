@@ -69,5 +69,26 @@ class QuickMountTests(unittest.TestCase):
         tree.activate(image);tree.activate(etc)
         self.assertFalse(tree.dragTarget(tree.indexForPath(document),'',False)['accepted'])
 
+    def test_mounted_directory_symlinks_sort_with_folders_before_files(self):
+        from core.mount_index import _build_child_index
+        image=str(self.image);tree=self.owner.tree
+        entries=[
+            {'path':'usr','is_dir':True,'is_link':False,'size':0,'selinux':'','perm':'rwxr-xr-x'},
+            {'path':'xbin','is_dir':True,'is_link':False,'size':0,'selinux':'','perm':'rwxr-xr-x'},
+            {'path':'build.prop','is_dir':False,'is_link':False,'size':100,'selinux':'','perm':'rw-r--r--'},
+            {'path':'product','is_dir':False,'is_link':True,'target':'/product','size':8,'selinux':'','perm':'rwxrwxrwx'},
+            {'path':'vendor','is_dir':False,'is_link':True,'target':'/vendor','size':7,'selinux':'','perm':'rwxrwxrwx'},
+            {'path':'alias.prop','is_dir':False,'is_link':True,'target':'build.prop','size':10,'selinux':'','perm':'rwxrwxrwx'},
+        ]
+        reg=self.mounts.registry(str(self.root))
+        reg.indexes[image]=_build_child_index(entries)
+        reg.metadata[image]={'fs':'EROFS','sparse':False,'writable':True,'physical':image}
+        self.mounts._image_base[image]=str(self.root)
+        self.mounts._reload_views()
+        self.wait(lambda:not tree.busy)
+        tree.activate(image)
+        names=[child.texts[0] for child in tree._nodes[image].children if not child.up]
+        self.assertEqual(names,['product','usr','vendor','xbin','alias.prop','build.prop'])
+
 
 if __name__=='__main__':unittest.main()

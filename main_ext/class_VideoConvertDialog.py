@@ -32,13 +32,13 @@ def _label_style():
 
 def _btn_style(variant="neutral"):
     if variant == "primary":
-        p = dict(bg=_th.accent(0.15), br=_th.accent(0.30), fg=_th.FG_BLUE, w=600,
-                 bg_h=_th.accent(0.27), br_h=_th.accent(0.52), fg_h=_th.FG_BLUE_LIGHT,
-                 bg_p=_th.accent(0.40))
+        p = dict(bg=_th.BTN_PRIMARY_BG, br=_th.BTN_PRIMARY_EDGE, fg=_th.BTN_PRIMARY_FG, w=600,
+                 bg_h=_th.BTN_PRIMARY_HOVER, br_h=_th.BTN_PRIMARY_EDGE_HOVER, fg_h=_th.BTN_PRIMARY_FG_HOVER,
+                 bg_p=_th.BTN_PRIMARY_DOWN)
     else:
-        p = dict(bg=_th.border_color(0.05), br=_th.border_color(0.08), fg=_th.FG_MUTED, w=400,
-                 bg_h=_th.border_color(0.09), br_h=_th.border_color(0.14), fg_h=_th.FG_BLUE_MUTED,
-                 bg_p=_th.border_color(0.13))
+        p = dict(bg=_th.BTN_SEC_BG, br=_th.BTN_SEC_EDGE, fg=_th.BTN_SEC_FG, w=400,
+                 bg_h=_th.BTN_SEC_HOVER, br_h=_th.BTN_SEC_EDGE_HOVER, fg_h=_th.BTN_SEC_FG_HOVER,
+                 bg_p=_th.BTN_SEC_DOWN)
     return f"""
         QPushButton {{ background:{p['bg']}; border:1px solid {p['br']}; border-radius:7px;
             color:{p['fg']}; font-size:12px; font-weight:{p['w']}; padding:0 16px; height:30px; }}

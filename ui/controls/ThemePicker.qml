@@ -12,7 +12,7 @@ DialogWindow {
             x: 20; y: 17; width: 15; height: 15; iconSize: 15
             iconKey: "theme"
             strokeColor: picker.c.FG_BRIGHT
-            accentColor: picker.c.accentColor
+            accentColor: picker.c.accent_hex
             isLight: (picker.c && picker.c.is_light !== undefined) ? picker.c.is_light : false
         }
         RakLabel { x: 46; y: 16; height: 20; text: picker.s.thm_title; color: picker.c.FG_BRIGHT; font.pixelSize: 14; font.weight: Font.DemiBold }
@@ -47,7 +47,7 @@ DialogWindow {
             }
             C.ScrollBar.vertical: RakScrollBar { handleColor: picker.c.b18; hoverColor: picker.c.a50 }
         }
-        RakLabel { x: 20; y: 414; height: 30; text: picker.s.thm_active.replace("{name}", picker.s.themeName); color: picker.c.FG_MUTED; font.pixelSize: 11 }
+
         ActionButton { objectName: "themeDone"; x: 418; y: 414; width: 82; height: 30; colors: picker.c; primary: true; cornerRadius: 6; text: picker.s.thm_btn_done; onClicked: picker.close() }
     }
 }

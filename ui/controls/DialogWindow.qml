@@ -35,6 +35,7 @@ C.Popup {
     y: Math.round((hostWindow.height-height)/2)
     popupType: C.Popup.Item
     padding: 0; focus: true; modal: true; dim: false
+    transformOrigin: Item.Center
     closePolicy: C.Popup.CloseOnEscape
     function dismiss() { close() }
     function registerToStack() {
@@ -48,20 +49,27 @@ C.Popup {
         registerToStack()
         finalClose=false; closing=false; presented=true
         scroll.contentY=0
+        if (dialog.model && dialog.model.settings && dialog.model.settings.animations) {
+            opacity=0; scale=0.94
+        } else {
+            opacity=1; scale=1
+        }
         prepareRequested()
     }
     onOpened: content.forceActiveFocus(Qt.PopupFocusReason)
     onAboutToHide: { closing=true; presented=false }
-    onClosed: dismissed()
+    onClosed: { opacity=0; scale=1; dismissed() }
     enter: Transition {
-        SequentialAnimation {
-            PropertyAction { target: dialog; property: "opacity"; value: dialog.model.settings.animations?0:1 }
-            PauseAnimation { duration: dialog.model.settings.animations?120:0 }
-            NumberAnimation { target: dialog; property: "opacity"; to: 1; duration: dialog.model.settings.animations?140:0; easing.type: Easing.OutCubic }
+        ParallelAnimation {
+            NumberAnimation { target: dialog; property: "opacity"; from: dialog.model.settings.animations?0:1; to: 1; duration: dialog.model.settings.animations?190:0; easing.type: Easing.OutQuad }
+            NumberAnimation { target: dialog; property: "scale"; from: dialog.model.settings.animations?0.94:1; to: 1; duration: dialog.model.settings.animations?190:0; easing.type: Easing.OutCubic }
         }
     }
     exit: Transition {
-        NumberAnimation { target: dialog; property: "opacity"; to: 0; duration: dialog.model.settings.animations && !dialog.finalClose?120:0; easing.type: Easing.OutCubic }
+        ParallelAnimation {
+            NumberAnimation { target: dialog; property: "opacity"; to: 0; duration: dialog.model.settings.animations && !dialog.finalClose?140:0; easing.type: Easing.InQuad }
+            NumberAnimation { target: dialog; property: "scale"; to: 0.94; duration: dialog.model.settings.animations && !dialog.finalClose?140:0; easing.type: Easing.InCubic }
+        }
     }
     background: LiveGlass {
         id: surface

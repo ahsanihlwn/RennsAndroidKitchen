@@ -16,6 +16,7 @@ Item {
     readonly property bool anims: preferences && preferences.settings ? preferences.settings.animations : true
 
     property alias historyButton: statusButton
+    property string loadingActionKey: ""
     signal historyRequested(var target)
 
     property var actions: [
@@ -81,10 +82,7 @@ Item {
                 objectName: "workspaceSideAction_" + modelData.key
                 preferences: sidePanel.preferences
                 iconKey: modelData.icon
-                toolTip: (modelData.key === "layout" && sidePanel.workspace) ?
-                    (sidePanel.workspace.layoutMode === 1 ? "Layout: Single Tree" :
-                     sidePanel.workspace.layoutMode === 2 ? "Layout: Side-by-Side Split" :
-                     "Layout: Top-Bottom Split") : modelData.tip
+                toolTip: (modelData.key === "layout" && sidePanel.workspace) ? sidePanel.workspace.layoutLabel : modelData.tip
                 implicitWidth: 34
                 implicitHeight: 34
                 iconWidth: 18
@@ -93,6 +91,7 @@ Item {
                 anchors.horizontalCenter: parent.horizontalCenter
                 layoutMode: (sidePanel.workspace && sidePanel.workspace.layoutMode !== undefined) ? sidePanel.workspace.layoutMode : 2
                 enabled: modelData.key !== "layout" || sidePanel.workspace.prepared
+                loading: sidePanel.loadingActionKey === modelData.key
                 fillColor: (modelData.key === "agentInbox" && sidePanel.workspace.agentChat && sidePanel.workspace.agentChat.opened) ? sidePanel.c.b12 : "transparent"
 
                 // Unread notification pip for agent inbox
@@ -122,12 +121,26 @@ Item {
         // =====================================================================
         // LOADING / STATUS / TASK HISTORY INDICATOR (Right above profile)
         // =====================================================================
-        Item {
+        RakButton {
             id: statusButton
             objectName: "workspaceSideStatusButton"
             width: 34
             height: 34
+            implicitWidth: 34
+            implicitHeight: 34
+            leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+            cornerRadius: 8; edgeWidth: 1
+            fillColor: isActive ? sidePanel.c.b06 : "transparent"
+            hoverFillColor: sidePanel.c.b08
+            downFillColor: sidePanel.c.b12
+            edgeColor: "transparent"
+            hoverEdgeColor: sidePanel.c.b12
+            animatePress: sidePanel.anims
             anchors.horizontalCenter: parent.horizontalCenter
+            toolTip: (sidePanel.workspace.status && sidePanel.workspace.status.length > 0)
+                ? sidePanel.workspace.status
+                : (statusButton.isActive ? "Loading..." : "Task History / Activity")
+            onClicked: { resetPressFeedback(); sidePanel.historyRequested(statusButton) }
 
             readonly property string statusState: sidePanel.workspace.statusState || "idle"
             readonly property bool isActive: statusState === "active"
@@ -170,22 +183,7 @@ Item {
                 }
             }
 
-            property bool morphHidden: false
-            opacity: morphHidden ? 0 : 1
-            Behavior on opacity { NumberAnimation { duration: sidePanel.anims ? 120 : 0 } }
-
-            scale: statusTap.pressed ? 0.90 : (statusHov.hovered ? 1.08 : 1.0)
-            Behavior on scale { NumberAnimation { duration: sidePanel.anims ? 150 : 0; easing.type: Easing.OutQuad } }
-
-            SmoothRectangle {
-                anchors.fill: parent
-                radius: 8
-                color: statusHov.hovered ? sidePanel.c.b08 : (statusButton.isActive ? sidePanel.c.b06 : "transparent")
-                border.color: statusHov.hovered ? sidePanel.c.b12 : "transparent"
-                border.width: 1
-                Behavior on color { ColorAnimation { duration: sidePanel.anims ? 120 : 0 } }
-                Behavior on border.color { ColorAnimation { duration: sidePanel.anims ? 120 : 0 } }
-            }
+            contentItem: Item {
 
             // 1. Loading Progress (Active Spinner): scale up 0.25 -> 1.05 -> 1.0, scale down to 0.25
             Item {
@@ -199,7 +197,7 @@ Item {
                     accent: sidePanel.c.accent_hex
                     thickness: 2.2
                     inset: 2.2
-                    spinning: statusButton.activeProgress > 0.05
+                    spinning: statusButton.activeProgress > 0.05 && sidePanel.anims
                 }
             }
 
@@ -261,10 +259,11 @@ Item {
                             width: 3.5
                             height: 3.5
                             radius: 1.75
-                            color: statusHov.hovered ? sidePanel.c.FG_BRIGHT : sidePanel.c.FG_MUTED
+                            color: statusButton.visualHovered ? sidePanel.c.FG_BRIGHT : sidePanel.c.FG_MUTED
                         }
                     }
                 }
+            }
             }
 
             // MorphPopup Return Caption
@@ -285,33 +284,70 @@ Item {
                 }
             }
 
-            HoverHandler { id: statusHov; cursorShape: Qt.PointingHandCursor }
-            TapHandler {
-                id: statusTap
-                onTapped: sidePanel.historyRequested(statusButton)
-            }
-            HoverTip {
-                label: (sidePanel.workspace.status && sidePanel.workspace.status.length > 0)
-                    ? sidePanel.workspace.status
-                    : (statusButton.isActive ? "Loading..." : "Task History / Activity")
-                hovering: statusHov.hovered
+
+
+            Item {
+                id: statusLoadingTrack
+                z: 5
+                visible: sidePanel.loadingActionKey === "history"
+                anchors.horizontalCenter: parent.horizontalCenter
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 2
+                width: 20
+                height: 3
+
+                SmoothRectangle {
+                    id: statusLoadingThumb
+                    width: 9
+                    height: parent.height
+                    radius: height / 2
+                    color: sidePanel.c.accent_hex
+                    x: sidePanel.anims ? 0 : (parent.width - width) / 2
+
+                    SequentialAnimation on x {
+                        loops: Animation.Infinite
+                        running: statusLoadingTrack.visible && sidePanel.anims
+                        NumberAnimation {
+                            from: 0
+                            to: Math.max(0, statusLoadingTrack.width - statusLoadingThumb.width)
+                            duration: 460
+                            easing.type: Easing.InOutCubic
+                        }
+                        NumberAnimation {
+                            from: Math.max(0, statusLoadingTrack.width - statusLoadingThumb.width)
+                            to: 0
+                            duration: 460
+                            easing.type: Easing.InOutCubic
+                        }
+                    }
+                }
             }
         }
 
         // =====================================================================
         // BOTTOM: PROFILE AVATAR WITH TUCKED-IN CHECKMARK BADGE
         // =====================================================================
-        Item {
+        RakButton {
             id: profileBox
+            objectName: "workspaceSideProfile"
             visible: sidePanel.hasProfile
             width: 34
             height: 34
+            implicitWidth: 34
+            implicitHeight: 34
+            leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+            cornerRadius: 17; edgeWidth: 0
+            fillColor: "transparent"
+            hoverFillColor: sidePanel.c.b08
+            downFillColor: sidePanel.c.b12
+            animatePress: sidePanel.anims
             anchors.horizontalCenter: parent.horizontalCenter
+            toolTip: ((sidePanel.profile && sidePanel.profile.name) || "Profile") + ((sidePanel.profile && sidePanel.profile.subtitle) ? ("\n" + sidePanel.profile.subtitle) : "")
+            onClicked: { resetPressFeedback(); sidePanel.workspace.dispatch("settings", {}) }
 
             // Avatar Image / Fallback Circle
-            Item {
+            contentItem: Item {
                 id: avatarItem
-                anchors.fill: parent
 
                 RoundedImage {
                     anchors.fill: parent
@@ -361,14 +397,6 @@ Item {
                 }
             }
 
-            HoverHandler { id: profileHov; cursorShape: Qt.PointingHandCursor }
-            TapHandler {
-                onTapped: sidePanel.workspace.dispatch("settings", {})
-            }
-            HoverTip {
-                label: ((sidePanel.profile && sidePanel.profile.name) || "Profile") + ((sidePanel.profile && sidePanel.profile.subtitle) ? ("\n" + sidePanel.profile.subtitle) : "")
-                hovering: profileHov.hovered
-            }
         }
     }
 }

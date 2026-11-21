@@ -107,6 +107,20 @@ def check_magic(filepath: str) -> str:
         if _r16(data, sb_start + 0x38) == _EXT_MAGIC:
             return _detect_ext(data[sb_start:])
 
+    if len(data) >= 1028 and _r32(data, 1024) == 0xF2F52010:
+        return "F2FS"
+
+    if data.startswith(b"AVB0"):
+        return "VBMETA"
+
+    try:
+        from core.native_backend import oem_detect_magic
+        oem_kind = oem_detect_magic(filepath)
+        if oem_kind:
+            return oem_kind
+    except Exception:
+        pass
+
     return ""
 
 

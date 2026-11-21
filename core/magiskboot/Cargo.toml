@@ -1,0 +1,36 @@
+[package]
+name = "magiskboot"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "High-speed Android boot and vendor_boot image manipulation — library and CLI, full v4 multi-ramdisk support"
+
+[lib]
+name = "magiskboot"
+path = "src/lib.rs"
+
+[[bin]]
+name = "magiskboot"
+path = "src/main.rs"
+
+[dependencies]
+bzip2 = "0.6"
+crc32fast = "1.4"
+flate2 = { version = "1.1", features = ["zlib-rs"] }
+lz4 = "1.28"
+lzma-rust2 = "0.25"
+memchr = "2.7"
+memmap2 = "0.9"
+rayon = "1.10"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha1 = "0.10"
+sha2 = "0.10"
+zopfli = "0.8"
+zstd = "0.14"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true

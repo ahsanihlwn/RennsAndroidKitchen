@@ -20,6 +20,7 @@ _TARGET_ROLE=_PATH_ROLE+50
 _EXISTS_ROLE=_PATH_ROLE+51
 _BADGE_ROLE=_PATH_ROLE+1
 _BRANCH_COLOR_ROLE=_PATH_ROLE+10
+_UI_STABLE_ROLE=_PATH_ROLE+9
 
 
 @dataclass(eq=False)
@@ -69,6 +70,14 @@ def _metadata(base):
     if not os.path.isdir(base):raise FileNotFoundError(base)
     engine=ConfigEngine(base)
     return True,(engine,engine.load_full_state())
+
+
+def _probe_magic(phys):
+    from core.header_magic import check_magic
+    t0=time.perf_counter()
+    try:magic=check_magic(phys)
+    except OSError:magic=''
+    return True,(magic,(time.perf_counter()-t0)*1000.0)
 
 
 class EntryPresentation(QObject):
@@ -127,7 +136,9 @@ class DirectoryModel(QAbstractItemModel):
     _ROLE=int(Qt.UserRole)+1000
     _FIELDS=('name','context','permissions','path','physicalPath','folder','iconKey','sizeLabel','badge',
              'branchColor','contextColor','symlinkTarget','symlinkExists','up','empty','loading','thumbnailUrl','branchLines','lastSibling','presentation','entry')
-    NON_FS_BADGE={'SUPER','SPARSE','BOOT','VNDRBOOT','PAYLOAD'}
+    NON_FS_BADGE={'SUPER','SPARSE','BOOT','VNDRBOOT','PAYLOAD','VBMETA',
+                  'OZIP','OFP','OFP_QC','OFP_MTK','OFP_ZIP','OPS','KDZ','DZ',
+                  'UPDATE_APP','PAC','CPB','AMLOGIC','ALLWINNER','ROMFS','SQUASHFS'}
 
     def __init__(self,parent=None,*,watch=True):
         super().__init__(parent)
@@ -136,6 +147,9 @@ class DirectoryModel(QAbstractItemModel):
         self._unpack_watcher=SimpleNamespace(get_fs_type=lambda _: '')
         for attribute,key in ICONS.items():setattr(self,attribute,key)
         self._jobs=AsyncJobs(self,limit=2)
+        self._magic_jobs=AsyncJobs(self,limit=2)
+        self._magic_cache={}
+        self._magic_pending=set()
         from ui.thumbnails import ThumbnailCache
         self._thumbnails=ThumbnailCache(self,self._thumbnail_ready)
         self._thumbnail_subscribers={};self._thumbnail_dirty=set()
@@ -209,7 +223,7 @@ class DirectoryModel(QAbstractItemModel):
     def _may_have_children(node):return not node.up and not node.empty and (node.folder or bool(node.data(0,APKTOOL_LINK_ROLE)))
     def canFetchMore(self,parent):
         node=self._node(parent)
-        return bool(self.base and self.engine and self._may_have_children(node) and not node.loaded and not node.loading)
+        return bool(self.base and self._may_have_children(node) and not node.loaded and not node.loading)
     def fetchMore(self,parent):
         if self.canFetchMore(parent):self._scan(self._node(parent))
     def headerData(self,section,orientation,role=Qt.DisplayRole):
@@ -347,24 +361,57 @@ class DirectoryModel(QAbstractItemModel):
         if self._draft is not None and self._draft.path==path:self.cancelDraft()
 
     @Slot(str)
-    def load(self,base):
+    def load(self,base,*,shared_metadata=None):
+        t0=time.perf_counter()
         base=os.path.abspath(base)
         self._generation+=1;generation=self._generation
-        self._jobs.reset();self._history=[];self._error='';self.engine=None;self.base=base
+        self._jobs.reset();self._magic_jobs.reset();self._magic_pending.clear()
+        self._history=[];self._error='';self.engine=None;self.ctx={};self.fs={};self.ctx_neocat={};self.base=base
         self._clear_watches()
         self._reset_root(base)
-        def loaded(ok,payload):
-            if generation!=self._generation:return
-            if not ok:self._fail(payload);return
-            self.engine,state=payload
-            self.ctx=state['ctx'];self.fs=state['fs'];self.ctx_neocat=state['neocat']
+        if not os.path.isdir(base):
+            self._fail(str(FileNotFoundError(base)))
+            return
+        if shared_metadata is not None:
+            engine,ctx,fs,neocat=shared_metadata
+            self.engine=engine;self.ctx=ctx;self.fs=fs;self.ctx_neocat=neocat
             self.metadataChanged.emit()
-            self._scan(self._root)
-        self._jobs.submit('metadata',_metadata,base,loaded)
+        else:
+            def loaded(ok,payload):
+                if generation!=self._generation:return
+                if not ok:self._fail(payload);return
+                self.engine,state=payload
+                self.ctx=state['ctx'];self.fs=state['fs'];self.ctx_neocat=state['neocat']
+                self._apply_loaded_metadata(generation)
+                self.metadataChanged.emit()
+            self._jobs.submit('metadata',_metadata,base,loaded)
+        self._scan(self._root)
         self.changed.emit()
 
+    def _apply_loaded_metadata(self,generation):
+        if generation!=self._generation or self.engine is None:return
+        t0=time.perf_counter()
+        updated=0
+        for node in tuple(self._nodes.values()):
+            if node is self._root or node.up or node.empty:continue
+            _,ctx,perm,ctx_src=self.get_meta(node.path)
+            if node.texts[1]!=ctx or node.texts[2]!=perm:
+                node.texts[1]=ctx;node.texts[2]=perm
+                node.colors.pop(1,None)
+                self._apply_ctx_color(node,ctx_src)
+                self._view.sync(node)
+                if node.presentation is not None:node.presentation.changed.emit()
+                row_idx=self._index(node,1)
+                perm_idx=self._index(node,2)
+                if row_idx.isValid() and perm_idx.isValid():
+                    self.dataChanged.emit(row_idx,perm_idx,[])
+                updated+=1
+        cfg_dir=os.path.join(self.base,'config')
+        if not self._history and self._root.loaded and not self._root.loading and os.path.isdir(cfg_dir) and cfg_dir not in self._nodes:
+            self._scan(self._root,refresh=True)
+
     def _reset_root(self,path,*,template=None):
-        self._jobs.reset()
+        self._jobs.reset();self._magic_jobs.reset();self._magic_pending.clear()
         self._rendering.clear()
         self.beginResetModel()
         if self._view.enabled:
@@ -389,7 +436,7 @@ class DirectoryModel(QAbstractItemModel):
         mode='single_dir' if mode=='single_dir' else 'tree'
         if mode==self._mode:return
         self._mode=mode
-        if self.base and self.engine:
+        if self.base:
             self._history=[];self._reset_root(self.base);self._scan(self._root)
         self.changed.emit()
 
@@ -448,7 +495,7 @@ class DirectoryModel(QAbstractItemModel):
 
     @Slot()
     def refresh(self):
-        if self.engine:self._scan(self._root,refresh=True)
+        if self.base:self._scan(self._root,refresh=True)
 
     @Slot()
     def reloadMetadata(self):
@@ -467,6 +514,7 @@ class DirectoryModel(QAbstractItemModel):
     def _scan(self,node,*,refresh=False):
         ref=self.mounts.reference(node.path) if self.mounts else None
         if ref and ref[0]!='disk':self._scan_mount(node,ref);return
+        t_scan=time.perf_counter()
         generation=self._generation
         node.scan_serial+=1;serial=node.scan_serial
         node.loading=True;self._error=''
@@ -489,7 +537,11 @@ class DirectoryModel(QAbstractItemModel):
                     if os.path.isdir(watch) and watch not in self._watcher.directories():self._watcher.addPath(watch)
                 self.changed.emit()
                 self.directoryLoaded.emit(node.path)
-                if node is self._root:self.ready.emit()
+                if node is self._root:
+                    cfg_dir=os.path.join(self.base,'config')
+                    if not self._history and self.engine is not None and os.path.isdir(cfg_dir) and cfg_dir not in self._nodes:
+                        self._scan(self._root,refresh=True);return
+                    self.ready.emit()
             self._reconcile(node,payload,applied)
         self._jobs.submit(node.path,scan_tree_directory,spec,completed,priority=True)
         self.changed.emit()
@@ -501,6 +553,7 @@ class DirectoryModel(QAbstractItemModel):
         self._rendering[parent.path]=serial
         initial=all(child.up for child in parent.children)
         entries=iter(payload['entries'])
+        magic_candidates=[]
         def build(entry):
             row=build_tree_entry(self,(entry['priority'],entry['name'],entry['path'],entry['is_dir'],entry['symlink'],entry['source'],entry['branch']),
                 payload['is_root'],payload['branch_only'],None,{entry['source']:fmt_size(entry['size'] or 0)},
@@ -510,6 +563,15 @@ class DirectoryModel(QAbstractItemModel):
             if self.mounts and self.mounts.reference(row.path,resolve=False):
                 row.setData(0,IS_FOLDER_ROLE,True);row.setIcon(0,'drive_mounted')
             if payload['is_root']:row.setData(0,Qt.UserRole+10,payload['colors'].get(entry['name']))
+            low_name=entry['name'].lower()
+            if not entry['is_dir'] and not entry.get('symlink') and low_name.endswith(('.img','.bin','.ozip','.ofp','.ops','.kdz','.dz','.app','.pac','.cpb','.romfs','.squashfs','.sqsh')):
+                phys=entry.get('branch') or entry['path']
+                cache_key=(phys,entry.get('mtime_ns'),entry.get('size'))
+                if cache_key in self._magic_cache:
+                    cached_badge=self._magic_cache[cache_key]
+                    if cached_badge:self._apply_badge_to_node(row,cached_badge)
+                elif not entry['badge']:
+                    magic_candidates.append((row.path,phys,low_name,cache_key))
             if initial and self._view.enabled:
                 row.parent=parent;row.row=len(desired)
                 self._view.items(row)
@@ -539,11 +601,13 @@ class DirectoryModel(QAbstractItemModel):
                 return
             try:
                 deadline=time.perf_counter()+.008;processed=0;append=[]
-                while processed<80 and time.perf_counter()<deadline:
+                while processed<256 and time.perf_counter()<deadline:
                     if applying is not None:
                         try:next(applying)
                         except StopIteration:
-                            self._rendering.pop(parent.path,None);completed();return
+                            self._rendering.pop(parent.path,None);completed()
+                            self._schedule_magic_scans(magic_candidates,generation,is_root=payload['is_root'])
+                            return
                     else:
                         try:entry=next(entries)
                         except StopIteration:
@@ -583,21 +647,32 @@ class DirectoryModel(QAbstractItemModel):
     def _scan_mount(self,parent,ref):
         image,internal,children=self.mounts.children(*ref)
         desired=[parent.children[0]] if parent.children and parent.children[0].up else []
-        for child in sorted(children,key=lambda row:(-1 if not internal and row['name']=='config' and row['is_dir'] else 0 if row['is_dir'] else 1,row['name'].lower())):
+        registry=self.mounts.registry(self.mounts._image_base[image]) if children else None
+        prepared=[]
+        for child in children:
+            is_dir=bool(child['is_dir'])
+            link_info=None
+            if child.get('is_link'):
+                virtual,physical,is_dir,exists=registry._resolve_symlink_target_for_mount(image,child['path'],child.get('target') or '')
+                link_info=(bool(is_dir),exists,child.get('target') or '')
+            priority=-1 if not internal and child['name']=='config' and is_dir else 0 if is_dir else 1
+            prepared.append((priority,child['name'].lower(),child,bool(is_dir),link_info))
+        prepared.sort(key=lambda item:(item[0],item[1]))
+        for _,_,child,is_dir,link_info in prepared:
             path='mount://'+image+'//'+child['path'].strip('/')
             row=DirectoryEntry([child['name'],child.get('selinux') or '',(child.get('perm') or '')[-9:]])
-            row.setData(0,Qt.UserRole,path);row.setData(0,IS_FOLDER_ROLE,child['is_dir'])
+            row.setData(0,Qt.UserRole,path);row.setData(0,IS_FOLDER_ROLE,is_dir)
             row.setData(0,SIZE_LABEL_ROLE,fmt_size(child.get('size') or 0))
-            row.setIcon(0,'folder' if child['is_dir'] else file_icon(child['name']))
-            if child.get('is_link'):
-                registry=self.mounts.registry(self.mounts._image_base[image])
-                virtual,physical,is_dir,exists=registry._resolve_symlink_target_for_mount(image,child['path'],child.get('target') or '')
-                row.setData(0,IS_FOLDER_ROLE,is_dir);row.setData(0,Qt.UserRole+51,exists)
-                row.setData(0,Qt.UserRole+53,child.get('target') or '')
+            if link_info is not None:
+                _,exists,target=link_info
+                row.setData(0,Qt.UserRole+51,exists)
+                row.setData(0,Qt.UserRole+53,target)
                 row.setIcon(0,'symlink' if is_dir else 'symlink_file')
-            elif not child['is_dir']:
-                row.thumbnail_key,row.thumbnail_url=self._thumbnails.request(child['path'],mounted=(image,child['path']))
-                if row.thumbnail_key:self._thumbnail_subscribers.setdefault(row.thumbnail_key,set()).add(row.path)
+            else:
+                row.setIcon(0,'folder' if is_dir else file_icon(child['name']))
+                if not is_dir:
+                    row.thumbnail_key,row.thumbnail_url=self._thumbnails.request(child['path'],mounted=(image,child['path']))
+                    if row.thumbnail_key:self._thumbnail_subscribers.setdefault(row.thumbnail_key,set()).add(row.path)
             row.fingerprint=repr(child);desired.append(row)
         if not children:desired.append(DirectoryEntry(['Empty','',''],empty=True))
         self._reconcile_rows(parent,desired);parent.loaded=True;parent.loading=False
@@ -740,4 +815,35 @@ class DirectoryModel(QAbstractItemModel):
         if paths:self._watcher.removePaths(paths)
     def close(self):
         self._thumbnail_timer.stop();self._thumbnail_dirty.clear();self._thumbnail_subscribers.clear()
-        self._generation+=1;self._rendering.clear();self._jobs.stop();self._thumbnails.close();self._clear_watches()
+        self._generation+=1;self._rendering.clear();self._jobs.stop();self._magic_jobs.stop();self._magic_pending.clear();self._thumbnails.close();self._clear_watches()
+
+    def _apply_badge_to_node(self,node,badge):
+        if badge in ('EROFS','EXT4','EXT3','EXT2','F2FS','PAYLOAD'):
+            node.setData(0,_BADGE_ROLE,badge)
+        elif badge in self.NON_FS_BADGE or badge in ('BR','DAT','DAT.BR'):
+            node.setData(0,_BADGE_ROLE,badge)
+            node.setData(0,_UI_STABLE_ROLE,True)
+        else:
+            node.values.pop((0,_BADGE_ROLE),None)
+            node.values.pop((0,_UI_STABLE_ROLE),None)
+
+    def _schedule_magic_scans(self,candidates,generation,*,is_root=False):
+        if not candidates or generation!=self._generation:return
+        for node_path,phys,low_name,cache_key in candidates:
+            pending_key=(generation,node_path,cache_key)
+            if pending_key in self._magic_pending:continue
+            self._magic_pending.add(pending_key)
+            def done(ok,payload,node_path=node_path,low_name=low_name,cache_key=cache_key,pending_key=pending_key):
+                self._magic_pending.discard(pending_key)
+                if generation!=self._generation or not ok:return
+                magic,elapsed_ms=payload
+                badge=magic if low_name.endswith(('.img','.ozip','.ofp','.ops','.kdz','.dz','.app','.pac','.cpb','.romfs','.squashfs','.sqsh')) or (low_name.endswith('.bin') and magic in ('PAYLOAD','AMLOGIC','ALLWINNER','OFP','OFP_QC','OFP_MTK','OFP_ZIP','ROMFS','SQUASHFS')) else ''
+                self._magic_cache[cache_key]=badge
+                node=self._nodes.get(node_path)
+                if node is not None and (node.values.get((0,_BADGE_ROLE)) or '')!=badge:
+                    self._apply_badge_to_node(node,badge)
+                    self._view.sync(node)
+                    if node.presentation is not None:node.presentation.changed.emit()
+                    idx=self._index(node,0)
+                    if idx.isValid():self.dataChanged.emit(idx,idx,[])
+            self._magic_jobs.submit(f'magic:{node_path}',_probe_magic,phys,done,priority=is_root,report_operation_errors=False)

@@ -1,119 +1,133 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
-import QtWebEngine
-import QtWebChannel
+import QtTerm 1.0
 
 Item {
     id: pane
     required property var session
     required property color fillColor
     property bool inputAllowed: true
-    property bool terminalReady: false
+    property bool terminalReady: true
     property bool focusPending: true
     property bool layoutSettled: true
-    property bool contentReady: false
-    property bool displayPending: false
-    property int displayRequest: 0
-    readonly property var webView: loader.item
-    property string inspection: ""
-    property bool inspectionPending: false
-    function prepareDisplay() {
-        if (contentReady || displayPending || !terminalReady || !visible || !layoutSettled || !webView || width < 20 || height < 20) return
-        displayPending = true
-        displayRequest++
-        webView.runJavaScript("window.prepareTerminalDisplay && window.prepareTerminalDisplay("+displayRequest+");")
-    }
-    function invalidateDisplay() {
-        displayPending = false
-        displayRequest++
-        Qt.callLater(prepareDisplay)
-    }
+    property bool contentReady: true
+    readonly property var terminal: termItem
+
     function focusInput() {
-        if (!focusPending || !terminalReady || !inputAllowed || !visible || !enabled || !webView) return
-        webView.forceActiveFocus(Qt.OtherFocusReason)
-        webView.runJavaScript("window.term && window.term.focus();")
+        if (!inputAllowed || !visible || !enabled || !termItem) return
+        termItem.forceActiveFocus(Qt.OtherFocusReason)
         focusPending = false
     }
+
     function activate() {
         focusPending = true
-        if (webView) webView.runJavaScript("window.requestFit && window.requestFit();")
-        Qt.callLater(prepareDisplay)
         Qt.callLater(focusInput)
     }
+
     onVisibleChanged: {
-        contentReady = false
-        invalidateDisplay()
         if (visible) activate()
     }
-    onWidthChanged: if (!contentReady) invalidateDisplay()
-    onHeightChanged: if (!contentReady) invalidateDisplay()
-    onLayoutSettledChanged: if (layoutSettled) Qt.callLater(prepareDisplay)
-    onInputAllowedChanged: if (inputAllowed) Qt.callLater(focusInput)
-    Connections {
-        target: pane.session.bridge
-        function onTerminalReady() {
-            pane.terminalReady = true
-            Qt.callLater(pane.prepareDisplay)
-            Qt.callLater(pane.focusInput)
-        }
-        function onTerminalRendered(request) {
-            if (request !== pane.displayRequest || !pane.visible) return
-            pane.displayPending = false
-            if (pane.layoutSettled) pane.contentReady = true
+    onLayoutSettledChanged: {
+        if (layoutSettled && visible) {
+            if (!termItem.running && termItem.autoStart) termItem.start()
+            activate()
         }
     }
-    function inspect() {
-        if(!loader.item || inspectionPending)return
-        inspectionPending=true
-        loader.item.runJavaScript("JSON.stringify({href:location.href,ready:document.readyState,terminal:typeof terminal,term:typeof term,body:document.body.innerText.slice(0,200)})",function(value){
-            pane.inspection=value || ""
-            pane.inspectionPending=false
-        })
+    onInputAllowedChanged: {
+        if (inputAllowed) Qt.callLater(focusInput)
     }
-    SmoothRectangle { anchors.fill: parent; color: pane.fillColor }
-    Loader {
-        id: loader
+
+    SmoothRectangle {
         anchors.fill: parent
-        // Keep the native fill visible until Chromium has painted the fitted,
-        // themed terminal. A ready WebChannel alone does not provide a frame.
-        opacity: pane.contentReady ? 1 : 0
-        active: pane.session.active
-        sourceComponent: WebEngineView {
-            id: view
-            objectName: "quickTerminalView"
-            backgroundColor: pane.fillColor
-            settings.localContentCanAccessRemoteUrls: true
-            settings.localContentCanAccessFileUrls: true
-            settings.javascriptEnabled: true
-            settings.scrollAnimatorEnabled: false
-            webChannel: WebChannel { id: channel }
-            Component.onCompleted: {
-                channel.registerObject("bridge", pane.session.bridge)
-                url = pane.session.url
+        color: pane.fillColor
+    }
+
+    Terminal {
+        id: termItem
+        objectName: "quickTerminalView"
+        anchors.fill: parent
+        anchors.margins: 4
+        focus: true
+        program: pane.session ? (pane.session.program || "") : ""
+        arguments: pane.session ? (pane.session.arguments || []) : []
+        workingDirectory: pane.session ? (pane.session.workingDirectory || "") : ""
+        autoStart: (pane.session ? (pane.session.autoStart !== undefined ? pane.session.autoStart : true) : true) && pane.layoutSettled
+        fontFamily: pane.session ? (pane.session.fontFamily || "Cascadia Mono") : "Cascadia Mono"
+        fontPixelSize: pane.session ? (pane.session.fontPixelSize || 15) : 15
+        cursorShape: pane.session ? (pane.session.cursorShape || "beam") : "beam"
+        cursorWidth: pane.session ? (pane.session.cursorWidth || 5.5) : 5.5
+        padding: 6
+        foreground: pane.session ? (pane.session.foreground || "#e2e8f0") : "#e2e8f0"
+        background: pane.fillColor
+        cursorColor: pane.session ? (pane.session.cursorColor || "#38bdf8") : "#38bdf8"
+        selectionColor: pane.session ? (pane.session.selectionColor || "#38bdf840") : "#38bdf840"
+        ansiPalette: pane.session ? (pane.session.palette || []) : []
+        enabled: pane.inputAllowed
+
+        Component.onCompleted: {
+            if (pane.session && typeof pane.session.bindTerminal === "function") {
+                pane.session.bindTerminal(termItem)
             }
-            onWidthChanged: runJavaScript("window.requestFit && window.requestFit();")
-            onHeightChanged: runJavaScript("window.requestFit && window.requestFit();")
+            pane.activate()
+        }
+        Component.onDestruction: termItem.stop()
+    }
+
+    // Overlay scrollbar
+    Rectangle {
+        id: track
+        visible: termItem.historySize > 0 && !termItem.mouseTracking
+        anchors { right: parent.right; top: parent.top; bottom: parent.bottom; margins: 2 }
+        width: 6
+        radius: 3
+        color: "#18ffffff"
+        Rectangle {
+            readonly property real total: termItem.historySize + termItem.rows
+            width: parent.width
+            radius: 3
+            color: dragArea.pressed ? "#99cdd6f4" : "#44cdd6f4"
+            height: Math.max(20, parent.height * termItem.rows / Math.max(1, total))
+            y: (parent.height - height) * (1 - termItem.scrollOffset / Math.max(1, termItem.historySize))
+        }
+        MouseArea {
+            id: dragArea
+            anchors.fill: parent
+            anchors.leftMargin: -6
+            function seek(my) {
+                var f = 1 - Math.min(1, Math.max(0, my / height))
+                termItem.scrollOffset = Math.round(f * termItem.historySize)
+            }
+            onPressed: (m) => seek(m.y)
+            onPositionChanged: (m) => { if (pressed) seek(m.y) }
         }
     }
+
     DropArea {
         anchors.fill: parent
         function sourcePaths(event) {
-            const mime=event.source && event.source.dragMime
-            if(!mime)return []
-            if(mime["text/uri-list"])return mime["text/uri-list"].split(/\r?\n/).filter(path=>path.length && path[0]!=="#")
-            if(mime["application/x-rak-tree"]){try{return JSON.parse(mime["application/x-rak-tree"]).paths || []}catch(error){return []}}
-            if(mime["application/x-rdt-archive"])return mime["application/x-rdt-archive"].split("\n")
+            const mime = event.source && event.source.dragMime
+            if (!mime) return []
+            if (mime["text/uri-list"]) return mime["text/uri-list"].split(/\r?\n/).filter(path => path.length && path[0] !== "#")
+            if (mime["application/x-rak-tree"]) {
+                try { return JSON.parse(mime["application/x-rak-tree"]).paths || [] } catch (error) { return [] }
+            }
+            if (mime["application/x-rdt-archive"]) return mime["application/x-rdt-archive"].split("\n")
             return []
         }
-        onEntered: event => {event.accepted=sourcePaths(event).length>0 || event.hasUrls || event.hasText || event.formats.indexOf("application/x-rdt-archive")>=0}
+        onEntered: event => {
+            event.accepted = sourcePaths(event).length > 0 || event.hasUrls || event.hasText || event.formats.indexOf("application/x-rdt-archive") >= 0
+        }
         onDropped: event => {
-            let paths=sourcePaths(event)
-            if(!paths.length){
-                if(event.hasUrls)paths=event.urls
-                else if(event.formats.indexOf("application/x-rdt-archive")>=0)paths=event.getDataAsString("application/x-rdt-archive").split("\n")
-                else if(event.hasText)paths=[event.text.trim()]
+            let paths = sourcePaths(event)
+            if (!paths.length) {
+                if (event.hasUrls) paths = event.urls
+                else if (event.formats.indexOf("application/x-rdt-archive") >= 0) paths = event.getDataAsString("application/x-rdt-archive").split("\n")
+                else if (event.hasText) paths = [event.text.trim()]
             }
-            pane.session.insertDroppedPaths(paths);event.acceptProposedAction()
+            if (pane.session && typeof pane.session.insertDroppedPaths === "function") {
+                pane.session.insertDroppedPaths(paths)
+            }
+            event.acceptProposedAction()
             pane.activate()
         }
     }

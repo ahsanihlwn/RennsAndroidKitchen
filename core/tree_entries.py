@@ -51,6 +51,8 @@ def fmt_size(nbytes: int) -> str:
 
 
 def entry_metadata(tree, full):
+    if getattr(tree, "engine", None) is None:
+        return os.path.basename(full), "", "", ""
     if full.startswith(tree.base):
         rel = full[len(tree.base):].lstrip("\\/").replace("\\", "/")
     else:
@@ -204,8 +206,11 @@ def build_tree_entry(tree, entry_tuple, is_root_parent, is_branch_only_dir, _nb_
     phys = branch_only_abs if branch_only_abs else full
     _low_phys = phys.lower()
     _is_badgeable = (
-        _low_phys.endswith(".img") or _low_phys.endswith(".img.br")
-        or _low_phys.endswith(".new.dat") or _low_phys.endswith(".new.dat.br")
+        _low_phys.endswith((
+            ".img", ".img.br", ".new.dat", ".new.dat.br",
+            ".ozip", ".ofp", ".ops", ".kdz", ".dz", ".app",
+            ".pac", ".cpb", ".romfs", ".squashfs", ".sqsh",
+        ))
     )
     _dropped_paths = getattr(tree, "_dropped_badge_paths", None)
     _dropped_badge = bool(_dropped_paths) and os.path.normpath(phys) in _dropped_paths
@@ -256,7 +261,7 @@ def build_tree_entry(tree, entry_tuple, is_root_parent, is_branch_only_dir, _nb_
         tree._schedule_file_thumbnail(child, phys, entry_info=entry_info)
         child.setData(0, Qt.UserRole + 120, False)
 
-    if fs_info in ("EROFS", "EXT4", "EXT3", "EXT2", "PAYLOAD"):
+    if fs_info in ("EROFS", "EXT4", "EXT3", "EXT2", "F2FS", "PAYLOAD"):
         child.setData(0, Qt.UserRole + 1, fs_info)
     elif fs_info in tree.NON_FS_BADGE or fs_info in ("BR", "DAT", "DAT.BR"):
         child.setData(0, Qt.UserRole + 1, fs_info)

@@ -290,33 +290,27 @@ Item {
                 }
 
                 // Expand/collapse replace chevron (matching filetree folder arrow)
-                Item {
+                RakButton {
                     id: toggleReplaceBtn
-                    width: 24; height: 28
-
-                    SmoothRectangle {
-                        anchors.fill: parent
-                        radius: 5
-                        color: toggleArea.pressed ? popup.c.b13 : (toggleArea.containsMouse ? popup.c.b08 : "transparent")
-                    }
-
-                    Image {
-                        anchors.centerIn: parent
-                        width: 12; height: 12
-                        source: "image://icons/arrow_right?color=" + encodeURIComponent(toggleArea.containsMouse ? (popup.lightTheme ? popup.c.FG : popup.c.FG_BRIGHT) : (popup.lightTheme ? popup.c.FG : popup.c.FG_MUTED))
-                        sourceSize: Qt.size(24, 24)
-                        smooth: true
-                        opacity: toggleArea.containsMouse ? 1.0 : 0.8
-                        rotation: popup.replaceExpanded ? 90 : 0
-                        Behavior on rotation { NumberAnimation { duration: popup.effectivePreferences.settings.animations ? 140 : 0; easing.type: Easing.OutCubic } }
-                    }
-
-                    MouseArea {
-                        id: toggleArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: popup.replaceExpanded = !popup.replaceExpanded
-                        HoverTip { label: popup.replaceExpanded ? "Collapse Replace (Ctrl+H)" : "Expand Replace (Ctrl+H)"; hovering: toggleArea.containsMouse }
+                    objectName: "findToggleReplaceBtn"
+                    width: 24; height: 28; implicitWidth: 24; implicitHeight: 28
+                    leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+                    cornerRadius: 5; edgeWidth: 0
+                    fillColor: "transparent"; hoverFillColor: popup.c.b08; downFillColor: popup.c.b13
+                    animatePress: popup.effectivePreferences.settings.animations
+                    toolTip: popup.replaceExpanded ? "Collapse Replace (Ctrl+H)" : "Expand Replace (Ctrl+H)"
+                    onClicked: popup.replaceExpanded = !popup.replaceExpanded
+                    contentItem: Item {
+                        Image {
+                            anchors.centerIn: parent
+                            width: 12; height: 12
+                            source: "image://icons/arrow_right?color=" + encodeURIComponent(toggleReplaceBtn.visualHovered ? (popup.lightTheme ? popup.c.FG : popup.c.FG_BRIGHT) : (popup.lightTheme ? popup.c.FG : popup.c.FG_MUTED))
+                            sourceSize: Qt.size(24, 24)
+                            smooth: true
+                            opacity: toggleReplaceBtn.visualHovered ? 1.0 : 0.8
+                            rotation: popup.replaceExpanded ? 90 : 0
+                            Behavior on rotation { NumberAnimation { duration: popup.effectivePreferences.settings.animations ? 140 : 0; easing.type: Easing.OutCubic } }
+                        }
                     }
                 }
 
@@ -378,109 +372,91 @@ Item {
                 }
 
                 // Previous match button (filetree arrow pointing up)
-                Item {
+                RakButton {
                     id: prevBtn
-                    width: 24; height: 28
-
-                    SmoothRectangle {
-                        anchors.fill: parent
-                        radius: 5
-                        color: prevArea.pressed ? popup.c.b13 : (prevArea.containsMouse ? popup.c.b08 : "transparent")
-                    }
-
-                    Image {
-                        anchors.centerIn: parent
-                        width: 12; height: 12
-                        source: "image://icons/arrow_right?color=" + encodeURIComponent(prevArea.containsMouse ? (popup.lightTheme ? popup.c.FG : popup.c.FG_BRIGHT) : (popup.lightTheme ? popup.c.FG : popup.c.FG_MUTED))
-                        sourceSize: Qt.size(24, 24)
-                        rotation: -90
-                        smooth: true
-                        opacity: prevArea.containsMouse ? 1.0 : 0.8
-                    }
-
-                    MouseArea {
-                        id: prevArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: popup.findPrev()
-                        HoverTip { label: "Previous Match (Shift+Enter)"; hovering: prevArea.containsMouse }
+                    objectName: "findPrevBtn"
+                    width: 24; height: 28; implicitWidth: 24; implicitHeight: 28
+                    leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+                    cornerRadius: 5; edgeWidth: 0
+                    fillColor: "transparent"; hoverFillColor: popup.c.b08; downFillColor: popup.c.b13
+                    animatePress: popup.effectivePreferences.settings.animations
+                    toolTip: "Previous Match (Shift+Enter)"
+                    onClicked: popup.findPrev()
+                    contentItem: Item {
+                        Image {
+                            anchors.centerIn: parent
+                            width: 12; height: 12
+                            source: "image://icons/arrow_right?color=" + encodeURIComponent(prevBtn.visualHovered ? (popup.lightTheme ? popup.c.FG : popup.c.FG_BRIGHT) : (popup.lightTheme ? popup.c.FG : popup.c.FG_MUTED))
+                            sourceSize: Qt.size(24, 24)
+                            rotation: -90
+                            smooth: true
+                            opacity: prevBtn.visualHovered ? 1.0 : 0.8
+                        }
                     }
                 }
 
                 // Next match button (filetree arrow pointing down)
-                Item {
+                RakButton {
                     id: nextBtn
-                    width: 24; height: 28
-
-                    SmoothRectangle {
-                        anchors.fill: parent
-                        radius: 5
-                        color: nextArea.pressed ? popup.c.b13 : (nextArea.containsMouse ? popup.c.b08 : "transparent")
-                    }
-
-                    Image {
-                        anchors.centerIn: parent
-                        width: 12; height: 12
-                        source: "image://icons/arrow_right?color=" + encodeURIComponent(nextArea.containsMouse ? (popup.lightTheme ? popup.c.FG : popup.c.FG_BRIGHT) : (popup.lightTheme ? popup.c.FG : popup.c.FG_MUTED))
-                        sourceSize: Qt.size(24, 24)
-                        rotation: 90
-                        smooth: true
-                        opacity: nextArea.containsMouse ? 1.0 : 0.8
-                    }
-
-                    MouseArea {
-                        id: nextArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        onClicked: popup.findNext()
-                        HoverTip { label: "Next Match (Enter)"; hovering: nextArea.containsMouse }
+                    objectName: "findNextBtn"
+                    width: 24; height: 28; implicitWidth: 24; implicitHeight: 28
+                    leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+                    cornerRadius: 5; edgeWidth: 0
+                    fillColor: "transparent"; hoverFillColor: popup.c.b08; downFillColor: popup.c.b13
+                    animatePress: popup.effectivePreferences.settings.animations
+                    toolTip: "Next Match (Enter)"
+                    onClicked: popup.findNext()
+                    contentItem: Item {
+                        Image {
+                            anchors.centerIn: parent
+                            width: 12; height: 12
+                            source: "image://icons/arrow_right?color=" + encodeURIComponent(nextBtn.visualHovered ? (popup.lightTheme ? popup.c.FG : popup.c.FG_BRIGHT) : (popup.lightTheme ? popup.c.FG : popup.c.FG_MUTED))
+                            sourceSize: Qt.size(24, 24)
+                            rotation: 90
+                            smooth: true
+                            opacity: nextBtn.visualHovered ? 1.0 : 0.8
+                        }
                     }
                 }
 
                 // Close button (X)
-                Item {
+                RakButton {
                     id: closeBtn
-                    width: 24; height: 28
-                    readonly property color closeIconColor: closeArea.containsMouse
+                    objectName: "findCloseBtn"
+                    width: 24; height: 28; implicitWidth: 24; implicitHeight: 28
+                    leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+                    cornerRadius: 5; edgeWidth: 0
+                    fillColor: "transparent"
+                    hoverFillColor: popup.c.red14 || "#20f85149"
+                    downFillColor: popup.c.red28 || "#45f85149"
+                    animatePress: popup.effectivePreferences.settings.animations
+                    toolTip: "Close (Escape)"
+                    onClicked: popup.closeFind()
+                    readonly property color closeIconColor: visualHovered
                         ? (popup.c.RED_LIGHT || "#f85149")
                         : (popup.lightTheme ? popup.c.FG : (popup.c.FG_MUTED || "#8b949e"))
+                    contentItem: Item {
+                        Image {
+                            id: closeImg
+                            anchors.centerIn: parent
+                            width: 12; height: 12
+                            source: "image://icons/close_rounded?color=" + encodeURIComponent(closeBtn.closeIconColor)
+                            sourceSize: Qt.size(24, 24)
+                            smooth: true
+                            opacity: closeBtn.visualHovered ? 1.0 : (popup.lightTheme ? 0.9 : 0.75)
+                            visible: status === Image.Ready
+                        }
 
-                    SmoothRectangle {
-                        anchors.fill: parent
-                        radius: 5
-                        color: closeArea.pressed
-                            ? (popup.c.red28 || "#45f85149")
-                            : (closeArea.containsMouse ? (popup.c.red14 || "#20f85149") : "transparent")
-                    }
-
-                    Image {
-                        id: closeImg
-                        anchors.centerIn: parent
-                        width: 12; height: 12
-                        source: "image://icons/close_rounded?color=" + encodeURIComponent(closeBtn.closeIconColor)
-                        sourceSize: Qt.size(24, 24)
-                        smooth: true
-                        opacity: closeArea.containsMouse ? 1.0 : (popup.lightTheme ? 0.9 : 0.75)
-                        visible: status === Image.Ready
-                    }
-
-                    RakLabel {
-                        anchors.centerIn: parent
-                        text: "✕"
-                        font.pixelSize: 11
-                        font.weight: Font.DemiBold
-                        color: closeBtn.closeIconColor
-                        opacity: closeArea.containsMouse ? 1.0 : (popup.lightTheme ? 0.9 : 0.75)
-                        visible: closeImg.status !== Image.Ready
-                    }
-
-                    MouseArea {
-                        id: closeArea
-                        anchors.fill: parent
-                        hoverEnabled: true
-                        cursorShape: Qt.PointingHandCursor
-                        onClicked: popup.closeFind()
-                        HoverTip { label: "Close (Escape)"; hovering: closeArea.containsMouse }
+                        RakLabel {
+                            anchors.centerIn: parent
+                            text: "✕"
+                            font.pixelSize: 11
+                            font.weight: Font.DemiBold
+                            color: closeBtn.closeIconColor
+                            opacity: closeBtn.visualHovered ? 1.0 : (popup.lightTheme ? 0.9 : 0.75)
+                            visible: closeImg.status !== Image.Ready
+                            transformed: closeBtn.transformed
+                        }
                     }
                 }
             }

@@ -34,17 +34,19 @@ C.Popup {
     property real launchScale: 1
     property color launchFill: "transparent"
     property color launchEdge: "transparent"
-    readonly property real motion: springMotion || buttonReturning ? Motion.spring(opening ? progress : Math.min(1,progress/.68)) : Motion.outCubic(progress)
+    readonly property real sourceRadius: sourceItem && typeof sourceItem.cornerRadius!=="undefined" ? sourceItem.cornerRadius : 6
+    readonly property real collapseMotion: Motion.outCubic(Motion.clamp(progress/.86))
+    readonly property real motion: springMotion ? Motion.spring(opening ? progress : Math.min(1,progress/.68)) : (buttonReturning ? collapseMotion : Motion.outCubic(progress))
     readonly property real choicePhase: opening ? motion : closePhase*(1-motion)
-    readonly property rect surfaceRect: springMotion || buttonReturning ? Motion.rect(opening ? sourceRect : closeRect,opening ? Qt.rect(0,0,width,height) : sourceRect,motion) : Motion.roundRect(Motion.rect(sourceRect,Qt.rect(0,0,width,height),choicePhase))
+    readonly property rect surfaceRect: springMotion ? Motion.rect(opening ? sourceRect : closeRect,opening ? Qt.rect(0,0,width,height) : sourceRect,motion) : buttonReturning ? Motion.rect(closeRect,sourceRect,collapseMotion) : Motion.roundRect(Motion.rect(sourceRect,Qt.rect(0,0,width,height),choicePhase))
     readonly property real expansion: Motion.clamp((surfaceRect.width-sourceRect.width)/Math.max(1,(buttonReturning?closeRect.width:width)-sourceRect.width))
-    readonly property real returnBlend: buttonReturning ? Motion.clamp((progress-.68)/.17) : 0
+    readonly property real returnBlend: !buttonReturning ? 0 : springMotion ? Motion.clamp((progress-.68)/.17) : Motion.clamp((progress-.72)/.24)
     readonly property real returnUnderlay: returnBlend<1 ? 1 : 0
-    readonly property real returnCaptionScale: 1+.25*expansion
+    readonly property real returnCaptionScale: springMotion ? (1+.25*expansion) : (1+.12*expansion)
     readonly property point returnCaptionCenter: captionStart!=null ? Qt.point(Motion.mix(captionStart.x,sourceRect.x+sourceRect.width/2,motion),Motion.mix(captionStart.y,sourceRect.y+sourceRect.height/2,motion)) : Qt.point(surfaceRect.x+surfaceRect.width/2,surfaceRect.y+surfaceRect.height/2)
     readonly property real eased: Motion.outCubic(progress)
-    readonly property real formAlpha: buttonReturning ? closeAlpha*Motion.opacity(eased,1,0,[[.25,0]])*(1-returnBlend) : !springMotion ? (choicePhase>=.30 ? 1 : 0) : opening ? Motion.opacity(progress,0,1,[[.65,0]]) : closeAlpha*Motion.opacity(eased,1,0,[[.25,0]])
-    readonly property real captionAlpha: buttonReturning ? 0 : !springMotion ? Motion.clamp(1-choicePhase/.30) : opening ? Motion.opacity(progress,1,0,[[.04,1],[.36,0]]) : Motion.opacity(progress,0,1,[[.12,0],[.55,1]])
+    readonly property real formAlpha: buttonReturning ? (springMotion ? closeAlpha*Motion.opacity(eased,1,0,[[.25,0]])*(1-returnBlend) : closeAlpha*(1-Motion.clamp(progress/.28))) : !springMotion ? Motion.clamp((choicePhase-.16)/.52) : opening ? Motion.opacity(progress,0,1,[[.65,0]]) : closeAlpha*Motion.opacity(eased,1,0,[[.25,0]])
+    readonly property real captionAlpha: buttonReturning ? 0 : !springMotion ? Motion.clamp(1-choicePhase/.28) : opening ? Motion.opacity(progress,1,0,[[.04,1],[.36,0]]) : Motion.opacity(progress,0,1,[[.12,0],[.55,1]])
     default property alias body: form.data
     popupType: C.Popup.Item
     padding: 0
@@ -106,14 +108,14 @@ C.Popup {
         if (typeof sourceItem.morphHoverState!=="undefined") sourceItem.morphHoverState=-1
     }
     enter: Transition { NumberAnimation { target: popup; property: "progress"; from: 0; to: 1; duration: popup.animationsEnabled ? (popup.springMotion?440:240) : 0; easing.type: Easing.Linear } }
-    exit: Transition { NumberAnimation { target: popup; property: "progress"; from: 0; to: 1; duration: popup.animationsEnabled && !popup.immediateClose ? (popup.springMotion || popup.morphOnClose?440:Math.max(60,Math.round(180*popup.closePhase))) : 0; easing.type: Easing.Linear } }
+    exit: Transition { NumberAnimation { target: popup; property: "progress"; from: 0; to: 1; duration: popup.animationsEnabled && !popup.immediateClose ? (popup.springMotion ? 440 : popup.morphOnClose ? Math.max(120,Math.round(250*Math.max(0.2,popup.closePhase))) : Math.max(60,Math.round(180*popup.closePhase))) : 0; easing.type: Easing.Linear } }
     background: Item {
         LiveGlass {
             id: glass
             objectName: "popupGlass"
             x: popup.surfaceRect.x; y: popup.surfaceRect.y; width: popup.surfaceRect.width; height: popup.surfaceRect.height
-            cornerRadius: popup.buttonReturning ? 7+7*(1-Motion.clamp(popup.motion)) : popup.springMotion ? 7*popup.launchScale+(popup.panelRadius-7*popup.launchScale)*Motion.clamp(popup.opening?popup.motion:1-popup.motion) : 6+(popup.panelRadius-6)*popup.choicePhase
-            opacity: popup.buttonReturning ? Motion.opacity(popup.eased,0,0,[[.25,1],[.30,1],[.65,0]])*popup.returnUnderlay : 1
+            cornerRadius: popup.buttonReturning ? (popup.springMotion ? 7+7*(1-Motion.clamp(popup.motion)) : Motion.mix(popup.panelRadius,popup.sourceRadius,popup.motion)) : popup.springMotion ? 7*popup.launchScale+(popup.panelRadius-7*popup.launchScale)*Motion.clamp(popup.opening?popup.motion:1-popup.motion) : popup.sourceRadius+(popup.panelRadius-popup.sourceRadius)*popup.choicePhase
+            opacity: popup.buttonReturning ? (popup.springMotion ? Motion.opacity(popup.eased,0,0,[[.25,1],[.30,1],[.65,0]]) : (1-Motion.clamp((popup.progress-.46)/.38)))*popup.returnUnderlay : 1
             backdropSource: popup.backdropSource
             effectsEnabled: popup.effectsEnabled
             backdropDim: popup.backdropDim
@@ -121,15 +123,16 @@ C.Popup {
             sampleRect: Qt.rect(popup.x-32,popup.y-32,popup.width+64,popup.height+64)
             flatColor: popup.panelColor
             tintColor: Qt.rgba(popup.tintBaseColor.r,popup.tintBaseColor.g,popup.tintBaseColor.b,popup.tintAlpha)
-            edgeColor: popup.panelBorder
+            edgeColor: popup.springMotion ? popup.panelBorder : Qt.rgba(popup.panelBorder.r, popup.panelBorder.g, popup.panelBorder.b, popup.panelBorder.a * (popup.buttonReturning ? (1 - Motion.clamp(popup.progress / .45)) : Motion.clamp(popup.choicePhase / .45)))
         }
         SmoothRectangle {
             visible: popup.springMotion || popup.buttonReturning
             x: popup.surfaceRect.x; y: popup.surfaceRect.y; width: popup.surfaceRect.width; height: popup.surfaceRect.height
-            radius: popup.buttonReturning ? 7+7*(1-Motion.clamp(popup.motion)) : 7
+            radius: popup.buttonReturning ? glass.cornerRadius : 7
             color: popup.springMotion && popup.opening ? popup.launchFill : popup.sourceItem ? popup.sourceItem.fillColor : "transparent"
-            border.color: popup.springMotion && popup.opening ? popup.launchEdge : popup.sourceItem ? popup.sourceItem.edgeColor : "transparent"
-            opacity: popup.buttonReturning ? Motion.opacity(popup.eased,0,1,[[.30,0],[.65,1]])*popup.returnUnderlay : popup.springMotion ? (popup.opening ? Motion.opacity(popup.eased,1,0,[[.30,0]]) : Motion.opacity(popup.eased,0,1,[[.30,0],[.65,1]])) : popup.captionAlpha
+            border.width: (popup.sourceItem && typeof popup.sourceItem.edgeWidth!=="undefined") ? popup.sourceItem.edgeWidth : 1
+            border.color: popup.springMotion && popup.opening ? popup.launchEdge : (popup.sourceItem && border.width>0 ? popup.sourceItem.edgeColor : "transparent")
+            opacity: popup.buttonReturning ? (popup.springMotion ? Motion.opacity(popup.eased,0,1,[[.30,0],[.65,1]]) : Motion.clamp((popup.progress-.46)/.38))*popup.returnUnderlay : popup.springMotion ? (popup.opening ? Motion.opacity(popup.eased,1,0,[[.30,0]]) : Motion.opacity(popup.eased,0,1,[[.30,0],[.65,1]])) : popup.captionAlpha
         }
         MouseArea {
             anchors.fill: parent

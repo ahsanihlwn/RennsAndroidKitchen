@@ -61,10 +61,12 @@ SmoothRectangle {
     property var dragMime: ({})
     property var previewRows: []
     readonly property int previewFirstRow: previewRows.length?previewRows[0]:0
+    property bool layoutSettled: true
     property alias view: tree
     onNameWidthChanged: if(tree)tree.forceLayout()
     onPermissionWidthChanged: if(tree)tree.forceLayout()
     onContextWidthChanged: if(tree)tree.forceLayout()
+    onLayoutSettledChanged: if(layoutSettled && tree)tree.forceLayout()
     radius: 10; color: c.BG3; border.width: 1; border.color: c.b13
     function clearDrop(){dropActive=false;hoverRow=-1;dropFirstRow=-1;dropLastRow=-1;dropGuideActive=false;dropGuideFirstRow=-1;dropGuideDepth=-1;scrollSpeed=0;scrollRemainder=0;dropScroll.stop()}
     function endDrag(drop) {
@@ -328,7 +330,7 @@ SmoothRectangle {
         SmoothRectangle { y: height-1; width: parent.width; height: 1; color: c.b08 }
     }
     Timer { id: selectionPublish; interval: 0; onTriggered: if(panel.activePanel)panel.publishSelection() }
-    WorkspaceTreeWheel { id: wheelScroll; objectName: "treeWheelScroll"+panel.treeId; view: tree }
+    WorkspaceTreeWheel { id: wheelScroll; objectName: "treeWheelScroll"+panel.treeId; view: tree; animationsEnabled: panel.preferences.settings.animations }
     Connections {
         target: panel.directory.viewModel
         function onModelReset(){++panel.agentRowRevision;wheelScroll.reset();panel.multiAnchorParent=null;selectionPublish.restart()}
@@ -358,8 +360,8 @@ SmoothRectangle {
         onExpanded: (row,depth) => {++panel.selectionRevision;panel.directory.ensureLoaded(tree.index(row,0))}
         onCollapsed: ++panel.selectionRevision
         onRowsChanged: ++panel.selectionRevision
-        onContentYChanged: Qt.callLater(treeMouse.refreshHover)
-        onContentXChanged: Qt.callLater(treeMouse.refreshHover)
+        onContentYChanged: if(treeMouse.containsMouse && !treeMouse.pressed) Qt.callLater(treeMouse.refreshHover)
+        onContentXChanged: if(treeMouse.containsMouse && !treeMouse.pressed) Qt.callLater(treeMouse.refreshHover)
         reuseItems: true
         editTriggers: TableView.NoEditTriggers
         C.ScrollBar.vertical: WorkspaceTreeScrollBar { objectName: "treeVerticalScrollBar"+panel.treeId; colors: panel.c; z: 3; y: columns.height; height: Math.max(0,tree.height-y); onPressedChanged: if(pressed)wheelScroll.reset() }
@@ -486,17 +488,19 @@ SmoothRectangle {
                 Component.onDestruction: {panel.editingActive=false;if(!committed)panel.directory.cancelDraftForPath(editPath)}
             }
             Loader {
-                anchors.fill: parent; active: cell.column===0 && !!cell.displayEntry
+                anchors.fill: parent
+                active: cell.column===0
+                visible: active && !!cell.displayEntry
                 sourceComponent: Component { WorkspaceEntry {
                 width: parent.width; height: parent.height
                 workspace: panel.workspace; preferences: panel.preferences
-                details: cell.displayEntry || ({}); depth: cell.depth; treeMode: directory.displayMode==="tree"
+                details: cell.displayEntry || ({}); depth: cell.depth; treeMode: directory.displayMode==="tree"; settled: panel.layoutSettled
                 Image {
                     objectName: "treeBranchArrow:"+(cell.displayEntry?cell.displayEntry.path:"")
                     visible: directory.displayMode==="tree" && !!(cell.displayEntry && cell.displayEntry.folder)
                     x: 4+cell.depth*20; y: 8; width: 12; height: 12
                     source: "image://icons/arrow_right?color="+encodeURIComponent(c.treeArrow)
-                    sourceSize: Qt.size(48,48); smooth: true
+                    sourceSize: Qt.size(24,24); smooth: true; cache: true
                     opacity: .8
                     rotation: cell.expanded?90:0
                 }
@@ -526,13 +530,13 @@ SmoothRectangle {
             color: panel.c.b07
         }
         Repeater {
-            model: Math.max(0,tree.bottomRow-tree.topRow+1)
+            model: panel.selectedPaths.length>0 ? Math.max(0,Math.ceil(tree.height/28)+2) : 0
             delegate: SmoothRectangle {
                 required property int index
                 readonly property int viewRow: tree.topRow+index
                 readonly property bool rowSelected: {
                     panel.selectionRevision
-                    return viewRow>=0 && viewRow<tree.rows && selection.isSelected(tree.index(viewRow,0))
+                    return viewRow>=0 && viewRow<=tree.bottomRow && viewRow<tree.rows && selection.isSelected(tree.index(viewRow,0))
                 }
                 objectName: "treeSelectionHighlight"+panel.treeId+"_"+viewRow
                 visible: rowSelected
@@ -541,17 +545,20 @@ SmoothRectangle {
             }
         }
         Repeater {
-            model: Math.max(0,tree.bottomRow-tree.topRow+1)
+            readonly property bool hasAgentPaths: !!(panel.workspace.agentActivity && (panel.agentRowRevision>=0) && Object.keys(panel.workspace.agentActivity.paths || {}).length>0)
+            model: hasAgentPaths ? Math.max(0,Math.ceil(tree.height/28)+2) : 0
             delegate: AgentRainbow {
                 required property int index
                 readonly property int viewRow: tree.topRow+index
+                readonly property bool inViewport: viewRow>=0 && viewRow<=tree.bottomRow && viewRow<tree.rows
                 readonly property string path: {
                     panel.agentRowRevision;panel.selectionRevision
-                    return viewRow>=0 && viewRow<tree.rows?(directory.data(tree.index(viewRow,0),Qt.UserRole+1003) || ""):""
+                    return inViewport?(directory.data(tree.index(viewRow,0),Qt.UserRole+1003) || ""):""
                 }
                 objectName: "agentFileHighlight_"+path
+                visible: inViewport && active
                 x: 2; y: viewRow*28-tree.contentY; width: tree.width-4; height: 28
-                active: !!(panel.workspace.agentActivity && panel.workspace.agentActivity.paths[panel.workspace.agentActivity.key(path)])
+                active: inViewport && !!(panel.workspace.agentActivity && panel.workspace.agentActivity.paths[panel.workspace.agentActivity.key(path)])
                 animated: panel.preferences.settings.animations
             }
         }

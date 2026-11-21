@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MPL-2.0
-"""Exercise Android Tools with real QProcesses, confined to an inert protocol fixture."""
+"""Exercise Android Tools in-process with native runner hooks, confined to an inert protocol fixture."""
 import json
 import os
 from pathlib import Path
@@ -48,16 +48,6 @@ def main():
         for name in ('system','vendor'):
             port=project/name;port.mkdir();(port/'system.img').write_bytes(b'fixture');(port/'vendor.img').write_bytes(b'fixture')
         calls=project/'calls.jsonl'
-        program=project/'device_fixture.py'
-        program.write_text('import json,sys,time\nfrom pathlib import Path\nargs=sys.argv[2:]\n'
-            +f'with Path({str(calls)!r}).open("a") as out:out.write(json.dumps([sys.argv[1],*args])+"\\n")\n'
-            +f'if args==["getvar","all"]: print({RAW!r})\n'
-            +'elif args and args[0]=="flash":\n'
-            +' print("Sending sparse 1/2",flush=True);time.sleep(.12)\n'
-            +' print("Writing OKAY",flush=True);time.sleep(.12)\n'
-            +' print("Sending sparse 2/2",flush=True);print("Writing OKAY",flush=True)\n'
-            +' if args[1]=="vendor":print("FAILED fixture rejection",flush=True);sys.exit(1)\n'
-            +'else:print("OKAY")\n',encoding='utf-8')
         class Workspace(QObject):
             def __init__(self):
                 super().__init__();self.project=temp;self.p1='system';self.p2='vendor'
@@ -65,10 +55,28 @@ def main():
             @Property(QObject,constant=True)
             def androidTools(self):return self.tools
         workspace=Workspace();backend=workspace.tools
-        launch=backend._launch
-        def fixture_launch(program_name,args,callback,**options):
-            return launch(sys.executable,[str(program),Path(program_name).stem,*args],callback,**options)
-        backend._launch=fixture_launch
+        def fixture_run_native(tool,args,*,cwd=None,timeout_ms=None,cancel=None,on_output=None,on_progress=None):
+            arg_list=list(args)
+            with calls.open('a',encoding='utf-8') as out_log:
+                out_log.write(json.dumps([tool,*arg_list])+'\n')
+            buf=[]
+            def emit(text):
+                buf.append(text)
+                if on_output:on_output(text)
+            if arg_list==['getvar','all']:
+                emit(RAW)
+                return {'exit_code':0,'stdout':''.join(buf),'stderr':'','output':''.join(buf)}
+            if arg_list and arg_list[0]=='flash':
+                emit("Sending sparse 1/2\n");time.sleep(.12)
+                emit("Writing OKAY\n");time.sleep(.12)
+                emit("Sending sparse 2/2\n");emit("Writing OKAY\n")
+                if arg_list[1]=='vendor':
+                    emit("FAILED fixture rejection\n")
+                    return {'exit_code':1,'stdout':'','stderr':''.join(buf),'output':''.join(buf)}
+                return {'exit_code':0,'stdout':''.join(buf),'stderr':'','output':''.join(buf)}
+            emit("OKAY\n")
+            return {'exit_code':0,'stdout':''.join(buf),'stderr':'','output':''.join(buf)}
+        backend._run_native=fixture_run_native
         prefs=LauncherModel(palette='dark_green',settings={'effects':'high','animations':True})
         engine=QQmlApplicationEngine();diagnostics=[]
         engine.warnings.connect(lambda errors:diagnostics.extend(e.toString() for e in errors))

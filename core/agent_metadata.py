@@ -30,7 +30,9 @@ def cli_usage(provider,output):
             windows=[]
             for bucket in group.get('buckets',[]):
                 remaining=bucket.get('remaining_fraction')
-                if isinstance(remaining,(int,float)):windows.append({'label':bucket.get('window') or bucket.get('name',''),'remaining':round(remaining*100,1),'reset':bucket.get('reset_time','')})
+                if isinstance(remaining,(int,float)):windows.append({'label':bucket.get('window') or bucket.get('name',''),
+                    'name':bucket.get('name',''),'window':bucket.get('window',''),'description':bucket.get('description',''),
+                    'remaining':round(remaining*100,1),'reset':bucket.get('reset_time','')})
             if windows:groups.append({'label':group.get('name',''),'scope':group.get('description',''),'buckets':windows})
     report=(data.get('response') or data.get('result') or '') if isinstance(data,dict) else output
     if not report and data is not None:report=json.dumps(data,ensure_ascii=False,indent=2)

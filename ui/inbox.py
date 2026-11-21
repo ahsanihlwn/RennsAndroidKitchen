@@ -37,7 +37,7 @@ class WorkspaceInbox(QObject):
 
     def _report_error(self,text):
         from core.error_reporting import report_fatal
-        report_fatal('Agent inbox\n\n'+text,owner=self.owner,application_error=False)
+        report_fatal('Agent inbox\n\n'+text,owner=self.owner,application_error=False,suppress_ui=True)
 
     @Property(QObject,constant=True)
     def messages(self):return self._rows

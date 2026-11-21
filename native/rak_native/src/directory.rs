@@ -2,13 +2,14 @@
 //! Directory data only: no Qt handles, callbacks, or persistent caches.
 use crate::{path_string, python_whitespace, read_magic};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
-use std::thread::{self, Builder};
-use std::time::UNIX_EPOCH;
+use std::sync::{OnceLock, RwLock};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 fn normalized(path: &Path) -> PathBuf {
     let mut output = PathBuf::new();
@@ -87,20 +88,118 @@ pub(crate) struct Link {
 
 type TargetCache = HashMap<PathBuf, (bool, bool, bool)>;
 
-fn resolve(path: &Path, root: &Path, cache: &mut TargetCache) -> Option<Link> {
-    let mut bytes = Vec::with_capacity(513);
-    File::open(path)
-        .ok()?
-        .take(513)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() > 512 {
+const PLACEHOLDER_CACHE_LIMIT: usize = 65_536;
+// Match Git's racy-index guard: never serve a cached placeholder header for a
+// file modified within the coarse OS timestamp granularity window.
+const RACY_WINDOW_NS: i128 = 100_000_000; // 100ms
+
+#[derive(Clone)]
+struct CachedPlaceholder {
+    size: u64,
+    mtime_ns: i128,
+    target: Option<String>,
+}
+
+fn placeholder_cache() -> &'static RwLock<HashMap<String, CachedPlaceholder>> {
+    static CACHE: OnceLock<RwLock<HashMap<String, CachedPlaceholder>>> = OnceLock::new();
+    CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn cache_key(path: &Path) -> String {
+    let text = path_string(path);
+    #[cfg(windows)]
+    {
+        text.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        text
+    }
+}
+
+fn now_ns() -> i128 {
+    match SystemTime::now().duration_since(UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos() as i128,
+        Err(error) => -(error.duration().as_nanos() as i128),
+    }
+}
+
+fn read_placeholder_target_uncached(path: &Path) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let mut buf = [0u8; 513];
+    let mut total = 0;
+    while total < buf.len() {
+        match file.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        }
+    }
+    if total > 512 {
         return None;
     }
-    let target = placeholder_target(&bytes)?;
+    placeholder_target(&buf[..total])
+}
+
+fn read_placeholder_target_cached(
+    path: &Path,
+    known_meta: Option<(u64, i128)>,
+    now_stamp_ns: i128,
+    use_cache: bool,
+) -> Option<String> {
+    if !use_cache {
+        return read_placeholder_target_uncached(path);
+    }
+    if let Some((size, stamp_ns)) = known_meta {
+        let is_settled = now_stamp_ns.saturating_sub(stamp_ns) >= RACY_WINDOW_NS;
+        let key = cache_key(path);
+        if is_settled {
+            if let Ok(guard) = placeholder_cache().read() {
+                if let Some(entry) = guard.get(&key) {
+                    if entry.size == size && entry.mtime_ns == stamp_ns {
+                        return entry.target.clone();
+                    }
+                }
+            }
+        }
+        let target = read_placeholder_target_uncached(path);
+        if is_settled {
+            if let Ok(mut guard) = placeholder_cache().write() {
+                if guard.len() >= PLACEHOLDER_CACHE_LIMIT {
+                    guard.clear();
+                }
+                guard.insert(
+                    key,
+                    CachedPlaceholder {
+                        size,
+                        mtime_ns: stamp_ns,
+                        target: target.clone(),
+                    },
+                );
+            }
+        }
+        return target;
+    }
+    read_placeholder_target_uncached(path)
+}
+
+struct LiveResolveContext<'a> {
+    siblings: Option<&'a HashMap<String, (bool, bool, bool)>>,
+    shared_targets: &'a RwLock<HashMap<String, (bool, bool, bool)>>,
+    missing_parents: &'a RwLock<HashSet<String>>,
+}
+
+fn resolve_target_from_string(
+    path: &Path,
+    target: String,
+    root: &Path,
+    local_cache: &mut TargetCache,
+    ctx: Option<&LiveResolveContext<'_>>,
+) -> Link {
     let norm_target = target.replace('\\', "/");
     let clean = norm_target.trim_start_matches('/');
-    let mut candidates = Vec::new();
+    let mut candidates = Vec::with_capacity(4);
     if norm_target.starts_with('/') {
         candidates.push(root.join(clean));
         if let Some(sub) = clean.strip_prefix("system/") {
@@ -127,14 +226,16 @@ fn resolve(path: &Path, root: &Path, cache: &mut TargetCache) -> Option<Link> {
         if *candidate == norm_file {
             continue;
         }
-        let info = cache.entry(candidate.clone()).or_insert_with(|| {
-            fs::metadata(candidate)
-                .map(|info| (true, info.is_dir(), info.is_file()))
-                .unwrap_or((false, false, false))
-        });
+        let info = if let Some(cached) = local_cache.get(candidate) {
+            *cached
+        } else {
+            let computed = lookup_target_metadata(candidate, ctx);
+            local_cache.insert(candidate.clone(), computed);
+            computed
+        };
         if info.0 {
             resolved = Some(candidate.clone());
-            (exists, is_dir, is_file) = *info;
+            (exists, is_dir, is_file) = info;
             break;
         }
     }
@@ -163,16 +264,74 @@ fn resolve(path: &Path, root: &Path, cache: &mut TargetCache) -> Option<Link> {
             is_dir = true;
         }
     }
-    Some(Link {
+    Link {
         file: path_string(path),
         target,
         resolved: path_string(&resolved),
         exists,
         is_dir,
         is_file,
-    })
+    }
 }
 
+fn lookup_target_metadata(
+    candidate: &Path,
+    ctx: Option<&LiveResolveContext<'_>>,
+) -> (bool, bool, bool) {
+    if let Some(ctx) = ctx {
+        let key = cache_key(candidate);
+        if let Some(siblings) = ctx.siblings {
+            if let Some(info) = siblings.get(&key) {
+                return *info;
+            }
+        }
+        if let Ok(guard) = ctx.shared_targets.read() {
+            if let Some(info) = guard.get(&key) {
+                return *info;
+            }
+        }
+        // Negative parent pruning: if parent directory was already observed
+        // missing in this scan, any child under it is also missing.
+        let parent_key = candidate.parent().map(cache_key);
+        if let Some(ref pkey) = parent_key {
+            if let Ok(guard) = ctx.missing_parents.read() {
+                if guard.contains(pkey) {
+                    return (false, false, false);
+                }
+            }
+        }
+        let info = match fs::metadata(candidate) {
+            Ok(meta) => (true, meta.is_dir(), meta.is_file()),
+            Err(error) => {
+                if error.kind() == io::ErrorKind::NotFound {
+                    if let (Some(parent), Some(pkey)) = (candidate.parent(), parent_key) {
+                        if fs::metadata(parent).is_err() {
+                            if let Ok(mut guard) = ctx.missing_parents.write() {
+                                guard.insert(pkey);
+                            }
+                        }
+                    }
+                }
+                (false, false, false)
+            }
+        };
+        if let Ok(mut guard) = ctx.shared_targets.write() {
+            guard.insert(key, info);
+        }
+        return info;
+    }
+    fs::metadata(candidate)
+        .map(|info| (true, info.is_dir(), info.is_file()))
+        .unwrap_or((false, false, false))
+}
+
+#[allow(dead_code)]
+fn resolve(path: &Path, root: &Path, cache: &mut TargetCache) -> Option<Link> {
+    let target = read_placeholder_target_uncached(path)?;
+    Some(resolve_target_from_string(path, target, root, cache, None))
+}
+
+#[allow(dead_code)]
 fn resolve_slice(paths: &[PathBuf], root: &Path) -> Vec<Option<Link>> {
     let mut cache = TargetCache::new();
     paths
@@ -181,49 +340,78 @@ fn resolve_slice(paths: &[PathBuf], root: &Path) -> Vec<Option<Link>> {
         .collect()
 }
 
-fn batch_resolve(paths: &[PathBuf], root: &Path) -> Vec<Option<Link>> {
-    if paths.len() < 64 {
-        return resolve_slice(paths, root);
+struct CandidateMeta {
+    path: PathBuf,
+    size_mtime: Option<(u64, i128)>,
+}
+
+fn batch_resolve_candidates(
+    candidates: &[CandidateMeta],
+    root: &Path,
+    siblings: Option<&HashMap<String, (bool, bool, bool)>>,
+    use_cache: bool,
+) -> Vec<Option<Link>> {
+    if candidates.is_empty() {
+        return Vec::new();
     }
-    let chunk_size = paths.len().div_ceil(4);
-    let chunks: Vec<&[PathBuf]> = paths.chunks(chunk_size).collect();
-    let res = thread::scope(|s| {
-        let mut handles = Vec::new();
-        let mut spawn_failed = false;
-        for chunk in &chunks {
-            match Builder::new().spawn_scoped(s, move || {
-                let mut cache = TargetCache::new();
-                chunk
-                    .iter()
-                    .map(|path| resolve(path, root, &mut cache))
-                    .collect::<Vec<_>>()
-            }) {
-                Ok(handle) => handles.push(handle),
-                Err(_) => {
-                    spawn_failed = true;
-                    break;
-                }
-            }
-        }
-        let mut chunk_results = Vec::new();
-        let mut thread_panicked = false;
-        for handle in handles {
-            match handle.join() {
-                Ok(res) => chunk_results.push(res),
-                Err(_) => thread_panicked = true,
-            }
-        }
-        if spawn_failed || thread_panicked {
-            None
-        } else {
-            let mut results = Vec::with_capacity(paths.len());
-            for part in chunk_results {
-                results.extend(part);
-            }
-            Some(results)
-        }
-    });
-    res.unwrap_or_else(|| resolve_slice(paths, root))
+    let now_stamp_ns = now_ns();
+    let shared_targets = RwLock::new(HashMap::new());
+    let missing_parents = RwLock::new(HashSet::new());
+    let ctx = LiveResolveContext {
+        siblings,
+        shared_targets: &shared_targets,
+        missing_parents: &missing_parents,
+    };
+    if candidates.len() < 32 {
+        let mut local_cache = TargetCache::new();
+        return candidates
+            .iter()
+            .map(|item| {
+                let target = read_placeholder_target_cached(
+                    &item.path,
+                    item.size_mtime,
+                    now_stamp_ns,
+                    use_cache,
+                )?;
+                Some(resolve_target_from_string(
+                    &item.path,
+                    target,
+                    root,
+                    &mut local_cache,
+                    Some(&ctx),
+                ))
+            })
+            .collect();
+    }
+    candidates
+        .par_iter()
+        .map_init(TargetCache::new, |local_cache, item| {
+            let target = read_placeholder_target_cached(
+                &item.path,
+                item.size_mtime,
+                now_stamp_ns,
+                use_cache,
+            )?;
+            Some(resolve_target_from_string(
+                &item.path,
+                target,
+                root,
+                local_cache,
+                Some(&ctx),
+            ))
+        })
+        .collect()
+}
+
+fn batch_resolve(paths: &[PathBuf], root: &Path) -> Vec<Option<Link>> {
+    let candidates: Vec<CandidateMeta> = paths
+        .iter()
+        .map(|path| CandidateMeta {
+            path: path.clone(),
+            size_mtime: None,
+        })
+        .collect();
+    batch_resolve_candidates(&candidates, root, None, false)
 }
 
 #[pyfunction]
@@ -264,50 +452,111 @@ pub(crate) struct Entry {
     magic: String,
 }
 
-fn entries(path: &Path, root: &Path) -> io::Result<Vec<Entry>> {
-    let paths = fs::read_dir(path)?.map(|entry| {
-        let entry = entry?;
-        Ok((entry.path(), entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false), entry.file_name().to_string_lossy().into_owned()))
-    }).collect::<io::Result<Vec<_>>>()?;
-    enrich_paths(paths, root)
+pub(crate) struct RawEntry {
+    pub path: PathBuf,
+    pub is_dir: bool,
+    pub is_native_link: bool,
+    pub name: String,
+    pub size: Option<u64>,
+    pub mtime_ns: Option<i128>,
 }
 
-pub(crate) fn enrich_paths(paths: impl IntoIterator<Item=(PathBuf, bool, String)>, root: &Path) -> io::Result<Vec<Entry>> {
-    let mut output = Vec::new();
-    let mut candidate_indices = Vec::new();
-    let mut candidate_paths = Vec::new();
-    for (entry_path, is_dir, name) in paths {
-        let info = if is_dir { None } else { fs::symlink_metadata(&entry_path).ok() };
-        let size = if is_dir {
-            Some(0)
+pub(crate) fn entry_mtime_ns(info: &fs::Metadata) -> Option<i128> {
+    mtime_ns(info)
+}
+
+fn entries(path: &Path, root: &Path, include_magic: bool) -> io::Result<Vec<Entry>> {
+    let mut raw = Vec::new();
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let entry_path = entry.path();
+        let kind = entry.file_type().ok();
+        let is_dir = kind.as_ref().map(fs::FileType::is_dir).unwrap_or(false);
+        let is_native_link = kind.as_ref().map(fs::FileType::is_symlink).unwrap_or(false);
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let (size, stamp) = if is_dir {
+            (Some(0), Some(0))
         } else {
-            info.as_ref().map(fs::Metadata::len)
+            // On Windows, DirEntry::metadata() reads directly from WIN32_FIND_DATAW
+            // returned by FindFirstFileW/FindNextFileW with zero extra syscalls.
+            let info = entry.metadata().ok();
+            (info.as_ref().map(fs::Metadata::len), info.as_ref().and_then(mtime_ns))
         };
-        let low = name.to_lowercase();
-        let magic = if !is_dir && (low.ends_with(".img") || low.ends_with(".bin")) {
-            read_magic(&entry_path)
+        raw.push(RawEntry {
+            path: entry_path,
+            is_dir,
+            is_native_link,
+            name,
+            size,
+            mtime_ns: stamp,
+        });
+    }
+    enrich_raw(raw, root, include_magic)
+}
+
+pub(crate) fn enrich_raw(
+    raw: impl IntoIterator<Item = RawEntry>,
+    root: &Path,
+    include_magic: bool,
+) -> io::Result<Vec<Entry>> {
+    let mut output = Vec::new();
+    let mut sibling_map = HashMap::new();
+    let mut candidate_indices = Vec::new();
+    let mut candidates = Vec::new();
+    for item in raw {
+        let RawEntry {
+            path: entry_path,
+            is_dir,
+            is_native_link,
+            name,
+            size,
+            mtime_ns: stamp,
+        } = item;
+        if !is_native_link {
+            let norm_key = cache_key(&normalized(&entry_path));
+            sibling_map.insert(norm_key, (true, is_dir, !is_dir));
+        }
+        let magic = if include_magic && !is_dir {
+            let low = name.to_lowercase();
+            if low.ends_with(".img")
+                || low.ends_with(".bin")
+                || low.ends_with(".ozip")
+                || low.ends_with(".ofp")
+                || low.ends_with(".ops")
+                || low.ends_with(".kdz")
+                || low.ends_with(".dz")
+                || low.ends_with(".app")
+                || low.ends_with(".pac")
+                || low.ends_with(".cpb")
+                || low.ends_with(".romfs")
+                || low.ends_with(".squashfs")
+                || low.ends_with(".sqsh")
+            {
+                read_magic(&entry_path)
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         };
         if !is_dir && size.is_some_and(|s| s <= 512) {
             candidate_indices.push(output.len());
-            candidate_paths.push(entry_path.clone());
+            candidates.push(CandidateMeta {
+                path: entry_path.clone(),
+                size_mtime: size.zip(stamp),
+            });
         }
         output.push(Entry {
             name,
             path: path_string(&entry_path),
             is_dir,
             size,
-            mtime_ns: if is_dir {
-                Some(0)
-            } else {
-                info.as_ref().and_then(mtime_ns)
-            },
+            mtime_ns: if is_dir { Some(0) } else { stamp },
             symlink: None,
             magic,
         });
     }
-    let links = batch_resolve(&candidate_paths, root);
+    let links = batch_resolve_candidates(&candidates, root, Some(&sibling_map), true);
     for (idx, link) in candidate_indices.into_iter().zip(links) {
         output[idx].symlink = link;
     }
@@ -315,13 +564,34 @@ pub(crate) fn enrich_paths(paths: impl IntoIterator<Item=(PathBuf, bool, String)
     Ok(output)
 }
 
+#[allow(dead_code)]
+pub(crate) fn enrich_paths(paths: impl IntoIterator<Item=(PathBuf, bool, String)>, root: &Path, include_magic: bool) -> io::Result<Vec<Entry>> {
+    let raw = paths.into_iter().map(|(entry_path, is_dir, name)| {
+        let info = if is_dir { None } else { fs::symlink_metadata(&entry_path).ok() };
+        let is_native_link = info.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false);
+        let size = if is_dir { Some(0) } else { info.as_ref().map(fs::Metadata::len) };
+        let stamp = if is_dir { Some(0) } else { info.as_ref().and_then(mtime_ns) };
+        RawEntry {
+            path: entry_path,
+            is_dir,
+            is_native_link,
+            name,
+            size,
+            mtime_ns: stamp,
+        }
+    });
+    enrich_raw(raw, root, include_magic)
+}
+
 #[pyfunction]
+#[pyo3(signature = (path, root, include_magic = true))]
 pub(crate) fn directory_entries_json(
     py: Python<'_>,
     path: PathBuf,
     root: PathBuf,
+    include_magic: bool,
 ) -> PyResult<String> {
-    let output = py.detach(move || entries(&path, &root))?;
+    let output = py.detach(move || entries(&path, &root, include_magic))?;
     py.detach(move || serde_json::to_string(&output))
         .map_err(|error| pyo3::exceptions::PyOSError::new_err(error.to_string()))
 }
@@ -503,6 +773,87 @@ mod tests {
         let invalid = test_dir.join("invalid");
         fs::write(&invalid, b"invalid placeholder content").unwrap();
         assert!(resolve(&invalid, &test_dir, &mut cache).is_none());
+
+        let _ = fs::remove_dir_all(&test_dir);
+    }
+
+    #[test]
+    fn entries_golden_parity_and_live_mutations() {
+        let unique = format!(
+            "rak_parity_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let test_dir = std::env::temp_dir().join(unique);
+        let root = test_dir.join("root");
+        let bin = root.join("system").join("bin");
+        let etc = root.join("vendor").join("etc");
+        fs::create_dir_all(&bin).unwrap();
+        fs::create_dir_all(&etc).unwrap();
+
+        let toybox = bin.join("toybox");
+        fs::write(&toybox, vec![b'X'; 4096]).unwrap();
+        let sub_dir = bin.join("sub");
+        fs::create_dir_all(&sub_dir).unwrap();
+        let prop = etc.join("build.prop");
+        fs::write(&prop, b"ro.test=1\n").unwrap();
+
+        // Populate a realistic Android /system/bin mix: sibling file links,
+        // sibling folder links, cross-folder SAR links, broken file/dir links,
+        // plain small files, and large files.
+        for i in 0..80 {
+            let p = bin.join(format!("item_{i:03}"));
+            match i % 6 {
+                0 => fs::write(&p, b"!<symlink>toybox\0").unwrap(),
+                1 => fs::write(&p, b"!<symlink>sub\0").unwrap(),
+                2 => fs::write(&p, b"!<symlink>/vendor/etc/build.prop\0").unwrap(),
+                3 => fs::write(&p, b"!<symlink>/vendor/etc\0").unwrap(),
+                4 => fs::write(&p, b"!<symlink>/missing/bin/tool\0").unwrap(),
+                _ => fs::write(&p, b"plain small text file").unwrap(),
+            }
+        }
+        let broken_dir = bin.join("broken_dir_link");
+        fs::write(&broken_dir, b"!<symlink>/missing_dir/\0").unwrap();
+
+        // Compare optimized entries() against reference sequential resolve_slice()
+        let first = entries(&bin, &root, false).unwrap();
+        let second = entries(&bin, &root, false).unwrap();
+        assert_eq!(
+            serde_json::to_string(&first).unwrap(),
+            serde_json::to_string(&second).unwrap()
+        );
+
+        let file_paths: Vec<PathBuf> = first
+            .iter()
+            .filter(|e| !e.is_dir && e.size.is_some_and(|s| s <= 512))
+            .map(|e| PathBuf::from(&e.path))
+            .collect();
+        let reference = resolve_slice(&file_paths, &root);
+        let actual: Vec<Option<Link>> = first
+            .iter()
+            .filter(|e| !e.is_dir && e.size.is_some_and(|s| s <= 512))
+            .map(|e| e.symlink.clone())
+            .collect();
+        assert_eq!(
+            serde_json::to_string(&actual).unwrap(),
+            serde_json::to_string(&reference).unwrap()
+        );
+
+        // Live target deletion must immediately flip exists -> false
+        fs::remove_file(&prop).unwrap();
+        let after_delete = entries(&bin, &root, false).unwrap();
+        let cross_link = after_delete.iter().find(|e| e.name == "item_002").unwrap();
+        assert!(!cross_link.symlink.as_ref().unwrap().exists);
+
+        // Rapid same-size retarget within racy window must not serve stale target
+        let retarget = bin.join("item_000");
+        fs::write(&retarget, b"!<symlink>sub___\0").unwrap();
+        let after_retarget = entries(&bin, &root, false).unwrap();
+        let updated = after_retarget.iter().find(|e| e.name == "item_000").unwrap();
+        assert_eq!(updated.symlink.as_ref().unwrap().target, "sub___");
 
         let _ = fs::remove_dir_all(&test_dir);
     }

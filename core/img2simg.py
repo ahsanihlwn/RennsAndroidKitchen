@@ -60,6 +60,17 @@ def img2simg(src_path: str, dst_path: str, blk_sz: int = DEFAULT_BLOCK_SIZE):
     if src_size == 0:
         return False, "Source file is empty"
 
+    if blk_sz >= 1024 and os.environ.get("RAK_NATIVE_BACKEND", "auto").lower() != "python":
+        try:
+            from core.native_backend import native_module_path, sparse_img2simg
+
+            if native_module_path("sparse_img2simg") is not None:
+                _log(f"src={src_path} size={src_size} blk_sz={blk_sz} backend=rust")
+                sparse_img2simg(src_path, dst_path, block_size=blk_sz)
+                return True, dst_path
+        except Exception as e:
+            return False, f"img2simg failed: {e}"
+
     total_blks = (src_size + blk_sz - 1) // blk_sz  # ceil-div, pad last
 
     use_numpy = _HAS_NUMPY and (blk_sz & 3) == 0

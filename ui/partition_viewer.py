@@ -29,7 +29,13 @@ class PartitionDocument(QObject):
     def load(self,path,kind):
         if self._closed:return
         self._generation+=1;generation=self._generation;self._kind=kind;self._busy=True;self.changed.emit()
-        def worker(_=None):return True,super_info(path) if kind=='super' else {'partitions':payload_partitions(path)}
+        def worker(_=None):
+            if kind=='super':return True,super_info(path)
+            if kind=='oem':
+                from core.oem_containers import inspect_container
+                info=inspect_container(path)
+                return True,{'partitions':[e['name'] for e in info.get('entries',[]) if e.get('kind')!='dir']}
+            return True,{'partitions':payload_partitions(path)}
         def loaded(ok,result):
             if self._closed or generation!=self._generation:return
             self._busy=False
@@ -39,7 +45,7 @@ class PartitionDocument(QObject):
                 self._a=[p for p in parts if p.endswith('_a')] if kind=='super' else list(parts)
                 self._b=[p for p in parts if p.endswith('_b')] if kind=='super' else []
                 self._selected.clear();self._anchor={'a':-1,'b':-1}
-            else:self.messageRequested.emit('Super' if kind=='super' else 'Payload',str(result))
+            else:self.messageRequested.emit('Super' if kind=='super' else 'OEM Container' if kind=='oem' else 'Payload',str(result))
             self.changed.emit()
         self._jobs.submit('load',worker,None,loaded)
 
@@ -73,14 +79,17 @@ def extract(session,logical,kind,parts,all_parts=False):
     import os
     from core import partition_viewer as operations
     tab=next((tab for tab in session._tab_data if tab['path']==logical and tab['kind']==kind),None)
-    if not tab or kind not in ('payload','super') or session._closing:return
+    if not tab or kind not in ('payload','super','oem') or session._closing:return
     path=tab['documentPath'];out_dir=os.path.dirname(path)
     # Names are checked before they can become output filenames.
     import re
     selected=list(dict.fromkeys(parts))
-    if any(not re.fullmatch(r'[A-Za-z0-9_.-]+',p) or p in ('.','..') for p in selected):
+    if kind=='oem':
+        if any(not p or '..' in p.replace('\\','/').split('/') or p.startswith(('/','\\')) for p in selected):
+            session.message('Invalid container entry name');return
+    elif any(not re.fullmatch(r'[A-Za-z0-9_.-]+',p) or p in ('.','..') for p in selected):
         session.message('Invalid partition name');return
-    if not selected and not (all_parts and kind=='super'):return
+    if not selected and not (all_parts and kind in ('super','oem')):return
     workers=[]
     def finished(member,ok,result):
         session._history.append({'label':member,'ok':ok,'text':str(result or '')});session.statusChanged.emit()
@@ -88,7 +97,13 @@ def extract(session,logical,kind,parts,all_parts=False):
         else:
             for directory in session.directories:
                 if directory.base:directory.reloadMetadata()
-    if all_parts and kind=='super':
+    if kind=='oem':
+        from core.oem_containers import extract_container
+        stem=os.path.splitext(os.path.basename(path))[0] or 'oem_extracted'
+        oem_out=os.path.join(out_dir,stem)
+        pick=None if all_parts else selected
+        workers.append((stem,lambda:extract_container(path,oem_out,selected=pick),lambda ok,result:finished(stem,ok,result)))
+    elif all_parts and kind=='super':
         workers.append(('all',lambda:operations.extract_super(path,None,out_dir),lambda ok,result:finished('all',ok,result)))
     else:
         for partition in selected:

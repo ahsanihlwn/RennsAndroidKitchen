@@ -1,0 +1,12 @@
+[package]
+name = "android-bootimg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Android boot.img (v0-v4) and vendor_boot.img (v3-v4) parser, builder, and repacker"
+
+[dependencies]
+sha2.workspace = true
+thiserror.workspace = true

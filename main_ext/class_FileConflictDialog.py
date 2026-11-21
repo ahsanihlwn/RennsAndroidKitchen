@@ -103,18 +103,18 @@ _BTN = """
 def _style(v):
     if v == "danger":
         return _BTN.format(
-            bg=_th.red(0.18),  br=_th.red(0.38),  fg=_th.RED_LIGHT, w=600,
-            bg_h=_th.red(0.32), br_h=_th.red(0.60), fg_h=_th.RED_LIGHTER,
-            bg_p=_th.red(0.48))
+            bg=_th.BTN_DANGER_BG, br=_th.BTN_DANGER_EDGE, fg=_th.BTN_DANGER_FG, w=600,
+            bg_h=_th.BTN_DANGER_HOVER, br_h=_th.BTN_DANGER_EDGE_HOVER, fg_h=_th.BTN_DANGER_FG_HOVER,
+            bg_p=_th.BTN_DANGER_DOWN)
     if v == "primary":
         return _BTN.format(
-            bg=_th.accent(0.18), br=_th.accent(0.38), fg=_th.FG_BLUE, w=600,
-            bg_h=_th.accent(0.32), br_h=_th.accent(0.60), fg_h=_th.FG_BLUE_LIGHT,
-            bg_p=_th.accent(0.48))
+            bg=_th.BTN_PRIMARY_BG, br=_th.BTN_PRIMARY_EDGE, fg=_th.BTN_PRIMARY_FG, w=600,
+            bg_h=_th.BTN_PRIMARY_HOVER, br_h=_th.BTN_PRIMARY_EDGE_HOVER, fg_h=_th.BTN_PRIMARY_FG_HOVER,
+            bg_p=_th.BTN_PRIMARY_DOWN)
     return _BTN.format(
-        bg=_th.border_color(0.06), br=_th.border_color(0.10), fg=_th.FG3, w=400,
-        bg_h=_th.border_color(0.10), br_h=_th.border_color(0.18), fg_h=_th.FG_HOVER,
-        bg_p=_th.border_color(0.14))
+        bg=_th.BTN_SEC_BG, br=_th.BTN_SEC_EDGE, fg=_th.BTN_SEC_FG, w=400,
+        bg_h=_th.BTN_SEC_HOVER, br_h=_th.BTN_SEC_EDGE_HOVER, fg_h=_th.BTN_SEC_FG_HOVER,
+        bg_p=_th.BTN_SEC_DOWN)
 
 def _active_danger():
     return _BTN.format(

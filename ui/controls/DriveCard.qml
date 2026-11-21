@@ -40,7 +40,7 @@ RakCard {
         iconKey: drive.isWsl ? "linux" : "project_disk"
         isLight: (drive.c && drive.c.is_light !== undefined) ? drive.c.is_light : false
         strokeColor: drive.modelData.distro ? drive.c.accent_hex : (drive.active ? drive.c.FG : drive.c.FG_MUTED)
-        accentColor: drive.c.accentColor
+        accentColor: drive.c.accent_hex
         opacity: drive.active ? 1 : 0.38
     }
     RakLabel { x: 35; y: 4; width: 85; height: 12; text: drive.isWsl ? (drive.modelData.distro || (drive.modelData.key ? drive.modelData.key.replace(/^WSL:?/i, "") : "WSL")) : drive.modelData.name; font.pixelSize: 10; font.weight: Font.DemiBold; color: drive.active ? (drive.modelData.distro ? drive.c.accent_hex : drive.c.FG_BRIGHT) : drive.c.FG_MUTED; elide: Text.ElideRight; transformed: drive.transformed }

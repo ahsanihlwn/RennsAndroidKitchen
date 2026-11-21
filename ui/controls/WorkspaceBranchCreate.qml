@@ -34,13 +34,18 @@ DialogWindow {
             height: 20; spacing: 8
             Repeater {
                 model: dialog.workspace.branches.colors
-                delegate: SmoothRectangle {
+                delegate: RakButton {
                     required property var modelData
                     objectName: "workspaceBranchColor_"+modelData.name
-                    width: 20; height: 20; radius: 10; color: modelData.color
-                    border.width: 2; border.color: hover.containsMouse?dialog.c.b55:dialog.chosenColor===modelData.name?dialog.c.b80:"transparent"
-                    MouseArea { id: hover; anchors.fill: parent; hoverEnabled: true; cursorShape: Qt.PointingHandCursor; onClicked: dialog.chosenColor=parent.modelData.name }
-                    HoverTip { label: modelData.name.charAt(0).toUpperCase()+modelData.name.slice(1); hovering: hover.containsMouse }
+                    width: 20; height: 20; implicitWidth: 20; implicitHeight: 20
+                    leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+                    cornerRadius: 10; edgeWidth: 2
+                    fillColor: modelData.color; hoverFillColor: modelData.color; downFillColor: modelData.color
+                    edgeColor: dialog.chosenColor===modelData.name?dialog.c.b80:"transparent"
+                    hoverEdgeColor: dialog.c.b55
+                    toolTip: modelData.name.charAt(0).toUpperCase()+modelData.name.slice(1)
+                    contentItem: Item {}
+                    onClicked: dialog.chosenColor=modelData.name
                 }
             }
         }

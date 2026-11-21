@@ -107,14 +107,17 @@ def _index_one(zpath, index, name=None, depth=0):
                 if not f.seekable():
                     index.failed.append((name, "payload is not seekable"))
                     return
-                from core.imgfs import ExtReader, ErofsReader, _detect_fs_bytes
+                from core.imgfs import ExtReader, _NativeErofsHandle, _detect_fs_bytes
+                from core import native_backend
                 head = f.read(8192)
                 f.seek(0)
                 fs = _detect_fs_bytes(head)
                 if fs == "EXT":
                     reader = ExtReader(f)
                 elif fs == "EROFS":
-                    reader = ErofsReader(f)
+                    reader = _NativeErofsHandle(
+                        native_backend.erofs_open_bytes_reader(f.read())
+                    )
                 else:
                     index.failed.append((name, f"unknown payload fs ({fs or '?'})"))
                     return

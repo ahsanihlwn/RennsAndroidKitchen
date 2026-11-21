@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
+import "../motion.js" as Motion
 
 RakCard {
     id: card
@@ -16,16 +17,22 @@ RakCard {
     property alias menuAnchor: more
     property bool cardPressed: false
     property real cardScale: 1
-    readonly property bool transformed: Math.abs(cardScale-1)>.0001
+    property real externalScale: 1
+    property bool cacheDuringMotion: false
+    readonly property bool layerActive: !presentationCopy && visible && (cacheDuringMotion || Math.abs(cardScale*externalScale-1)>.0001)
+    readonly property bool transformed: !layerActive && Math.abs(cardScale*externalScale-1)>.0001
     readonly property bool isDeleting: card.model.deletingPath === card.modelData.path
     readonly property bool isOpening: card.model.openingPath === card.modelData.path
-    scale: cardScale
+    layer.enabled: layerActive
+    layer.smooth: true
+    scale: cardScale * externalScale
     function animateCard(target,duration) {
         hoverAnimation.stop()
         if (!interactive || !model.settings.animations) { cardScale=1; return }
-        hoverAnimation.to=target; hoverAnimation.duration=duration; hoverAnimation.start()
+        const base = target < 1 ? 1 : .97
+        hoverAnimation.to=target; hoverAnimation.duration=Motion.remainingDuration(duration, cardScale, base, target); hoverAnimation.start()
     }
-    onCardPressedChanged: animateCard(cardPressed?.97:cardHover.hovered?.995:1,cardPressed?110:170)
+    onCardPressedChanged: animateCard(cardPressed ? .97 : 1, cardPressed ? 110 : 170)
     onInteractiveChanged: if (!interactive) { cardPressed=false; hoverAnimation.stop(); cardScale=1 }
     NumberAnimation { id: hoverAnimation; target: card; property: "cardScale"; easing.type: Easing.OutCubic }
     Connections { target: card.model; function onSettingsChanged() { if (!card.model.settings.animations) { hoverAnimation.stop(); card.cardScale=1 } } }
@@ -37,7 +44,6 @@ RakCard {
     radius: 10
     HoverHandler {
         id: cardHover; enabled: card.interactive && !card.isDeleting && !card.isOpening; cursorShape: Qt.PointingHandCursor
-        onHoveredChanged: if (!card.cardPressed) card.animateCard(hovered?.995:1,hovered?170:150)
     }
     HoverTip { label: card.trash?(card.modelData.toolTip || ""):""; hovering: cardHover.hovered }
     TapHandler {
@@ -109,12 +115,15 @@ RakCard {
             card.model.dispatch("projectMenu", {path: card.modelData.path, id: card.modelData._trash_id || "", x: position.x, y: position.y})
         }
     }
-    Item {
+    Loader {
+        active: !card.presentationCopy && card.isDeleting
+        anchors.fill: parent
+        z: 2
+        sourceComponent: Item {
         id: deletionEffect
         objectName: "deleteProgress_" + card.modelData.path
         anchors.fill: parent
         visible: card.isDeleting
-        z: 2
         clip: true
 
         // Subtle ambient red tint on body (seperti a12 versi merah saat card ditekan/di-hover)
@@ -202,12 +211,16 @@ RakCard {
             }
         }
     }
-    Item {
+    }
+    Loader {
+        active: !card.presentationCopy && card.isOpening
+        anchors.fill: parent
+        z: 2
+        sourceComponent: Item {
         id: openEffect
         objectName: "openProgress_" + card.modelData.path
         anchors.fill: parent
         visible: card.isOpening
-        z: 2
         clip: true
 
         readonly property color accentColor: card.c.accent_hex
@@ -301,6 +314,7 @@ RakCard {
                 }
             }
         }
+    }
     }
     RakButton {
         x: parent.width - 57; y: 18; width: 28; height: 28

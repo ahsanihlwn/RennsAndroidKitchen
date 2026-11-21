@@ -44,18 +44,25 @@ DialogWindow {
                         {key:"bin",icon:"bin",label:dialog.s.ow_bin},{key:"image",icon:"image",label:dialog.s.ow_image},
                         {key:"archive",icon:"archive",label:dialog.s.ow_archive},{key:"payload",icon:"icon_bin",label:dialog.s.ow_payload},
                         {key:"super",icon:"drive",label:dialog.s.ow_super}]
-                delegate: SmoothRectangle {
+                delegate: RakButton {
                     id: card
                     required property var modelData
                     objectName: "workspaceOpenWithOption_"+modelData.key
-                    width: cards.width; height: 56; radius: 8
-                    readonly property bool checked: dialog.choice===modelData.key
-                    color: checked?dialog.c.a15:hover.hovered?dialog.c.b07:dialog.c.b03
-                    border.width: 1; border.color: checked?dialog.c.a40:hover.hovered?dialog.c.b10:dialog.c.b06
-                    HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
-                    Image { x: 12; y: 14; width: 28; height: 28; source: "image://icons/"+card.modelData.icon; sourceSize: Qt.size(28,28) }
-                    RakLabel { x: 52; width: parent.width-64; height: parent.height; text: card.modelData.label; color: dialog.c.FG; font.pixelSize: 13; font.weight: Font.DemiBold; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
-                    MouseArea { anchors.fill: parent; acceptedButtons: Qt.LeftButton; onPressed: dialog.choice=card.modelData.key; onDoubleClicked: dialog.choose() }
+                    width: cards.width; height: 56; implicitHeight: 56; cornerRadius: 8; edgeWidth: 1
+                    leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
+                    readonly property bool chosen: dialog.choice===modelData.key
+                    checked: chosen
+                    fillColor: chosen?dialog.c.a15:dialog.c.b03
+                    hoverFillColor: chosen?dialog.c.a15:dialog.c.b07
+                    downFillColor: dialog.c.a22
+                    edgeColor: chosen?dialog.c.a40:dialog.c.b06
+                    hoverEdgeColor: chosen?dialog.c.a40:dialog.c.b10
+                    onPressed: dialog.choice=card.modelData.key
+                    onDoubleClicked: dialog.choose()
+                    contentItem: Item {
+                        Image { x: 12; y: 14; width: 28; height: 28; source: "image://icons/"+card.modelData.icon; sourceSize: Qt.size(28,28) }
+                        RakLabel { x: 52; width: parent.width-64; height: parent.height; text: card.modelData.label; color: dialog.c.FG; font.pixelSize: 13; font.weight: Font.DemiBold; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight; transformed: card.transformed }
+                    }
                 }
             }
         }
@@ -70,7 +77,7 @@ DialogWindow {
             iconSource: checked?"image://icons/check_white":""; iconWidth: 14; iconHeight: 14
             onToggled: dialog.always=checked
         }
-        RakLabel { width: parent.width-30; height: 20; text: dialog.s.ow_always; color: dialog.c.FG_MUTED; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; wrapMode: Text.WordWrap; MouseArea {anchors.fill: parent;onClicked: dialog.always=!dialog.always} }
+        RakLabel { width: parent.width-30; height: 20; text: dialog.s.ow_always; color: dialog.c.FG_MUTED; font.pixelSize: 12; verticalAlignment: Text.AlignVCenter; wrapMode: Text.WordWrap; MouseArea {anchors.fill: parent;cursorShape: Qt.PointingHandCursor;onClicked: dialog.always=!dialog.always} }
     }
     Row {
         anchors.right: parent.right; anchors.rightMargin: 28; y: viewport.y+viewport.height+57; spacing: 8

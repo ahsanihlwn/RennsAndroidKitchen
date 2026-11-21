@@ -33,7 +33,7 @@ Item {
             iconKey: parent.iconName
             iconSize: 20
             strokeColor: page.c.FG_LABEL
-            accentColor: page.c.accentColor
+            accentColor: page.c.accent_hex
             isLight: (page.c && page.c.is_light !== undefined) ? page.c.is_light : false
         }
         RakLabel { x: 28; height: parent.height; text: parent.text; color: page.c.FG_LABEL; font.pixelSize: 14; font.weight: Font.DemiBold }
@@ -44,15 +44,10 @@ Item {
     }
     component SettingText: Item {
         property string title: ""
-        property string description: ""
-        property string referenceDescription: description
-        property real referenceWidth: width
-        implicitHeight: label.height + 2 + descriptionLabel.height
-        RakLabel { id: label; width: parent.width; height: 17; text: parent.title; color: page.c.FG; font.pixelSize: 12; font.weight: Font.DemiBold }
-        RakLabel { id: descriptionLabel; y: 19; width: parent.width; height: Math.max(16, implicitHeight+(lineCount>1?1:0), referenceText.implicitHeight+(referenceText.lineCount>1?1:0)); text: parent.description; color: page.c.FG_DESC; font.pixelSize: 11; wrapMode: Text.WordWrap }
-        RakLabel { id: referenceText; visible: false; width: parent.referenceWidth; text: parent.referenceDescription; font.pixelSize: 11; wrapMode: Text.WordWrap }
+        implicitHeight: 28
+        RakLabel { id: label; anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 20; text: parent.title; color: page.c.FG; font.pixelSize: 12; font.weight: Font.DemiBold }
     }
-    RakLabel { z: 2; opacity: page.headingOpacity; x: 32; y: 28; height: 44; text: page.s.hdr_settings; font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG }
+    RakLabel { z: 2; opacity: page.headingOpacity; x: 16; y: 16; height: 32; text: page.s.hdr_settings; font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG }
     SmoothRectangle {
         id: settingsSurface
         readonly property rect inputBounds: Qt.rect(0,headerGlass.height,width,Math.max(0,height-headerGlass.height-footer.height))
@@ -60,11 +55,11 @@ Item {
     Flickable {
         id: scroll
         objectName: "settingsScroll"
-        x: 16; y: 77; width: parent.width - 32; height: Math.max(0, parent.height - 77 - 16)
-        clip: !page.glassChrome; contentHeight: content.height + 32; boundsBehavior: Flickable.StopAtBounds
+        x: 16; y: 68; width: parent.width - 32; height: Math.max(0, parent.height - 68 - 16)
+        clip: !page.glassChrome; contentHeight: content.height; boundsBehavior: Flickable.StopAtBounds
         Column {
             id: content
-            x: 16; y: 8; width: parent.width - 32; spacing: 20
+            x: 0; y: 0; width: parent.width; spacing: 20
             Card {
                 height: 139
                 CardTitle { text: page.s.hdr_product_info; iconName: "info" }
@@ -90,7 +85,7 @@ Item {
                 height: 86
                 CardTitle { text: page.s.hdr_default_location; iconName: "default_location" }
                 RakLabel { x: 14; y: 44; width: parent.width - 160; height: 28; text: page.model.defaultLocation || page.s.lbl_docs_system_default; color: page.c.FG_MUTED; font.pixelSize: 12; elide: Text.ElideRight }
-                SmallButton { anchors.right: changeLocation.left; anchors.rightMargin: 6; y: 44; width: 55; text: page.s.btn_reset; fillColor: "transparent"; labelColor: page.c.FG_DESC; onClicked: page.model.dispatch("resetLocation", {}) }
+                SmallButton { anchors.right: changeLocation.left; anchors.rightMargin: 6; y: 44; width: 55; text: page.s.btn_reset; fillColor: "transparent"; edgeColor: "transparent"; labelColor: page.c.FG3; hoverLabelColor: page.c.FG; onClicked: page.model.dispatch("resetLocation", {}) }
                 SmallButton { id: changeLocation; anchors.right: parent.right; anchors.rightMargin: 14; y: 44; width: 65; text: page.s.btn_change; onClicked: page.model.dispatch("defaultLocation", {}) }
             }
             Card {
@@ -102,7 +97,6 @@ Item {
                     objectName: "themeSetting"
                     x: 14; y: 52; width: parent.width-38-themeChange.width; height: implicitHeight
                     title: page.s.lbl_theme
-                    description: page.s.txt_current_style.replace("{style}",page.s.themeName)
                 }
                 SmallButton {
                     id: themeChange
@@ -112,8 +106,8 @@ Item {
                     width: Math.max(98,implicitWidth); text: page.s.btn_change_short
                     onClicked: page.model.dispatch("themePicker",{})
                 }
-                SmoothRectangle { id: themeDivider; x: 14; y: themeText.y+themeText.height+18; width: parent.width - 28; height: 1; color: page.c.b06 }
-                SettingText { id: effectText; x: 14; y: themeDivider.y+19; width: parent.width - 122; height: implicitHeight; title: page.s.lbl_effect_level; description: page.s.txt_effect_level_desc; referenceDescription: page.s.txt_blur_effect_desc; referenceWidth: parent.width-80 }
+                SmoothRectangle { id: themeDivider; x: 14; y: themeText.y+themeText.height+12; width: parent.width - 28; height: 1; color: page.c.b06 }
+                SettingText { id: effectText; x: 14; y: themeDivider.y+13; width: parent.width - 122; height: implicitHeight; title: page.s.lbl_effect_level }
                 ChoiceButton {
                     objectName: "effectLevelChoice"
                     anchors.right: parent.right; anchors.rightMargin: 14; y: Math.floor(effectText.y + (effectText.height - height) / 2)
@@ -122,41 +116,17 @@ Item {
                     currentKey: page.model.settings.effects; animatePress: page.model.settings.animations
                     onChosen: key => page.model.chooseSetting("effects", key)
                 }
-                Item {
-                    id: blurOptions
-                    objectName: "blurRadiusSettings"
-                    property real reveal: page.model.settings.effects==="high"?1:0
-                    property bool animateChanges: page.model.settings.animations
-                    onAnimateChangesChanged: if(!animateChanges) Qt.callLater(function(){if(!blurOptions.animateChanges)blurOptions.reveal=Qt.binding(function(){return page.model.settings.effects==="high"?1:0})})
-                    readonly property real fullHeight: 19+Math.max(blurText.height,28)
-                    Behavior on reveal { enabled: blurOptions.animateChanges; NumberAnimation { duration: 240; easing.type: Easing.InOutCubic } }
-                    visible: reveal>.001; opacity: reveal; enabled: reveal>.99; clip: reveal<1
-                    x: 14; y: effectText.y+effectText.height+18; width: parent.width-28
-                    height: fullHeight*reveal
-                    SmoothRectangle { width: parent.width; height: 1; color: page.c.b06 }
-                    SettingText { id: blurText; y: 19; width: parent.width-122; height: implicitHeight; title: page.s.lbl_glass_style; description: page.s.txt_glass_style_desc }
-                    ChoiceButton {
-                        objectName: "blurStyleChoice"
-                        anchors.right: parent.right; y: 19+Math.floor((blurText.height-height)/2)
-                        width: 98; height: 28; colors: page.c
-                        currentKey: page.model.settings.blurRadius<12?"clear":"frost"
-                        text: currentKey==="clear"?"Clear":"Frost"
-                        choices: [{key:"clear",label:"Clear"},{key:"frost",label:"Frost"}]
-                        animatePress: page.model.settings.animations
-                        onChosen: key => page.model.chooseSetting("blurRadius",key==="clear"?6:17)
-                    }
-                }
-                SmoothRectangle { id: animationDivider; x: 14; y: blurOptions.y+(blurOptions.fullHeight+18)*blurOptions.reveal; width: parent.width - 28; height: 1; color: page.c.b06 }
-                SettingText { id: animationText; x: 14; y: animationDivider.y + 19; width: parent.width - 80; height: implicitHeight; title: page.s.lbl_animations; description: page.s.txt_animations_desc }
+                SmoothRectangle { id: animationDivider; x: 14; y: effectText.y + effectText.height + 12; width: parent.width - 28; height: 1; color: page.c.b06 }
+                SettingText { id: animationText; x: 14; y: animationDivider.y + 13; width: parent.width - 80; height: implicitHeight; title: page.s.lbl_animations }
                 RakSwitch {
                     objectName: "animationsSwitch"
                     anchors.right: parent.right; anchors.rightMargin: 14; y: animationText.y + (animationText.height - height) / 2
-                    width: 42; height: 24; accentColor: page.c.neutralToggle; offColor: page.c.offToggle
+                    width: 42; height: 24; 
                     checked: page.model.settings.animations; animationsEnabled: page.model.settings.animations
                     onToggled: page.model.chooseSetting("animations", checked)
                 }
-                SmoothRectangle { id: modeDivider; x: 14; y: animationText.y + animationText.height + 18; width: parent.width - 28; height: 1; color: page.c.b06 }
-                SettingText { id: modeText; x: 14; y: modeDivider.y + 19; width: parent.width - 38 - projectMode.width; height: implicitHeight; title: page.s.lbl_project_mode; description: page.s.txt_tree_view_mode_desc }
+                SmoothRectangle { id: modeDivider; x: 14; y: animationText.y + animationText.height + 12; width: parent.width - 28; height: 1; color: page.c.b06 }
+                SettingText { id: modeText; x: 14; y: modeDivider.y + 13; width: parent.width - 38 - projectMode.width; height: implicitHeight; title: page.s.lbl_project_mode }
                 ChoiceButton {
                     id: projectMode
                     objectName: "projectModeChoice"
@@ -201,7 +171,7 @@ Item {
                             iconKey: parent.modelData.icon
                             iconSize: 20
                             strokeColor: page.c.FG
-                            accentColor: page.c.accentColor
+                            accentColor: page.c.accent_hex
                             isLight: (page.c && page.c.is_light !== undefined) ? page.c.is_light : false
                         }
                         RakLabel { x: 30; height: 26; text: parent.modelData.title || ""; color: page.c.FG; font.weight: Font.DemiBold }
@@ -213,7 +183,7 @@ Item {
     }
     PageRevealMask { anchors.fill: parent; motion: page.presentationMotion; page: page; topInset: headerGlass.height; bottomInset: 0 }
     }
-    GlassBand { id: headerGlass; objectName: "settingsHeaderGlass"; z: 1; width: parent.width; height: 77; model: page.model; backdropSource: settingsSurface; origin: Qt.point(0,0) }
+    GlassBand { id: headerGlass; objectName: "settingsHeaderGlass"; z: 1; width: parent.width; height: 68; model: page.model; backdropSource: settingsSurface; origin: Qt.point(0,0) }
     PageFooter {
         id: footer
         visible: false

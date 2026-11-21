@@ -34,9 +34,9 @@ def _open_raw_stream(path, kind):
         return reader, _close
 
     if kind == "br":
-        f = open(path, "rb")
-        wrapper = _BrotliStream(f)
-        return wrapper, wrapper.close
+        from core.native_backend import brotli_open_reader
+        reader = brotli_open_reader(path)
+        return reader, reader.close
 
     if kind in ("dat", "dat_br"):
         # sdat2img butuh nulis ke file -> materialize ke temp dulu.
@@ -54,64 +54,38 @@ def _open_raw_stream(path, kind):
     return f, f.close
 
 
-class _BrotliStream:
-
-    def __init__(self, fileobj):
-        import brotli
-        self._f = fileobj
-        self._dec = brotli.Decompressor()
-        self._buf = b""
-        self._eof = False
-
-    def read(self, n=-1):
-        if n is None or n < 0:
-            chunks = [self._buf]
-            self._buf = b""
-            while not self._eof:
-                chunks.append(self._fill_all())
-            return b"".join(chunks)
-        while len(self._buf) < n and not self._eof:
-            self._buf += self._fill_all()
-        out, self._buf = self._buf[:n], self._buf[n:]
-        return out
-
-    def _fill_all(self):
-        raw = self._f.read(1 << 20)
-        if not raw:
-            self._eof = True
-            return b""
-        return self._dec.process(raw)
-
-    def close(self):
-        try: self._f.close()
-        except Exception: pass
-
-
 def _dat_to_temp_img(path, kind):
 
+    import shutil
     import tempfile
     from core.flashable_size import _find_transfer_list
 
     dat_path = path
-    if kind == "dat_br":
-        # decompress brotli ke temp .new.dat dulu.
-        import brotli
-        td = tempfile.mkdtemp(prefix="flashdat_")
-        dat_path = os.path.join(td, "part.new.dat")
-        dec = brotli.Decompressor()
-        with open(path, "rb") as fin, open(dat_path, "wb") as fout:
-            while True:
-                b = fin.read(1 << 20)
-                if not b:
-                    break
-                fout.write(dec.process(b))
+    temp_dir = None
+    try:
+        if kind == "dat_br":
+            # decompress brotli ke temp .new.dat dulu via native Rust.
+            from core.native_backend import brotli_decompress_file
+            temp_dir = tempfile.mkdtemp(prefix="flashdat_")
+            dat_path = os.path.join(temp_dir, "part.new.dat")
+            brotli_decompress_file(path, dat_path)
 
-    transfer = _find_transfer_list(path, br=(kind == "dat_br"))
-    out_img = tempfile.NamedTemporaryFile(prefix="flashimg_", suffix=".img", delete=False)
-    out_img.close()
-    from core.sdat2img.sdat2img import main as _sdat2img
-    _sdat2img(transfer, dat_path, out_img.name)
-    return out_img.name
+        transfer = _find_transfer_list(path, br=(kind == "dat_br"))
+        out_img = tempfile.NamedTemporaryFile(prefix="flashimg_", suffix=".img", delete=False)
+        out_img.close()
+        try:
+            from core.native_backend import sdat2img as _sdat2img
+            _sdat2img(transfer, dat_path, out_img.name)
+            return out_img.name
+        except Exception:
+            try:
+                os.remove(out_img.name)
+            except OSError:
+                pass
+            raise
+    finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def _copy_stream(src, dst, chunk=1 << 20, on_chunk=None, is_cancelled=None):

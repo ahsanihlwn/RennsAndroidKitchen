@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
+import "../motion.js" as Motion
 
 Item {
     id: feedback
@@ -9,8 +10,9 @@ Item {
     function animate(target) {
         animation.stop()
         if (!enabledMotion) { value=1; return }
+        const base = target < 1 ? 1 : .96
         animation.to=target
-        animation.duration=target<1?110:170
+        animation.duration=Motion.remainingDuration(target<1?110:170, value, base, target)
         animation.start()
     }
     function press() { releaseDelay.stop(); started=Date.now(); animate(.96) }

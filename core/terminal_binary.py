@@ -2,11 +2,24 @@
 import os
 import json
 
+def get_native_cli_directory(bin_root: str) -> str:
+    if not bin_root:
+        return ""
+    return os.path.join(bin_root, "native_cli")
+
+
 def resolve_terminal_binary(bin_root: str, command_name: str):
-
-
     if not bin_root:
         return None
+
+    cmd = command_name.lower()
+    cmd_stem = os.path.splitext(cmd)[0]
+    native_dir = get_native_cli_directory(bin_root)
+    if native_dir and os.path.isdir(native_dir):
+        for ext in (".cmd", ".bat"):
+            candidate = os.path.join(native_dir, f"{cmd_stem}{ext}")
+            if os.path.isfile(candidate):
+                return candidate
 
     pkg = os.path.join(bin_root, "package.json")
     if not os.path.isfile(pkg):
@@ -17,8 +30,6 @@ def resolve_terminal_binary(bin_root: str, command_name: str):
             data = json.load(f)
     except Exception:
         return None
-
-    cmd = command_name.lower()
 
     for folder, meta in data.items():
         for b in meta.get("binaries", []):
@@ -34,11 +45,19 @@ def resolve_terminal_binary(bin_root: str, command_name: str):
 
 
 def get_terminal_binary_directories(bin_root: str) -> list[str]:
-
-    if not bin_root or not os.path.isdir(bin_root):
+    if not bin_root:
         return []
 
-    dirs = [bin_root]
+    native_dir = get_native_cli_directory(bin_root)
+    if not os.path.isdir(bin_root) and not os.path.isdir(native_dir):
+        return []
+
+    dirs = []
+    if native_dir and os.path.isdir(native_dir):
+        dirs.append(native_dir)
+    if os.path.isdir(bin_root) and bin_root not in dirs:
+        dirs.append(bin_root)
+
     pkg = os.path.join(bin_root, "package.json")
     if os.path.isfile(pkg):
         try:

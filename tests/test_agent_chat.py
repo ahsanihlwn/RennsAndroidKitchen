@@ -18,6 +18,7 @@ from core.agent_inbox import AgentInbox
 from core.agent_protocols import CodexProtocol,AcpProtocol,ClaudeProtocol,AgyProtocol
 from core.agent_chat_presentation import transcript
 from core.command_context import CommandFailure
+from core.error_reporting import register_error_presenter, unregister_error_presenter
 from ui.agent_chat import WorkspaceAgentChat
 
 
@@ -52,10 +53,11 @@ class ProtocolTests(unittest.TestCase):
             "gemini-3.8-flash-medium\tGemini 3.8 Flash (Medium)\n"
             "gemini-3.8-flash-low\tGemini 3.8 Flash (Low)\n"
             "claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)\n"
+            "claude-opus-4-6-thinking\tClaude Opus 4.6 (thinking)\n"
             "gpt-oss-120b-medium\tGPT-OSS 120B (Medium)\n"
         )
         parsed = agent_backends.parse_agy_models(raw)
-        self.assertEqual(len(parsed), 3)
+        self.assertEqual(len(parsed), 4)
         self.assertEqual(parsed[0], {
             'id': 'gemini-3.8-flash',
             'label': 'Gemini 3.8 Flash',
@@ -65,8 +67,9 @@ class ProtocolTests(unittest.TestCase):
                 {'id': 'high', 'label': 'high'},
             ]
         })
-        self.assertEqual(parsed[1], {'id': 'claude-sonnet-4-6', 'label': 'Claude Sonnet 4.6 (Thinking)'})
-        self.assertEqual(parsed[2], {
+        self.assertEqual(parsed[1], {'id': 'claude-sonnet-4-6', 'label': 'Claude Sonnet 4.6'})
+        self.assertEqual(parsed[2], {'id': 'claude-opus-4-6-thinking', 'label': 'Claude Opus 4.6'})
+        self.assertEqual(parsed[3], {
             'id': 'gpt-oss-120b',
             'label': 'GPT-OSS 120B',
             'efforts': [{'id': 'medium', 'label': 'medium'}],
@@ -87,6 +90,26 @@ class ProtocolTests(unittest.TestCase):
         p.refresh_limits();self.assertEqual(self.sent[-1]['method'],'account/rateLimits/read')
         self.rpc_result(p,'account/rateLimits/read',{'rateLimits':{'primary':{'usedPercent':25}}})
         self.assertEqual(self.events[-1]['type'],'limits')
+
+    def test_codex_resume_no_rollout_falls_back_to_new_thread(self):
+        p=self.setup_protocol(CodexProtocol);p.session='01a1f2b9-3f10-7701-9bc9-b5e5adc98121'
+        p.start();self.rpc_result(p,'initialize',{})
+        resume_req=next(r for r in self.sent if r.get('method')=='thread/resume')
+        p.receive({'id':resume_req['id'],'error':{'code':-32600,'message':'no rollout found for thread id 01a1f2b9-3f10-7701-9bc9-b5e5adc98121'}})
+        self.assertEqual(p.session,'')
+        self.assertTrue(any(e['type']=='notice' and 'no rollout found' in e['text'] for e in self.events))
+        self.assertFalse(any(e['type']=='error' for e in self.events))
+        self.rpc_result(p,'thread/start',{'thread':{'id':'new-thread'},'model':'test-model','sandbox':{'type':'workspaceWrite'}})
+        self.assertEqual(p.session,'new-thread')
+        self.assertTrue(any(e['type']=='ready' for e in self.events))
+
+    def test_codex_resume_non_missing_error_still_fails(self):
+        p=self.setup_protocol(CodexProtocol);p.session='stale-thread'
+        p.start();self.rpc_result(p,'initialize',{})
+        resume_req=next(r for r in self.sent if r.get('method')=='thread/resume')
+        p.receive({'id':resume_req['id'],'error':{'code':-32000,'message':'Unauthorized'}})
+        self.assertEqual(self.events[-1],{'type':'error','text':'thread/resume: Unauthorized'})
+        self.assertFalse(any(r.get('method')=='thread/start' for r in self.sent))
 
     def test_acp_thinking_levels_are_acknowledged_by_config_option(self):
         p=self.setup_protocol(AcpProtocol);p.session='s'
@@ -170,6 +193,24 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(self.sent[-1]['response']['response']['updatedInput'],original)
         p.receive({'type':'result','subtype':'success','is_error':True,'result':'Model unavailable'})
         self.assertEqual(self.events[-1]['status'],'failed');self.assertEqual(self.events[-1]['error'],'Model unavailable')
+
+    def test_claude_streamed_text_is_not_duplicated_by_assistant_snapshot(self):
+        p=self.setup_protocol(ClaudeProtocol)
+        p.receive({'type':'stream_event','event':{'type':'message_start','message':{'id':'msg_1'}}})
+        p.receive({'type':'stream_event','event':{'type':'content_block_start','index':0,'content_block':{'type':'thinking','thinking':''}}})
+        p.receive({'type':'stream_event','event':{'type':'content_block_stop','index':0}})
+        p.receive({'type':'stream_event','event':{'type':'content_block_start','index':1,'content_block':{'type':'text','text':''}}})
+        p.receive({'type':'stream_event','event':{'type':'content_block_delta','index':1,'delta':{'type':'text_delta','text':'Hai! '}}})
+        p.receive({'type':'stream_event','event':{'type':'content_block_delta','index':1,'delta':{'type':'text_delta','text':'Siap.'}}})
+        p.receive({'type':'stream_event','event':{'type':'content_block_stop','index':1}})
+        # Claude CLI subsequently emits an assistant block snapshot at content index 0.
+        p.receive({'type':'assistant','message':{'id':'msg_1','content':[{'type':'text','text':'Hai! Siap.'}]}})
+        text_events=[e for e in self.events if e['type']=='text']
+        self.assertEqual(len(text_events),2)
+        self.assertEqual({e['id'] for e in text_events},{'msg_1:1'})
+        # Non-streamed assistant messages (e.g. a different message id) still render normally.
+        p.receive({'type':'assistant','message':{'id':'msg_2','content':[{'type':'text','text':'Lanjut.'}]}})
+        self.assertEqual(self.events[-1],{'type':'text','id':'msg_2:0','text':'Lanjut.','append':False})
 
     def test_agy_reports_only_terminal_success_and_does_not_invent_interrupt(self):
         p=self.setup_protocol(AgyProtocol);self.assertFalse(p.interruptible)
@@ -313,7 +354,7 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.chat.model, 'gemini-3.8-flash')
         self.assertEqual(self.chat.effort, 'high')
         self.assertEqual(self.chat._current_model()['id'], 'gemini-3.8-flash')
-        self.assertEqual([e['id'] for e in self.chat.efforts], ['', 'low', 'high'])
+        self.assertEqual([e['id'] for e in self.chat.efforts], ['low', 'high'])
 
     def test_opencode_models_property_and_selection_strip_prefix(self):
         self.chat._providers = [{'id': 'opencode', 'label': 'OpenCode', 'protocol': 'acp', 'argv': ['fixture']}]
@@ -327,6 +368,38 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(labels, ['Flint 40B Free', 'Big Pickle'])
         self.chat.selectModel('Big Pickle')
         self.assertEqual(self.chat.model, 'opencode/Big Pickle')
+
+    def test_codex_model_switch_syncs_efforts_and_live_protocol_effort(self):
+        self.chat._providers = [{'id': 'codex', 'label': 'Codex', 'protocol': 'codex', 'argv': ['fixture']}]
+        self.chat._provider = 'codex'
+        self.connected()
+        self.chat._protocol_event({'type': 'models', 'rows': [
+            {'id': 'm1', 'label': 'M1', 'efforts': [{'id': 'low', 'label': 'low'}, {'id': 'high', 'label': 'high'}], 'defaultEffort': ''},
+            {'id': 'm2', 'label': 'M2', 'efforts': [{'id': 'medium', 'label': 'medium'}], 'defaultEffort': ''},
+        ]})
+        self.chat.selectModel('m1')
+        self.chat.selectEffort('high')
+        self.assertEqual(self.chat.effort, 'high')
+        self.assertEqual(self.chat._protocol.effort, 'high')
+        self.chat.selectModel('m2')
+        self.assertEqual([e['id'] for e in self.chat.efforts], ['medium'])
+        self.assertEqual(self.chat.effort, 'medium')
+        self.assertEqual(self.chat._protocol.effort, 'medium')
+        self.chat.selectModel('m1')
+        self.assertEqual(self.chat.effort, 'high')
+        self.assertEqual(self.chat._protocol.effort, 'high')
+
+    def test_opencode_effort_syncs_from_native_event_and_clears_automatic(self):
+        self.chat._providers = [{'id': 'opencode', 'label': 'OpenCode', 'protocol': 'acp', 'argv': ['fixture']}]
+        self.chat._provider = 'opencode'
+        self.connected()
+        self.chat._protocol_event({'type': 'model', 'model': 'opencode/Flint'})
+        self.chat._protocol_event({'type': 'efforts', 'rows': [{'id': 'low', 'label': 'Low'}, {'id': 'high', 'label': 'High'}, {'id': 'default', 'label': 'Default'}], 'current': 'high'})
+        # 'default' must be filtered out dynamically
+        self.assertEqual([e['id'] for e in self.chat.efforts], ['low', 'high'])
+        self.assertEqual(self.chat.effort, 'high')
+        self.chat.selectEffort('')
+        self.assertEqual(self.chat.effort, 'low')
 
     def test_chat_toggle_and_minimize_keeps_backend_connected(self):
         self.chat._providers = [{'id': 'codex', 'label': 'Codex', 'protocol': 'codex', 'argv': ['fixture']}]
@@ -453,6 +526,29 @@ class ControllerTests(unittest.TestCase):
         self.assertEqual(self.agent.inbox.store.get(request)['state'],'failed')
         self.assertEqual(next(r for r in self.chat.messages.snapshot() if r['role']=='problem')['failure_kind'],'no_reply')
 
+    def test_agent_error_shows_in_detail_and_never_opens_modal_dialog(self):
+        class Presenter(QObject):
+            fatalRequested = Signal(str)
+            operationErrorRequested = Signal(str)
+        presenter = Presenter()
+        presentations = []
+        presenter.fatalRequested.connect(lambda t: presentations.append(('fatal', t)))
+        presenter.operationErrorRequested.connect(lambda t: presentations.append(('operation', t)))
+        register_error_presenter(presenter)
+        try:
+            self.connected()
+            self.send()
+            err_msg = 'session/prompt: Internal error: Free usage limit reached. Free models work in OpenCode (https://opencode.ai); subscribe to OpenCode Go to keep going: https://opencode.ai/go'
+            self.chat._protocol_event({'type': 'error', 'text': err_msg})
+            self.app.processEvents()
+            self.assertEqual(self.chat.state, 'failed')
+            problem = next(r for r in self.chat.messages.snapshot() if r['role'] == 'problem')
+            self.assertIn('Free usage limit reached', problem['text'])
+            self.assertEqual(problem['failure_kind'], 'operation_failed')
+            self.assertEqual(presentations, [])
+        finally:
+            unregister_error_presenter(presenter)
+
     def test_final_reply_survives_an_old_empty_placeholder(self):
         self.connected();self.send()
         self.chat._append(self.chat._turn_key+':empty','assistant','')
@@ -486,7 +582,7 @@ class ControllerTests(unittest.TestCase):
         self.chat._chat()['model']='sonnet';self.chat.selectEffort('high')
         self.chat._protocol_event({'type':'session','session':'s','model':'resolved-sonnet'})
         self.assertEqual(self.chat.model,'sonnet');self.assertEqual(self.chat.effort,'high')
-        self.chat._chat()['model']='other';self.assertEqual(self.chat.effort,'')
+        self.chat._chat()['model']='other';self.assertEqual(self.chat.effort,'medium')
 
     def test_unsupported_effort_command_preserves_draft(self):
         self.chat.setDraft('/effort imaginary');self.assertFalse(self.chat.send())
@@ -618,6 +714,308 @@ class ControllerTests(unittest.TestCase):
         self.chat.newChat();self.chat._save();before=self.chat._store.path.read_bytes()
         with patch('core.agent_chat_store.os.replace',side_effect=OSError('disk full')):self.chat._save()
         self.assertEqual(self.chat._store.path.read_bytes(),before);self.assertIn('could not be saved',self.chat.error)
+
+    def test_empty_chats_never_persist_resume_or_show_resume_notices_for_any_provider(self):
+        self.chat._providers=[
+            {'id':'codex','label':'Codex','protocol':'codex','argv':['fixture']},
+            {'id':'opencode','label':'OpenCode','protocol':'acp','argv':['fixture']},
+            {'id':'claude','label':'Claude','protocol':'claude','argv':['fixture']},
+            {'id':'agy','label':'AGY','protocol':'agy','argv':['fixture']},
+        ]
+        for provider_id in ('codex','opencode','claude','agy'):
+            self.chat._disconnect();self.chat._provider=provider_id;self.chat._create_chat()
+            self.chat._chat()['session']='stale-empty-session'
+            with patch.object(self.chat,'_load_agy_models'):
+                self.chat.connectBackend()
+            self.assertEqual(self.chat._protocol.session,'')
+            self.assertNotIn('--resume',self.chat._transport.argv)
+            self.assertNotIn('--conversation',self.chat._transport.argv)
+            self.chat._protocol_event({'type':'session','session':'fresh-empty-id','model':'m'})
+            self.chat._protocol_event({'type':'notice','text':'Previous session could not be resumed. Started a new conversation.','resume_fallback':True})
+            self.assertEqual(self.chat.messages.snapshot(),[])
+            self.chat._save()
+            reopened=ChatStore(self.owner.project)
+            saved_chat=next(c for c in reopened.data['chats'] if c['id']==self.chat.selectedChat)
+            self.assertEqual(saved_chat['session'],'')
+            self.assertEqual(saved_chat['messages'],[])
+
+    def test_stale_empty_resume_notices_are_cleaned_on_load_while_real_history_keeps_notice(self):
+        from collections import OrderedDict
+        self.chat.newChat()
+        empty_chat=self.chat._chat()
+        empty_chat['session']='dead-thread'
+        empty_chat['messages']=[{'key':'n1','role':'system','text':'Previous Codex session could not be resumed (no rollout found for thread id dead-thread). Started a new conversation.'}]
+        self.chat._messages=OrderedDict((m['key'],m) for m in empty_chat['messages'])
+        self.chat._store.save()
+        reloaded=WorkspaceAgentChat(self.agent)
+        self.addCleanup(reloaded.close)
+        self.assertEqual(reloaded.messages.snapshot(),[])
+        self.assertEqual(reloaded.sessionId,'')
+        # A chat with actual conversation history still surfaces a resume fallback notice.
+        reloaded._append('u1','user','Hello')
+        reloaded._protocol_event({'type':'notice','text':'Previous Codex session could not be resumed. Started a new conversation.','resume_fallback':True})
+        self.assertTrue(any(r['role']=='system' and 'could not be resumed' in r['text'] for r in reloaded.messages.snapshot()))
+
+    def test_synthetic_effort_for_models_without_native_reasoning(self):
+        self.chat._create_chat()
+        self.chat._models = [
+            {'id': 'gemini-3.8-flash', 'label': 'Gemini 3.8 Flash', 'efforts': [{'id': 'low', 'label': 'low'}, {'id': 'high', 'label': 'high'}]},
+            {'id': 'gemini-4-neon', 'label': 'Gemini 4 Neon'},
+        ]
+        self.chat.selectModel('gemini-3.8-flash')
+        self.chat.selectEffort('high')
+        self.assertEqual(self.chat.effort, 'high')
+        self.assertFalse(self.chat._is_synthetic_effort())
+
+        # Switch to gemini-4-neon (model without native reasoning):
+        self.chat.selectModel('gemini-4-neon')
+        self.assertTrue(self.chat._is_synthetic_effort())
+        # Synthetic efforts provide low, medium, high, extra
+        self.assertEqual([e['id'] for e in self.chat.efforts], ['low', 'medium', 'high', 'extra'])
+        # Defaults to medium
+        self.assertEqual(self.chat.effort, 'medium')
+
+        # Select extra
+        self.chat.selectEffort('extra')
+        self.assertEqual(self.chat.effort, 'extra')
+
+        # Connect backend must NOT pass --effort in CLI argv
+        with patch.object(self.chat, '_load_agy_models'):
+            self.chat.connectBackend()
+        self.assertNotIn('--effort', self.chat._transport.argv)
+
+    def test_connect_backend_claude_sonnet_without_catalog_never_passes_effort(self):
+        self.chat._providers = [{'id': 'agy', 'label': 'AGY', 'protocol': 'agy', 'argv': ['agy']}]
+        self.chat._provider = 'agy'
+        self.chat._create_chat()
+        self.chat._models = []
+        self.chat._chat()['model'] = 'claude-sonnet-4-6'
+        self.chat._chat().setdefault('efforts', {})['claude-sonnet-4-6'] = 'medium'
+        with patch.object(self.chat, '_load_agy_models'):
+            self.chat.connectBackend()
+        self.assertNotIn('--effort', self.chat._transport.argv)
+        self.assertIn('--model', self.chat._transport.argv)
+        self.assertIn('claude-sonnet-4-6', self.chat._transport.argv)
+
+        # Sending prompt injects cognitive directive into backend payload, but NOT into user transcript
+        self.chat.setDraft('Perbaiki bug ini')
+        self.chat.send()
+        # User message in transcript is purely the user's text
+        user_msg = next(m for m in self.chat._messages.values() if m['role'] == 'user')
+        self.assertEqual(user_msg['text'], 'Perbaiki bug ini')
+        self.assertNotIn('[COGNITIVE DIRECTIVE', user_msg['text'])
+        # But backend payload (_pending_prompt) contains the extra critical cognitive directive
+        self.assertIn('[COGNITIVE DIRECTIVE - SILENT]: Berpikirlah secara ultra-kritis', self.chat._pending_prompt)
+        self.assertIn('Perbaiki bug ini', self.chat._pending_prompt)
+
+    def test_launch_arguments_effort_handling(self):
+        args_empty = agent_backends.launch_arguments({'protocol': 'agy'}, model='dynamic-model-1', effort='')
+        self.assertNotIn('--effort', args_empty)
+        args_valid = agent_backends.launch_arguments({'protocol': 'agy'}, model='dynamic-model-2', effort='high')
+        self.assertIn('--effort', args_valid)
+        self.assertIn('high', args_valid)
+
+    def test_connect_backend_dynamically_strips_unsupported_effort(self):
+        self.chat._create_chat()
+        self.chat._models = [
+            {'id': 'model-without-effort', 'label': 'Model Without Effort'},
+        ]
+        self.chat.selectModel('model-without-effort')
+        # Inject an effort manually into dict
+        self.chat._chat().setdefault('efforts', {})['model-without-effort'] = 'xhigh'
+        # effort property falls back to medium because xhigh is not in synthetic efforts
+        self.assertEqual(self.chat.effort, 'medium')
+        with patch.object(self.chat, '_load_agy_models'):
+            self.chat.connectBackend()
+        self.assertNotIn('--effort', self.chat._transport.argv)
+
+    def test_connect_backend_claude_sonnet_without_catalog_never_passes_effort(self):
+        self.chat._providers = [{'id': 'agy', 'label': 'AGY', 'protocol': 'agy', 'argv': ['agy']}]
+        self.chat._provider = 'agy'
+        self.chat._create_chat()
+        self.chat._models = []
+        self.chat._chat()['model'] = 'claude-sonnet-4-6'
+        self.chat._chat().setdefault('efforts', {})['claude-sonnet-4-6'] = 'medium'
+        with patch.object(self.chat, '_load_agy_models'):
+            self.chat.connectBackend()
+        self.assertNotIn('--effort', self.chat._transport.argv)
+        self.assertIn('--model', self.chat._transport.argv)
+        self.assertIn('claude-sonnet-4-6', self.chat._transport.argv)
+
+    def test_model_error_transcript_presentation_and_clean_extraction(self):
+        err_text = 'Agent exited (1) before reporting a completed turn. error: invalid model selection (--model "gemini-4-neon" --effort "xhigh"): --effort is not supported for model "gemini-4-neon"\nLog: /path/to/log'
+        msg = [{'key': 'p1', 'role': 'problem', 'text': err_text}]
+        rows = transcript(msg, 'id')
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0].get('is_model_error'))
+        self.assertEqual(rows[0]['title'], 'Kendala Konfigurasi Model')
+        self.assertEqual(rows[0]['body'], 'invalid model selection (--model "gemini-4-neon" --effort "xhigh"): --effort is not supported for model "gemini-4-neon"')
+
+    def test_reset_model_to_automatic(self):
+        self.chat._create_chat()
+        self.chat._models = [
+            {'id': 'gemini-3.8-flash', 'label': 'Gemini 3.8 Flash', 'efforts': [{'id': 'high', 'label': 'high'}]},
+        ]
+        self.chat.selectModel('gemini-3.8-flash')
+        self.chat.selectEffort('high')
+        self.chat._error = 'Some error'
+        self.chat.resetModelToAutomatic()
+        self.assertEqual(self.chat.model, '')
+        self.assertEqual(self.chat.effort, 'medium')
+        self.assertEqual(self.chat.error, '')
+
+    def test_agy_efforts_eliminates_auto_default_and_starts_at_low_with_medium_default(self):
+        self.chat._providers = [{'id': 'agy', 'label': 'AGY', 'protocol': 'agy', 'argv': ['fixture']}]
+        self.chat._provider = 'agy'
+        self.chat._create_chat()
+        sample_models = [
+            {'id': 'nemo3', 'label': 'NEMO3', 'efforts': [
+                {'id': 'auto', 'label': 'Auto'},
+                {'id': 'low', 'label': 'low'},
+                {'id': 'medium', 'label': 'medium'},
+                {'id': 'high', 'label': 'high'},
+                {'id': 'default', 'label': 'Default'},
+            ]}
+        ]
+        with patch.object(self.chat, '_metadata_query'), patch.object(self.chat, '_load_agy_models'):
+            self.chat._models = sample_models
+            self.chat.selectModel('nemo3')
+            effort_ids = [e['id'] for e in self.chat.efforts]
+            # auto and default must be eliminated
+            self.assertEqual(effort_ids, ['low', 'medium', 'high'])
+            # Leftmost (index 0) must be low
+            self.assertEqual(effort_ids[0], 'low')
+            # Default effort must be medium
+            self.assertEqual(self.chat.effort, 'medium')
+            # Selecting leftmost (low) must stick and not snap back
+            self.chat.selectEffort('low')
+            self.assertEqual(self.chat.effort, 'low')
+            # Clearing effort falls back to medium
+            self.chat.selectEffort('')
+            self.assertEqual(self.chat.effort, 'medium')
+
+
+    def test_codex_and_opencode_efforts_never_empty_and_default_to_medium(self):
+        # 1. Codex with GPT-6.1 Terra or any dynamic model
+        self.chat._providers = [{'id': 'codex', 'label': 'Codex', 'protocol': 'codex', 'argv': ['fixture']}]
+        self.chat._provider = 'codex'
+        self.chat._create_chat()
+        self.chat._models = [
+            {'id': 'gpt-6.1-terra', 'label': 'GPT-6.1 Terra', 'efforts': [
+                {'id': 'low', 'label': 'Low'},
+                {'id': 'medium', 'label': 'Medium'},
+                {'id': 'high', 'label': 'High'},
+                {'id': 'extra_high', 'label': 'Extra High'},
+            ]}
+        ]
+        self.chat.selectModel('gpt-6.1-terra')
+        codex_efforts = [e['id'] for e in self.chat.efforts]
+        # Must not contain empty string, auto, or default
+        self.assertEqual(codex_efforts, ['low', 'medium', 'high', 'extra_high'])
+        self.assertEqual(codex_efforts[0], 'low')
+        # Must default to medium (not empty string)
+        self.assertEqual(self.chat.effort, 'medium')
+
+        # 2. OpenCode with Tidepool Alpha Free or any dynamic model
+        self.chat._providers = [{'id': 'opencode', 'label': 'OpenCode', 'protocol': 'acp', 'argv': ['fixture']}]
+        self.chat._provider = 'opencode'
+        self.connected()
+        self.chat._protocol_event({'type': 'model', 'model': 'opencode/tidepool'})
+        self.chat._protocol_event({'type': 'efforts', 'rows': [
+            {'id': 'low', 'label': 'Low'},
+            {'id': 'medium', 'label': 'Medium'},
+            {'id': 'high', 'label': 'High'},
+            {'id': 'default', 'label': 'Default'},
+        ], 'current': 'default'})
+        opencode_efforts = [e['id'] for e in self.chat.efforts]
+        # 'default' at the right must be eliminated
+        self.assertEqual(opencode_efforts, ['low', 'medium', 'high'])
+        self.assertEqual(opencode_efforts[0], 'low')
+        # Even if protocol sends current: 'default', UI effort must default to medium
+        self.assertEqual(self.chat.effort, 'medium')
+
+    def test_delete_chat_and_empty_chat_pruning(self):
+        # 1. newChat() on an already empty chat does not create duplicate entries
+        self.chat._create_chat()
+        self.assertEqual(len(self.chat._data['chats']), 1)
+        self.chat.newChat()
+        self.assertEqual(len(self.chat._data['chats']), 1)
+
+        # 2. Add message to first chat, then create new chat
+        self.chat._append('u1', 'user', 'Hello first chat')
+        chat1_id = self.chat.selectedChat
+        self.chat.newChat()
+        chat2_id = self.chat.selectedChat
+        self.assertNotEqual(chat1_id, chat2_id)
+        # chat1 has messages, chat2 is empty
+        self.assertEqual(len(self.chat._data['chats']), 2)
+
+        # 3. Switching back to chat1 discards empty chat2
+        self.chat.selectChat(chat1_id)
+        self.connected()
+        self.assertEqual(self.chat.selectedChat, chat1_id)
+        self.assertEqual([c['id'] for c in self.chat._data['chats']], [chat1_id])
+
+        # 4. Create another chat, add messages to both, and test deleteChat
+        self.chat.newChat()
+        chat3_id = self.chat.selectedChat
+        self.chat._append('u2', 'user', 'Hello third chat')
+        self.assertEqual(len(self.chat._data['chats']), 2)
+
+        # Delete non-selected chat1
+        self.chat.deleteChat(chat1_id)
+        self.assertNotIn(chat1_id, [c['id'] for c in self.chat._data['chats']])
+        self.assertEqual(self.chat.selectedChat, chat3_id)
+
+        # Delete active chat3
+        self.chat.deleteChat(chat3_id)
+        # Deleting the last chat automatically spawns 1 clean empty chat
+        self.assertEqual(len(self.chat._data['chats']), 1)
+        self.assertNotEqual(self.chat.selectedChat, chat3_id)
+
+        # 5. Switching provider on empty chat does not spawn duplicate chats
+        self.connected()
+        self.chat._providers = [
+            {'id': 'agy', 'label': 'AGY'},
+            {'id': 'codex', 'label': 'Codex'},
+        ]
+        self.chat.selectProvider('codex')
+        self.assertEqual(len(self.chat._data['chats']), 1)
+        self.assertEqual(self.chat.provider, 'codex')
+
+    def test_provider_switch_clears_model_and_session_and_select_mode(self):
+        self.connected()
+        self.chat._providers = [
+            {'id': 'codex', 'label': 'Codex', 'protocol': 'codex', 'argv': ['codex']},
+            {'id': 'agy', 'label': 'AGY', 'protocol': 'agy', 'argv': ['agy']},
+            {'id': 'opencode', 'label': 'OpenCode', 'protocol': 'acp', 'argv': ['opencode']},
+        ]
+        chat = self.chat._chat()
+        chat['model'] = 'codex-only-model'
+        chat['session'] = 'old-session'
+        with patch.object(self.chat, '_load_agy_models'):
+            self.chat.selectProvider('agy')
+        self.assertEqual(chat['model'], '')
+        self.assertEqual(chat['session'], '')
+
+        # Test selectMode even when disconnected / connecting
+        self.chat.selectMode('plan')
+        self.assertEqual(self.chat.mode, 'plan')
+        self.assertEqual(chat.get('mode'), 'plan')
+
+    def test_load_agy_models_resets_unknown_model_to_automatic(self):
+        self.chat._providers = [{'id': 'agy', 'label': 'Antigravity', 'protocol': 'agy', 'argv': ['agy']}]
+        self.chat._provider = 'agy'
+        self.chat._create_chat()
+        chat = self.chat._chat()
+        chat['model'] = 'gpt-6.1-terra'
+        provider = self.chat._providers[0]
+        sample_models = [
+            {'id': 'gemini-3.8-flash', 'label': 'Gemini 3.8 Flash', 'efforts': [{'id': 'high', 'label': 'high'}]}
+        ]
+        with patch.object(self.chat._jobs, 'submit', side_effect=lambda name, fn, p, done, **kw: done(True, sample_models)):
+            self.chat._load_agy_models(provider)
+        self.assertEqual(chat['model'], '')
 
 
 if __name__=='__main__':unittest.main()

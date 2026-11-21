@@ -21,21 +21,6 @@ if "--rak-cli" in sys.argv[1:2]:
     _main_cli()
     raise SystemExit(0)
 
-
-if "--workspace-worker" in sys.argv[1:2]:
-    sys.argv = [sys.argv[0], *sys.argv[2:]]
-    from main import run_workspace_worker
-    run_workspace_worker()
-    raise SystemExit(0)
-
-
-if "--workspace" in sys.argv[1:2]:
-    sys.argv = [sys.argv[0], *sys.argv[2:]]
-    from main import run_workspace_standalone
-    run_workspace_standalone(sys.argv[1:])
-    raise SystemExit(0)
-
-
 import traceback, logging, threading as _threading
 
 _LOG_DIR = os.path.join(
@@ -143,11 +128,19 @@ def _unraisable_excepthook(args):
 sys.unraisablehook = _unraisable_excepthook
 
 
-if sys.platform != "win32":
-    _chromium_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
-    _extra = "--disable-gpu --no-sandbox --disable-software-rasterizer"
-    if _extra not in _chromium_flags:
-        os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = f"{_chromium_flags} {_extra}".strip()
+if "--workspace-worker" in sys.argv[1:2]:
+    sys.argv = [sys.argv[0], *sys.argv[2:]]
+    from main import run_workspace_worker
+    run_workspace_worker()
+    raise SystemExit(0)
+
+
+if "--workspace" in sys.argv[1:2]:
+    sys.argv = [sys.argv[0], *sys.argv[2:]]
+    from main import run_workspace_standalone
+    run_workspace_standalone(sys.argv[1:])
+    raise SystemExit(0)
+
 
 # Qt must read these settings before its first import.
 from core.fonts import configure_text_rendering_env
@@ -156,7 +149,7 @@ configure_text_rendering_env()
 _EARLY_APP = None
 if __name__ == "__main__":
     from ui.runtime import initialize_quick_runtime
-    initialize_quick_runtime(webengine=True)
+    initialize_quick_runtime(webengine=False)
     from PySide6.QtWidgets import QApplication as _EarlyQApplication
     _EARLY_APP = _EarlyQApplication(sys.argv)
     _EARLY_APP.setQuitOnLastWindowClosed(False)
@@ -1960,8 +1953,8 @@ class AppUI(AppFeatures, QWidget):
         self.btn_create2 = bind_text(QPushButton(), lambda: t("btn_confirm_project"))
         self.btn_create2.setLayoutDirection(Qt.LeftToRight)
         bind_icon(self.btn_create2, lambda: create_themed_icon(
-            "check_white", _th.FG_BLUE, _th.FG_BLUE_LIGHT, 15,
-            disabled_color=with_alpha(_th.accent_hex, 0.30),
+            "check_white", _th.BTN_PRIMARY_FG, _th.BTN_PRIMARY_FG_HOVER, 15,
+            disabled_color=with_alpha("#ffffff", 0.45),
         ))
         self.btn_create2.setIconSize(QSize(15, 15))
         yield

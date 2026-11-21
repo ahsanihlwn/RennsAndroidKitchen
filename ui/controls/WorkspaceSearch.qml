@@ -18,14 +18,14 @@ C.Popup {
     transformOrigin: Item.Center
     enter: Transition {
         ParallelAnimation {
-            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: popup.animationsEnabled?160:0; easing.type: Easing.OutQuad }
-            NumberAnimation { property: "scale"; from: .97; to: 1; duration: popup.animationsEnabled?190:0; easing.type: Easing.OutCubic }
+            NumberAnimation { property: "opacity"; from: 0; to: 1; duration: popup.animationsEnabled?170:0; easing.type: Easing.OutCubic }
+            NumberAnimation { property: "scale"; from: .94; to: 1; duration: popup.animationsEnabled?170:0; easing.type: Easing.OutCubic }
         }
     }
     exit: Transition {
         ParallelAnimation {
-            NumberAnimation { property: "opacity"; from: 1; to: 0; duration: popup.animationsEnabled?110:0; easing.type: Easing.InCubic }
-            NumberAnimation { property: "scale"; from: 1; to: .985; duration: popup.animationsEnabled?110:0; easing.type: Easing.InCubic }
+            NumberAnimation { property: "opacity"; from: 1; to: 0; duration: popup.animationsEnabled?120:0; easing.type: Easing.InCubic }
+            NumberAnimation { property: "scale"; from: 1; to: .94; duration: popup.animationsEnabled?120:0; easing.type: Easing.InCubic }
         }
     }
     closePolicy: C.Popup.CloseOnEscape|C.Popup.CloseOnPressOutside

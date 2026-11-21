@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/pt-common",
+    "crates/android-sparse",
+    "crates/hprof-conv",
+    "crates/etc1tool",
+    "crates/f2fs-mkfs",
+    "crates/make_f2fs",
+    "crates/make_f2fs_casefold",
+    "crates/extfs-mkfs",
+    "crates/mke2fs",
+    "crates/android-avb",
+    "crates/android-bootimg",
+    "crates/android-lp",
+    "crates/fastboot",
+    "crates/adb",
+    "crates/sqlite3",
+]
+
+[workspace.package]
+version = "37.0.3"
+edition = "2021"
+rust-version = "1.85"
+license = "MIT"
+authors = ["ahsanihlwn"]
+repository = "https://github.com/ahsanihlwn/platform-tools-rs"
+
+[workspace.dependencies]
+base64 = "0.22"
+brotli-rs = { path = "../brotli_rs" }
+bytes = "1.11"
+crc32fast = "1.4"
+getrandom = "0.4"
+lz4_flex = { version = "0.11", default-features = false, features = ["std", "frame"] }
+nusb = { version = "0.2.3", features = ["tokio"] }
+png = "0.17"
+rsa = "0.9"
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+sha1 = "0.10"
+sha2 = "0.10"
+thiserror = "2.0"
+tempfile = "3.14"
+tokio = { version = "1.43", features = ["full"] }
+zip = { version = "2.2", default-features = false, features = ["deflate"] }
+zstd = "0.13"

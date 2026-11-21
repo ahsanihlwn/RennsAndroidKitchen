@@ -57,6 +57,28 @@ class DiskMonitorTests(unittest.TestCase):
             self.assertEqual(disk_monitor.list_windows_disk_usage(), [])
             usage.assert_not_called()
 
+    def test_periodic_scan_skips_rotational_and_preserves_cached_hdd_rows(self):
+        calls = []
+        def usage(path):
+            calls.append(path)
+            return Usage(200, 80, 120)
+        seek_map = {'C:': False, 'D:': True}
+        cached = [
+            {'key': 'C:', 'total': 100, 'used': 40},
+            {'key': 'D:', 'total': 1000, 'used': 500},
+            {'key': 'E:', 'total': 500, 'used': 100},
+        ]
+        with patch.object(disk_monitor, '_windows_drive_keys', return_value=['C:', 'D:']), \
+             patch.object(disk_monitor, '_VOLUME_QUERIES', {}), \
+             patch.object(disk_monitor, 'drive_incurs_seek_penalty', side_effect=lambda k: seek_map.get(k)), \
+             patch.object(disk_monitor.shutil, 'disk_usage', side_effect=usage):
+            rows = disk_monitor.list_windows_disk_usage(include_rotational=False, cached_rows=cached)
+            self.assertEqual(calls, ['C:\\'])
+            self.assertEqual(rows, [
+                {'key': 'C:', 'total': 200, 'used': 80},
+                {'key': 'D:', 'total': 1000, 'used': 500},
+            ])
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,20 +1,16 @@
 # SPDX-License-Identifier: MPL-2.0
-import os
 import json
-from core.app_paths import BIN_DIR, PROJECT_DATA_DIR
-from core import kitchen_process as subprocess
+import os
+
+from core import native_backend
+from core.app_paths import PROJECT_DATA_DIR
 
 print("[CORE STAGE] BROTLI TOOL")
-
-BIN_PATH = BIN_DIR
 
 PROJECT_DIR = PROJECT_DATA_DIR
 SETTINGS_FILE = os.path.join(PROJECT_DIR, "project_settings.json")
 
-from core.binary_handler import resolve_binary
-from core.proc_util import CREATE_NO_WINDOW
-
-# brotli CLI accepts -q 0..11
+# brotli accepts quality 0..11
 LEVEL_MIN = 0
 LEVEL_MAX = 11
 DEFAULT_LEVEL = 1
@@ -24,19 +20,7 @@ def _log(msg):
     print(f"[BROTLI] {msg}")
 
 
-def _ext_tool_env():
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    env["PYTHONUTF8"] = "1"
-    return env
-
-
-def _resolve_brotli_bin():
-    return resolve_binary(BIN_PATH, "brotli.exe")
-
-
 def get_brotli_level() -> int:
-
     try:
         with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
             cfg = json.load(f)
@@ -51,7 +35,7 @@ def get_brotli_level() -> int:
             return DEFAULT_LEVEL
 
         level = br.get("level")
-        if not isinstance(level, int) or not (LEVEL_MIN <= level <= LEVEL_MAX):
+        if not isinstance(level, int) or isinstance(level, bool) or not (LEVEL_MIN <= level <= LEVEL_MAX):
             _log(f"level invalid: {level} → fallback {DEFAULT_LEVEL}")
             return DEFAULT_LEVEL
 
@@ -64,45 +48,20 @@ def get_brotli_level() -> int:
 
 
 def compress_to_br(img_path: str, keep_source: bool = False):
-
     img_path = os.path.abspath(os.path.normpath(img_path))
     if not os.path.isfile(img_path):
         return False, f"Source not found: {img_path}"
 
-    BROTLI = _resolve_brotli_bin()
-    if not BROTLI:
-        return False, "BROTLI BINARY NOT FOUND"
-
     out_path = img_path + ".br"
-
-    # brotli will refuse to overwrite unless -f
     level = get_brotli_level()
-    cmd = [BROTLI, "-q", str(level), "-f", "-o", out_path, img_path]
-
-    _log(f"compress level={level} src={img_path}")
-    _log(f"RUN: {' '.join(cmd)}")
+    _log(f"compress (native brotli-rs) level={level} src={img_path}")
 
     try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=BIN_PATH,
-            env=_ext_tool_env(),
-            creationflags=CREATE_NO_WINDOW,
-        )
-    except Exception as e:
-        return False, f"brotli spawn error: {e}"
+        stats = native_backend.brotli_compress_file(img_path, out_path, quality=level)
+    except (OSError, ValueError) as e:
+        return False, f"brotli compress failed: {e}"
 
-    _log(f"returncode={proc.returncode}")
-    if proc.stdout:
-        _log(f"output:\n{proc.stdout}")
-
-    if proc.returncode != 0:
-        return False, (proc.stdout or "").strip() or "brotli compress failed"
+    _log(f"compressed bytes_in={stats.get('bytes_in')} bytes_out={stats.get('bytes_out')}")
 
     if not os.path.isfile(out_path):
         return False, "brotli finished but output file missing"
@@ -117,7 +76,6 @@ def compress_to_br(img_path: str, keep_source: bool = False):
 
 
 def decompress_from_br(br_path: str, keep_source: bool = False):
-
     br_path = os.path.abspath(os.path.normpath(br_path))
     if not os.path.isfile(br_path):
         return False, f"Source not found: {br_path}"
@@ -125,38 +83,15 @@ def decompress_from_br(br_path: str, keep_source: bool = False):
     if not br_path.lower().endswith(".br"):
         return False, f"Not a .br file: {br_path}"
 
-    BROTLI = _resolve_brotli_bin()
-    if not BROTLI:
-        return False, "BROTLI BINARY NOT FOUND"
-
     out_path = br_path[:-3]  # strip ".br"
-
-    cmd = [BROTLI, "-d", "-f", "-o", out_path, br_path]
-
-    _log(f"decompress src={br_path}")
-    _log(f"RUN: {' '.join(cmd)}")
+    _log(f"decompress (native brotli-rs) src={br_path}")
 
     try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            cwd=BIN_PATH,
-            env=_ext_tool_env(),
-            creationflags=CREATE_NO_WINDOW,
-        )
-    except Exception as e:
-        return False, f"brotli spawn error: {e}"
+        stats = native_backend.brotli_decompress_file(br_path, out_path)
+    except (OSError, ValueError) as e:
+        return False, f"brotli decompress failed: {e}"
 
-    _log(f"returncode={proc.returncode}")
-    if proc.stdout:
-        _log(f"output:\n{proc.stdout}")
-
-    if proc.returncode != 0:
-        return False, (proc.stdout or "").strip() or "brotli decompress failed"
+    _log(f"decompressed bytes_in={stats.get('bytes_in')} bytes_out={stats.get('bytes_out')}")
 
     if not os.path.isfile(out_path):
         return False, "brotli finished but output file missing"

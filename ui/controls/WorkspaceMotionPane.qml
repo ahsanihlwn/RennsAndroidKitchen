@@ -19,6 +19,13 @@ Item {
     property real endOpacity: 0
     property real startScale: 1
     property real endScale: 1
+    readonly property real settledWidth: (motion && motion.running)
+        ? Math.max(1, requestedVisible ? (endRect.width > 0 ? endRect.width : width) : (startRect.width > 0 ? startRect.width : width))
+        : width
+    readonly property real settledHeight: (motion && motion.running)
+        ? Math.max(1, requestedVisible ? (endRect.height > 0 ? endRect.height : height) : (startRect.height > 0 ? startRect.height : height))
+        : height
+    clip: motion && motion.running
     opacity: 0
     visible: opacity>0
     enabled: requestedVisible
@@ -76,6 +83,7 @@ Item {
         scale=startScale+(endScale-startScale)*amount
     }
     onRequestedVisibleChanged: if(motion)motion.schedule()
+    onLayoutTargetChanged: if(motion)motion.schedule()
     Connections {
         target: pane.layoutTarget
         function onXChanged(){if(pane.motion)pane.motion.schedule()}

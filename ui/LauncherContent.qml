@@ -11,6 +11,14 @@ Item {
     readonly property Item backdropSurface: pageSurface
     readonly property var managedDialogs: [licenseDialog, creditDialog, themeDialog, packagesDialog, profileDialog, message, errorLog]
     readonly property bool nativeDialogActive: licenseDialog.presented || creditDialog.presented || themeDialog.presented || packagesDialog.presented || profileDialog.presented || message.presented || errorLog.presented
+    readonly property real dialogScrimOpacity: {
+        let peak = 0
+        for (let i = 0; i < managedDialogs.length; ++i) {
+            const d = managedDialogs[i]
+            if (d && d.visible && d.modal) peak = Math.max(peak, d.opacity)
+        }
+        return peak
+    }
     function pageItem(name) { return name==="settings" ? settingsPage : name==="create" ? createPage : projectsPage }
     function cancelPageMotion() { pageMotion.cancel() }
     Component.onCompleted: hostWindow.previousPage=hostWindow.uiModel.page
@@ -44,8 +52,7 @@ Item {
     PageMotion { id: pageMotion; anchors.fill: pageSurface; model: content.hostWindow.uiModel; pages: [projectsPage,createPage,settingsPage] }
     SmoothRectangle {
         anchors.fill: parent; z: 30
-        color: "#96000000"; opacity: content.hostWindow.nativeDialogActive?1:0; visible: opacity>0
-        Behavior on opacity { NumberAnimation { duration: content.hostWindow.uiModel.settings.animations?180:0; easing.type: Easing.OutCubic } }
+        color: "#96000000"; opacity: content.dialogScrimOpacity; visible: opacity>0.001
     }
     LicenseWindow { id: licenseDialog; model: content.hostWindow.uiModel; hostWindow: content.hostWindow }
     CreditWindow { id: creditDialog; model: content.hostWindow.uiModel; hostWindow: content.hostWindow }
@@ -130,7 +137,7 @@ Item {
         }
         function onSettingsChanged() { if (!content.hostWindow.uiModel.settings.animations) pageMotion.cancel() }
         function onPresentationRequested(command, data) {
-            if (command === "startupReady") { pageMotion.begin(null,content.hostWindow.pageItem(content.hostWindow.uiModel.page)); projectsPage.restartDriveCounter(); content.hostWindow.revealSplash() }
+            if (command === "startupReady") { content.hostWindow.revealContent(); pageMotion.begin(null,content.hostWindow.pageItem(content.hostWindow.uiModel.page)); projectsPage.restartDriveCounter() }
             else if (command === "newProject") createPopup.open()
             else if (command === "showDialog") {
                 if (data.kind==="license") licenseDialog.open()

@@ -114,6 +114,12 @@ def extract_archive(path,destination,*,members=None):
         import rarfile
         with rarfile.RarFile(path) as source:source.extractall(destination,members=selected)
     elif path.lower().endswith('.pac'):
+        if os.environ.get("RAK_NATIVE_BACKEND", "auto").lower() != "python":
+            from core.native_backend import native_module_path, pac_extract
+
+            if native_module_path("pac_extract_json") is not None:
+                pac_extract(path, destination, selected=sorted(selected) if selected is not None else None)
+                return True, destination
         from core.archive_document import ArchiveReader
         with ArchiveReader(path) as source:
             for entry in source._pac_entries():

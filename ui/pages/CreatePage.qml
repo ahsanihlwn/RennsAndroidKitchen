@@ -35,7 +35,7 @@ Item {
     }
     Flickable {
         objectName: "createScroll"
-        x: 20; y: 77; width: parent.width - 40; height: Math.max(0, parent.height - 155)
+        x: 20; y: 77; width: parent.width - 40; height: Math.max(0, parent.height - 77 - footer.height - 22)
         clip: true; contentHeight: form.height + 24; boundsBehavior: Flickable.StopAtBounds
         Column {
             id: form
@@ -99,7 +99,7 @@ Item {
             objectName: "createBackButton"
             actionVisible: page.model.hasProjects
             width: 99; height: 32; colors: page.c; text: page.s.btn_back
-            iconSource: page.model.icon("arrow_right", page.c.FG2); iconWidth: 15; iconHeight: 15
+            iconSource: page.model.icon("arrow_right", page.c.BTN_SEC_FG || page.c.FG); iconWidth: 15; iconHeight: 15
             animatePress: page.model.settings.animations; onClicked: page.model.back()
         }
         ActionButton {
@@ -113,7 +113,7 @@ Item {
             objectName: "confirmProjectButton"
             width: 116; height: 32; colors: page.c; primary: true; enabled: page.canCreate
             text: page.s.btn_confirm_project
-            iconSource: page.model.icon("check_white", enabled ? page.c.FG_BLUE : page.c.a30); iconWidth: 15; iconHeight: 15
+            iconSource: page.model.icon("check_white", enabled ? (page.c.BTN_PRIMARY_FG || page.c.FG_BRIGHT) : (page.c.BTN_PRIMARY_DISABLED_FG || page.c.a30)); iconWidth: 15; iconHeight: 15
             animatePress: page.model.settings.animations
             onClicked: page.model.dispatch("createProject", {"name": name.text.trim(), "port1": port1.text.trim(), "port2": page.portMode === 2 ? port2.text.trim() : "", "mode": page.portMode})
         }

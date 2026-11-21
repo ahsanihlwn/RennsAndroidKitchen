@@ -114,44 +114,46 @@ class CreditWindow(QDialog):
         lay.addWidget(handle)
         lay.addSpacing(16)
         lay.addWidget(_sep())
-        lay.addSpacing(14)
+        lay.addSpacing(16)
 
-        oss_title = _lbl(t("crd_open_source"), size=11, color=_th.FG_MUTED)
-        oss_title.setAlignment(Qt.AlignCenter)
-        lay.addWidget(oss_title)
+        badge_row = QHBoxLayout()
+        badge_row.setContentsMargins(0, 0, 0, 0)
+        badge_lbl = QLabel("MPL-2.0")
+        badge_lbl.setStyleSheet(f"""
+            color: {_th.FG_BLUE};
+            font-size: 11px; font-weight: 600;
+            background: {_th.accent(0.12)};
+            border: 1px solid {_th.accent(0.25)};
+            border-radius: 4px; padding: 2px 10px;
+        """)
+        badge_lbl.setAlignment(Qt.AlignCenter)
+        badge_row.addStretch()
+        badge_row.addWidget(badge_lbl)
+        badge_row.addStretch()
+        lay.addLayout(badge_row)
+        lay.addSpacing(10)
+
+        mpl_title = _lbl("Mozilla Public License 2.0", size=12, color=_th.FG, bold=True)
+        mpl_title.setAlignment(Qt.AlignCenter)
+        lay.addWidget(mpl_title)
         lay.addSpacing(8)
 
-        oss_entries = [
-            ("sdat2img", "Convert dat to img",            "xpirt",  "https://github.com/xpirt/sdat2img"),
-            ("img2sdat", "Convert img to sparse dat",     "xpirt",  "https://github.com/xpirt/img2sdat"),
-            ("fspatch",  "Patch fs_config before unpack", "Affggh", "https://github.com/affggh/fspatch"),
-        ]
+        mpl_notice = _lbl(t("lic_notice"), size=11, color=_th.FG_MUTED)
+        mpl_notice.setAlignment(Qt.AlignCenter)
+        lay.addWidget(mpl_notice)
+        lay.addSpacing(8)
 
-        for name, desc, author, url in oss_entries:
-            row = QHBoxLayout()
-            row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(6)
+        mpl_link = _lbl(
+            f"<a href='https://www.mozilla.org/en-US/MPL/2.0/' style='color:{_th.FG_BLUE}; text-decoration:none;'>mozilla.org/MPL/2.0</a>",
+            size=11, color=_th.FG_MUTED,
+        )
+        mpl_link.setAlignment(Qt.AlignCenter)
+        mpl_link.setOpenExternalLinks(True)
+        mpl_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        mpl_link.setCursor(Qt.PointingHandCursor)
+        lay.addWidget(mpl_link)
 
-            dot = QLabel("·")
-            dot.setStyleSheet(f"color: {_th.accent(0.5)}; font-size:14px; background:transparent; border:none;")
-            dot.setFixedWidth(12)
-            dot.setAlignment(Qt.AlignCenter)
-
-            link_html = (
-                f"<a href='{url}' style='color:{_th.FG_BLUE}; text-decoration:none;'>{name}</a>"
-                f" <span style='color:{_th.FG_MUTED};'>— {desc} · {author}</span>"
-            )
-            link = _lbl(link_html, size=11, color=_th.FG_MUTED)
-            link.setOpenExternalLinks(True)
-            link.setTextInteractionFlags(Qt.TextBrowserInteraction)
-            link.setCursor(Qt.PointingHandCursor)
-
-            row.addWidget(dot)
-            row.addWidget(link, 1)
-            lay.addLayout(row)
-            lay.addSpacing(4)
-
-        lay.addSpacing(14)
+        lay.addSpacing(16)
         lay.addWidget(_sep())
         lay.addSpacing(14)
 

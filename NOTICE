@@ -6,8 +6,31 @@ License, version 2.0. See LICENSE. The source is available at:
 https://github.com/ahsanihlwn/RennsAndroidKitchen
 
 Third-party files retain their original licenses and copyright notices:
-- core/img2sdat/ and core/sdat2img/: see their LICENSE files and source
-  headers; the AOSP files use Apache-2.0.
+- core/lpunpack/ (lpunpack, lpmake, lp_tools): MIT, Copyright (c) 2026
+  ahsanihlwn. See core/lpunpack/LICENSE.
+- core/ext_cli/: MIT, Copyright (c) 2026 ahsanihlwn. See core/ext_cli/LICENSE.
+- core/make_ext4fs/ (make_ext4fs, img2simg, simg2img): MIT, Copyright (c) 2026
+  ahsanihlwn, with AOSP make_ext4fs/libsparse notice retained in
+  core/make_ext4fs/NOTICE. Rust dependencies (MIT option selected where dual
+  licensed; zlib-rs under the Zlib license) are documented in
+  licenses/MAKE-EXT4FS-THIRD-PARTY.txt.
+- core/pac_extractor/ (pac-extractor): MIT, Copyright (c) 2026 ahsanihlwn.
+  See core/pac_extractor/LICENSE.
+- core/magiskboot/ (magiskboot): MIT, Copyright (c) 2026 ahsanihlwn.
+  See core/magiskboot/LICENSE.
+- core/erofs_rs/ (erofs-rs): MIT, Copyright (c) 2026 erofs-rs contributors,
+  with upstream definitions retained in core/erofs_rs/NOTICE.
+  See core/erofs_rs/LICENSE.
+- core/sdatimg/ (sdatimg): MIT, Copyright (c) 2026 ahsanihlwn.
+  See core/sdatimg/LICENSE.
+- core/brotli_rs/ (brotli-rs): MIT, Copyright (c) 2026 ahsanihlwn, based on
+  Google Brotli (Copyright (c) 2009, 2010, 2013-2016 by the Brotli Authors).
+  See core/brotli_rs/LICENSE.
+- core/platform_tools_rs/ (platform-tools-rs): MIT, Copyright (c) 2026
+  ahsanihlwn (clean-room Rust reimplementation of Android SDK platform-tools
+  37.0.3-16887417: adb, fastboot, mke2fs, make_f2fs, make_f2fs_casefold,
+  etc1tool, hprof-conv, sqlite3, and supporting libraries; bundled SQLite is
+  Public Domain via rusqlite). See core/platform_tools_rs/LICENSE.
 - core/fspatch.py: Apache-2.0, copyright affggh.
 - ui/shaders/liquid_refraction.frag and its compiled .qsb: refraction adapted
   from AndroidLiquidGlass-kmp (Backdrop), Copyright 2025 Kyant, Apache-2.0.

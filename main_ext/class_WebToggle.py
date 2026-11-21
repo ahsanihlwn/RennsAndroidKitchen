@@ -37,7 +37,7 @@ class WebToggle(QWidget):
 
     # Colors yang fixed (KNOB & shadow). BG_ON & BG_OFF dihitung per-paint.
     _KNOB    = QColor(255, 255, 255)
-    _KNOB_SH = QColor(0, 0, 0, 80)
+    _KNOB_SH = QColor(0, 0, 0, 0)
 
     def __init__(self, checked: bool = False, size: QSize = QSize(42, 24),
                  neutral: bool = False):
@@ -86,8 +86,8 @@ class WebToggle(QWidget):
         # track background (lerp antara off dan on)
         # Theme-aware: ON = current accent color, OFF = light overlay
         t       = self._pos
-        bg_on   = _neutral_color(200) if self._neutral else _accent_color(230)
-        bg_off  = _off_color(30)
+        bg_on   = QColor(_th.TOGGLE_ON)
+        bg_off  = QColor(_th.TOGGLE_OFF)
         bg  = QColor(
             int(bg_off.red()   + t * (bg_on.red()   - bg_off.red())),
             int(bg_off.green() + t * (bg_on.green() - bg_off.green())),
@@ -111,7 +111,6 @@ class WebToggle(QWidget):
             canvas.scale(scale, scale)
             canvas.translate(-cx, -cy)
             canvas.drawRoundRect(skia.Rect.MakeXYWH(0, 0, w, h), r, r, fill(bg))
-            canvas.drawOval(skia.Rect.MakeXYWH(kx + 0.5, ky + 1.5, kd, kd), fill(self._KNOB_SH))
             canvas.drawOval(skia.Rect.MakeXYWH(kx, ky, kd, kd), fill(self._KNOB))
 
         ratio = self.devicePixelRatioF()
@@ -143,9 +142,6 @@ class WebToggle(QWidget):
 
         # knob
         # shadow (offset 1px ke bawah)
-        shadow_path = QPainterPath()
-        shadow_path.addEllipse(kx + 0.5, ky + 1.5, kd, kd)
-        p.fillPath(shadow_path, self._KNOB_SH)
 
         knob_path = QPainterPath()
         knob_path.addEllipse(kx, ky, kd, kd)

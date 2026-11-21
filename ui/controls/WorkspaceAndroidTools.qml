@@ -136,6 +136,10 @@ DialogWindow {
                 width: (parent.width-32)*(dialog.backend.flashProgress<0?0:dialog.backend.flashProgress/100)
                 color: dialog.backend.failed?dialog.c.RED_STATUS:dialog.c.accent_hex
                 visible: queueList.count>0
+                Behavior on width {
+                    enabled: dialog.backend.flashProgress >= 0
+                    NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
+                }
             }
             SmoothRectangle {
                 id: queueMarquee
@@ -182,7 +186,7 @@ DialogWindow {
                     RakField { id: opSize; objectName: "androidPartitionSize"; width: parent.width; height: 30; fillColor: dialog.c.BG3; edgeColor: dialog.c.b12; labelColor: dialog.c.FG; placeholderText: "e.g. size or 1.5 GB or 0x4000000"; font.pixelSize: 11 }
                     Row {
                         spacing: 8; visible: dialog.operation==="create" && dialog.backend.hasSlot
-                        RakSwitch { id: appendSlot; width: 30; height: 17; accentColor: dialog.c.accent_hex; offColor: dialog.c.offToggle; animationsEnabled: dialog.model.settings.animations }
+                        RakSwitch { id: appendSlot; width: 30; height: 17; animationsEnabled: dialog.model.settings.animations }
                         RakLabel { text: "Auto-append slot _"+dialog.backend.slot; font.pixelSize: 10; color: dialog.c.FG3 }
                     }
                     Row {

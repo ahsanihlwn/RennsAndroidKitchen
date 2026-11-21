@@ -91,7 +91,7 @@ class EffectLevelTests(unittest.TestCase):
 
     def test_blur_radius_defaults_migrates_validates_and_survives_effect_switches(self):
         self.load({'effect_level': 'medium'})
-        self.assertEqual(self.theme.blur_radius, 6)
+        self.assertEqual(self.theme.blur_radius, 17)
         for radius in (0, 12, 26):
             self.theme.set_blur_radius(radius)
             for level in ('high', 'low', 'medium'):
@@ -105,7 +105,7 @@ class EffectLevelTests(unittest.TestCase):
                 self.theme.set_blur_radius(value)
             save.assert_not_called()
         self.load({'blur_radius': 'invalid', 'effect_level': 'high'})
-        self.assertEqual(self.theme.blur_radius, 6)
+        self.assertEqual(self.theme.blur_radius, 17)
 
     def test_shared_dropdowns_sync_and_remove_listeners_when_destroyed(self):
         with patch.object(control, "theme", self.theme):

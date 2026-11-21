@@ -215,8 +215,60 @@ def iter_pac_entries(
 
 
 def list_pac(pac_path: str | os.PathLike[str]) -> PacListing:
-    header = read_pac_header(pac_path)
-    entries = list(iter_pac_entries(pac_path, header=header))
+    path = os.fspath(pac_path)
+    if os.environ.get("RAK_NATIVE_BACKEND", "auto").lower() != "python":
+        try:
+            from core.native_backend import native_module_path, pac_list
+
+            if native_module_path("pac_list_json") is not None:
+                data = pac_list(path)
+                h = data["header"]
+                header = PacHeader(
+                    path=path,
+                    version=h["version"],
+                    size=h["size"],
+                    actual_size=h["actual_size"],
+                    product_name=h["product_name"],
+                    firmware_name=h["firmware_name"],
+                    partition_count=h["partition_count"],
+                    partitions_list_start=h["partitions_list_start"],
+                    mode=h["mode"],
+                    flash_type=h["flash_type"],
+                    nand_strategy=h["nand_strategy"],
+                    is_nv_backup=h["is_nv_backup"],
+                    nand_page_type=h["nand_page_type"],
+                    product_alias=h["product_alias"],
+                    oma_dm_product_flag=h["oma_dm_product_flag"],
+                    is_oma_dm=h["is_oma_dm"],
+                    is_preload=h["is_preload"],
+                    reserved=0,
+                    magic=h["magic"],
+                    crc1=h["crc1"],
+                    crc2=h["crc2"],
+                )
+                entries = [
+                    PacEntry(
+                        index=e["index"],
+                        partition_name=e["partition_name"],
+                        file_name=e["file_name"],
+                        reserved_file_name=e["reserved_file_name"],
+                        size=e["size"],
+                        data_offset=e["data_offset"],
+                        file_flag=e["file_flag"],
+                        check_flag=e["check_flag"],
+                        can_omit_flag=e["can_omit_flag"],
+                        address_count=e["address_count"],
+                        address=e["address"],
+                        reserved=0,
+                        header_length=e["header_length"],
+                    )
+                    for e in data["entries"]
+                ]
+                return PacListing(header=header, entries=entries)
+        except OSError as exc:
+            raise PacFormatError(str(exc)) from exc
+    header = read_pac_header(path)
+    entries = list(iter_pac_entries(path, header=header))
     return PacListing(header=header, entries=entries)
 
 

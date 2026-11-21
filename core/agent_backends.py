@@ -62,7 +62,7 @@ def launch_arguments(provider, model='', session='', *, effort='',workspace_dirs
         for path in dict.fromkeys(workspace_dirs):args+=['--add-dir',path]
     if model: args += ['--model', model]
     if session: args += ['--conversation', session]
-    if effort:args+=['--effort',effort]
+    if effort: args += ['--effort', str(effort).strip()]
     return args
 
 
@@ -74,10 +74,11 @@ def parse_agy_models(text):
         match = re.match(r'^\s*([a-zA-Z0-9][a-zA-Z0-9._/-]+)(?:\t+| {2,})(.+?)\s*$', line)
         if not match: continue
         raw_id, raw_label = match[1], match[2]
+        raw_label = re.sub(r'\s*[\(\[]thinking[\)\]]', '', raw_label, flags=re.IGNORECASE).strip()
         effort_match = re.search(r'\s*\((low|medium|high|xhigh|max)\)$', raw_label, re.IGNORECASE)
         if effort_match:
             effort = effort_match.group(1).lower()
-            clean_label = raw_label[:effort_match.start()].rstrip()
+            clean_label = re.sub(r'\s*[\(\[]thinking[\)\]]', '', raw_label[:effort_match.start()], flags=re.IGNORECASE).strip()
             clean_id = re.sub(rf'-{effort}$', '', raw_id, flags=re.IGNORECASE)
             if clean_id in seen:
                 row = seen[clean_id]

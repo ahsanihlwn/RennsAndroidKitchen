@@ -2,7 +2,7 @@
 import QtQuick
 
 Text {
-    id: label
+    id: rootLabel
     property string toolTip: ""
     property bool transformed: false
     color: "#c9d1d9"
@@ -12,6 +12,12 @@ Text {
     renderType: transformed ? Text.CurveRendering : Text.NativeRendering
     textFormat: Text.AutoText
     verticalAlignment: Text.AlignVCenter
-    HoverHandler { id: hover; enabled: label.toolTip.length>0 }
-    HoverTip { label: label.toolTip; hovering: hover.hovered }
+    Loader {
+        active: rootLabel.toolTip.length > 0
+        anchors.fill: parent
+        sourceComponent: Item {
+            HoverHandler { id: hover }
+            HoverTip { label: rootLabel.toolTip; hovering: hover.hovered }
+        }
+    }
 }

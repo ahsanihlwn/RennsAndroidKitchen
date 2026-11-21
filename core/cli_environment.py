@@ -13,8 +13,18 @@ def describe(cwd,owner=None):
     tools={}
     for name in ('sed','grep','diff','head','tail','wc'):
         path=resolve_tool(name);tools[name]={'available':bool(path),'path':path}
-    for name in ('make_ext4fs.exe','mkfs.erofs.exe','dump.erofs.exe','lpunpack.exe','brotli.exe','magiskboot.exe'):
-        path=resolve_binary(BIN_DIR,name);tools[name]={'available':bool(path),'path':path}
+    from core.native_tools import is_native_tool
+    for name in (
+        'make_ext4fs.exe', 'img2simg.exe', 'simg2img.exe',
+        'ext_cli.exe', 'lpunpack.exe', 'lpmake.exe',
+        'mkfs.erofs.exe', 'dump.erofs.exe', 'brotli.exe', 'magiskboot.exe',
+        'adb.exe', 'fastboot.exe',
+    ):
+        path=resolve_binary(BIN_DIR,name)
+        entry={'available':bool(path),'path':path}
+        if path and is_native_tool(name):
+            entry['backend']='rak_native'
+        tools[name]=entry
     from core.apktool_tool import resolve_java,is_apktool_available,is_signer_available
     java=resolve_java();tools['java']={'available':bool(java),'path':java}
     for name in ('apktool.jar','apksigner.jar'):

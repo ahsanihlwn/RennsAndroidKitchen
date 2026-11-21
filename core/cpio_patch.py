@@ -8,7 +8,6 @@ import hashlib
 import json
 import os
 import shutil
-from core import kitchen_process as subprocess
 from pathlib import Path
 
 try:
@@ -34,27 +33,28 @@ def _sha_file(path: Path) -> str:
 
 
 def _run_cpio(magiskboot: Path, dec: Path, command: str | list[str]) -> None:
+    """Run one or more cpio sub-commands using the native magiskboot backend.
 
+    The `magiskboot` argument is kept for call-site compatibility but is
+    ignored — the native in-process implementation is always used.
+    """
     if isinstance(command, str):
         cmd_args = [command]
     else:
-        cmd_args = command
+        cmd_args = list(command)
     if not cmd_args:
         return
-    proc = subprocess.run(
-        [str(magiskboot), "cpio", dec.name, *cmd_args],
-        cwd=str(dec.parent),
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        creationflags=CREATE_NO_WINDOW,
-    )
-    if proc.returncode != 0:
-        cmd_repr = cmd_args[0] if len(cmd_args) == 1 else f"{len(cmd_args)} commands"
-        raise CpioPatchError(
-            f"magiskboot cpio {cmd_repr!r} failed (exit {proc.returncode}): "
-            f"{(proc.stdout or '').strip()}"
-        )
+    try:
+        from core import native_backend as _nb
+        result = _nb.boot_cpio(str(dec), cmd_args)
+        if not result.get("ok", False):
+            exit_code = result.get("exit_code", 1)
+            cmd_repr = cmd_args[0] if len(cmd_args) == 1 else f"{len(cmd_args)} commands"
+            raise CpioPatchError(
+                f"magiskboot cpio {cmd_repr!r} failed (exit {exit_code})"
+            )
+    except ImportError:
+        raise CpioPatchError("rak_native not available; cannot run cpio natively")
 
 
 def _read_cpio_config(config_path: Path) -> "list[tuple[str, str]]":

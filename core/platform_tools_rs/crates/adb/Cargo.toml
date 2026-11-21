@@ -1,0 +1,30 @@
+[package]
+name = "adb"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Clean-room MIT Android Debug Bridge (adb) CLI client and host server daemon"
+
+[[bin]]
+name = "adb"
+path = "src/main.rs"
+
+[dependencies]
+base64.workspace = true
+brotli-rs.workspace = true
+bytes.workspace = true
+getrandom.workspace = true
+lz4_flex.workspace = true
+nusb.workspace = true
+pt-common = { path = "../pt-common" }
+rsa.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+zstd.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

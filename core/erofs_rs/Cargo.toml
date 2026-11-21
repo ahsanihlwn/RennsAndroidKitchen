@@ -1,0 +1,34 @@
+[package]
+name = "erofs-rs"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Rust implementation of EROFS inspection, extraction, packing, verification, direct in-place editing, and compaction tools"
+readme = "README.md"
+
+[lib]
+name = "erofs_rs"
+path = "src/lib.rs"
+
+[[bin]]
+name = "erofs-rs"
+path = "src/main.rs"
+
+[dependencies]
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+lz4_flex = { version = "0.14", default-features = false }
+lzma-rust2 = { version = "0.25", default-features = false, features = ["std", "encoder"] }
+rayon = "1.12"
+regex = "1.13"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+thiserror = "2.0"
+xxhash-rust = { version = "0.8", features = ["xxh32"] }
+zstd = "0.14"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"

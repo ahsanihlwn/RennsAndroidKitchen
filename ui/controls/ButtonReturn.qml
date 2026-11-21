@@ -14,7 +14,7 @@ Item {
         scale: returning.popup.returnCaptionScale
         // Keep the settled morph underneath the incoming opaque button.
         // Fading both layers attenuates the same glyph twice (25% at midpoint).
-        opacity: (returning.popup.returnToSelection ? 1 : Motion.opacity(returning.popup.progress,0,1,[[.12,0],[.55,1]]))*returning.popup.returnUnderlay
+        opacity: (returning.popup.returnToSelection ? 1 : (returning.popup.springMotion ? Motion.opacity(returning.popup.progress,0,1,[[.12,0],[.55,1]]) : Motion.clamp((returning.popup.progress-.16)/.42)))*returning.popup.returnUnderlay
         sourceComponent: !returning.popup.sourceItem ? null
             : typeof returning.popup.sourceItem.returnCaption!=="undefined" ? returning.popup.sourceItem.returnCaption
             : typeof returning.popup.sourceItem.morphCaption!=="undefined" ? returning.popup.sourceItem.morphCaption : null

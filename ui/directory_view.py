@@ -8,9 +8,25 @@ NODE_ROLE=int(Qt.UserRole)+5000
 DUMMY_ROLE=int(Qt.UserRole)+5001
 
 
+class _LazyItemModel(QStandardItemModel):
+    """QStandardItemModel that creates EntryPresentation on first read."""
+    def __init__(self,view,parent=None):
+        super().__init__(parent);self._view=view
+    def data(self,index,role=Qt.DisplayRole):
+        if role==ENTRY_ROLE:
+            value=super().data(index,role)
+            if value is not None:return value
+            node_id=super().data(index,NODE_ROLE)
+            if node_id is None:return None
+            node=self._view.nodes.get(node_id)
+            if node is None:return None
+            return self._view.owner._presentation_for(node)
+        return super().data(index,role)
+
+
 class DirectoryView:
     def __init__(self,owner):
-        self.owner=owner;self.enabled=False;self.nodes={};self.model=QStandardItemModel(owner);self.reset()
+        self.owner=owner;self.enabled=False;self.nodes={};self.model=_LazyItemModel(self,owner);self.reset()
     def reset(self):
         for node in self.nodes.values():
             node.view_items=None;node.view_dummy=False
@@ -26,11 +42,10 @@ class DirectoryView:
         return self.model.invisibleRootItem() if node is self.owner._root else node.view_items[0]
     def items(self,node,*,dummy=False):
         if node.view_items is not None:return node.view_items
-        presentation=self.owner._presentation_for(node)
         self.nodes[id(node)]=node
         items=[QStandardItem(text) for text in node.texts];node.view_items=items
         for column,item in enumerate(items):
-            item.setData(id(node),NODE_ROLE);item.setData(presentation,ENTRY_ROLE)
+            item.setData(id(node),NODE_ROLE)
             if dummy:item.setData(True,DUMMY_ROLE)
             flags=Qt.NoItemFlags if dummy or node.empty else self.owner.flags(self.owner._index(node,column))
             if not self.owner._may_have_children(node):flags|=Qt.ItemNeverHasChildren

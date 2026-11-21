@@ -4,7 +4,7 @@ from core.app_paths import APP_ROOT, ASSET_CACHE_DIR, CACHE_DIR, ensure_app_layo
 from core.proc_util import CREATE_NO_WINDOW
 print("[CORE STAGE] CACHE INIT")
 
-CACHE_VERSION = "v173"   # refresh icon assets in the isolated asset cache
+CACHE_VERSION = "v174"   # refresh icon assets in the isolated asset cache
 CACHE_MARK = os.path.join(ASSET_CACHE_DIR, f".ready_{CACHE_VERSION}")
 
 def hide_folder(path):
@@ -123,10 +123,20 @@ def ensure_cache():
 
     print("[CACHE] rebuilding asset cache")
 
-    # Only copied assets are disposable. Project cache and user state live in
-    # sibling AppData folders and must survive an asset cache rebuild.
+    # Only icons/textures and cache markers are rebuilt here; sibling avatar
+    # cache (including downloaded google.png) is managed independently.
     if os.path.exists(ASSET_CACHE_DIR):
-        shutil.rmtree(ASSET_CACHE_DIR, ignore_errors=True)
+        for entry in os.listdir(ASSET_CACHE_DIR):
+            if entry == "avatar":
+                continue
+            entry_path = os.path.join(ASSET_CACHE_DIR, entry)
+            if os.path.isdir(entry_path):
+                shutil.rmtree(entry_path, ignore_errors=True)
+            else:
+                try:
+                    os.remove(entry_path)
+                except OSError:
+                    pass
 
     os.makedirs(ASSET_CACHE_DIR, exist_ok=True)
 

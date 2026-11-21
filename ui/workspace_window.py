@@ -29,7 +29,8 @@ class QuickWorkspace(QObject):
     closed = Signal()
 
     def __init__(self, project, p1, p2=None, *, preferences, profile_provider=None,
-                 settings_path=None, terminal_factory=None, enable_private_services=True, parent=None):
+                 settings_path=None, terminal_factory=None, enable_private_services=True,
+                 qml_engine=None, qml_component=None, parent=None):
         super().__init__(parent)
         global _registered
         if not _registered:
@@ -53,22 +54,35 @@ class QuickWorkspace(QObject):
                                         enable_private_services=enable_private_services,parent=self, **options)
         from core.error_reporting import register_error_presenter
         register_error_presenter(self.session)
-        self.engine = QQmlApplicationEngine(self)
         self.diagnostics = []
+        self._qml_component = qml_component
+        if qml_engine is not None and qml_component is not None:
+            self.engine = qml_engine
+            self.engine.setParent(self)
+        else:
+            self.engine = QQmlApplicationEngine(self)
         self.engine.warnings.connect(lambda errors: self.diagnostics.extend(error.toString() for error in errors))
         self.engine.rootContext().setContextProperty("rakPreferences", preferences)
         self.engine.rootContext().setContextProperty("rakAgentControls", self.session.agentControls)
-        self.engine.addImageProvider("icons", IconProvider())
-        self.engine.addImageProvider("rak", IconProvider())
-        self.engine.addImageProvider("documents",DocumentImages())
-        self.engine.setInitialProperties({"workspace": self.session, "preferences": preferences})
-        self.engine.load(QUrl.fromLocalFile(str(Path(__file__).with_name("Workspace.qml"))))
-        if not self.engine.rootObjects(): raise RuntimeError("Cannot load native workspace: " + "\n".join(self.diagnostics))
-        self.window = self.engine.rootObjects()[0]
+        if self.engine.imageProvider("icons") is None:
+            self.engine.addImageProvider("icons", IconProvider())
+        if self.engine.imageProvider("rak") is None:
+            self.engine.addImageProvider("rak", IconProvider())
+        if self.engine.imageProvider("documents") is None:
+            self.engine.addImageProvider("documents", DocumentImages())
+        if qml_engine is not None and qml_component is not None:
+            self.window = qml_component.createWithInitialProperties({"workspace": self.session, "preferences": preferences})
+            if self.window is None or qml_component.isError():
+                errs = [e.toString() for e in qml_component.errors()] + self.diagnostics
+                raise RuntimeError("Cannot load native workspace: " + "\n".join(errs))
+        else:
+            self.engine.setInitialProperties({"workspace": self.session, "preferences": preferences})
+            self.engine.load(QUrl.fromLocalFile(str(Path(__file__).with_name("Workspace.qml"))))
+            if not self.engine.rootObjects():
+                raise RuntimeError("Cannot load native workspace: " + "\n".join(self.diagnostics))
+            self.window = self.engine.rootObjects()[0]
         self.window.setIcon(QIcon(icon("ic_launcher")))
         self.engine._dialog_stack = DialogStack(self.window)
-        self._compare_window=self.window.findChild(QObject,'workspaceCompareWindow')
-        self.engine._compare_stack=DialogStack(self._compare_window)
         self.session.ready.connect(self._prepared)
         self.session.preparation_status.connect(self.preparation_status)
         self.session.preparation_failed.connect(self.preparation_failed)
@@ -104,7 +118,8 @@ class QuickWorkspace(QObject):
     def reveal(self, callback=None):
         self._begin_entry_transition()
         self.show()
-        self._reveal_duration=.620 if self.session.preferences.settings['animations'] else 0
+        self._reveal_duration=.180 if self.session.preferences.settings['animations'] else 0
+        print(f'[MAIN STAGE] reveal window duration={self._reveal_duration:.3f}s',flush=True)
         self._reveal_started=time.perf_counter()
         self._reveal_callback=callback
         self._reveal_timer=QTimer(self)
@@ -151,11 +166,7 @@ class QuickWorkspace(QObject):
         if hasattr(self,'_reveal_timer'):self._reveal_timer.stop()
         self.session.stop()
         self.engine._dialog_stack.close()
-        self.engine._compare_stack.close()
-        self._compare_window.setProperty('managedClose',False)
-        self.aux_lifetime=WindowLifetime(self._compare_window,(self.session.privateFeatures.compare.web,),self)
-        self.aux_lifetime.finished.connect(self._dispose_main_window)
-        self.aux_lifetime.close()
+        self._dispose_main_window()
 
     def _dispose_main_window(self):
         self.lifetime = WindowLifetime(self.window, self.session.web_sessions(), self)
@@ -164,6 +175,9 @@ class QuickWorkspace(QObject):
 
     def _dispose_engine(self):
         self.window.setProperty("managedClose", False)
+        if self._qml_component is not None:
+            self._qml_component.deleteLater()
+            self._qml_component = None
         engine, self.engine = self.engine, None
         engine.destroyed.connect(self._disposed)
         engine.deleteLater()
