@@ -62,7 +62,7 @@ class CodexProtocol(Protocol):
     def __init__(self,*args,**kwargs):super().__init__(*args,**kwargs);self.items={};self._pending_prompt=None
 
     def start(self):
-        self.rpc('initialize',{'clientInfo':{'name':'renns_kitchen','title':'Renns Android Kitchen','version':'1.0.0'}},self._initialized)
+        self.rpc('initialize',{'clientInfo':{'name':'renns_kitchen','title':'Renns Android Kitchen','version':'2.0.1'}},self._initialized)
 
     def _thread_params(self):
         params={'cwd':self.cwd,'developerInstructions':self.instructions}
@@ -210,7 +210,7 @@ class AcpProtocol(Protocol):
         super().__init__(*args,**kwargs);self.capabilities={};self.configs=[];self._message=0;self.mode=''
 
     def start(self):
-        self.rpc('initialize',{'protocolVersion':1,'clientInfo':{'name':'renns_kitchen','version':'1.0.0'},
+        self.rpc('initialize',{'protocolVersion':1,'clientInfo':{'name':'renns_kitchen','version':'2.0.1'},
             'clientCapabilities':{'fs':{'readTextFile':False,'writeTextFile':False},'terminal':False}},self._initialized)
 
     def _on_load_error(self,text,_raw):

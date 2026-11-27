@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 print("[CORE STAGE] FLAG")
 APP_NAME = "Renns Android Kitchen"
-APP_VERSION = "1.0.0"
+APP_VERSION = "2.0.1"
 APP_VERSION_LABEL = "Public"
 NEOCAT_VERSION = "Model 1.0"
 NEOCAT_LABEL = f"Integrated with NEOCAT AI {NEOCAT_VERSION}"
