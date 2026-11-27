@@ -58,7 +58,7 @@ Item {
         workingDirectory: pane.session ? (pane.session.workingDirectory || "") : ""
         autoStart: (pane.session ? (pane.session.autoStart !== undefined ? pane.session.autoStart : true) : true) && pane.layoutSettled
         wslMode: pane.session ? Boolean(pane.session.wslMode) : false
-        fontFamily: pane.session ? (pane.session.fontFamily || "Cascadia Mono") : "Cascadia Mono"
+        fontFamily: pane.session ? (pane.session.fontFamily || "JetBrains Mono") : "JetBrains Mono"
         fontPixelSize: pane.session ? (pane.session.fontPixelSize || 15) : 15
         cursorShape: pane.session ? (pane.session.cursorShape || "beam") : "beam"
         cursorWidth: pane.session ? (pane.session.cursorWidth || 5.5) : 5.5

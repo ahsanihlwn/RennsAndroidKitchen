@@ -308,9 +308,12 @@ class LauncherApplication(QObject):
             QTimer.singleShot(0, self._spawn_standby_worker)
 
     def _resolve_workspace_command(self, extra_args):
-        is_compiled = getattr(sys, "frozen", False) or "__compiled__" in globals() or (
-            Path(sys.executable).suffix.lower() == ".exe" and
-            not Path(sys.executable).name.lower().startswith("python")
+        exe_name = Path(sys.executable).name.lower()
+        is_python = exe_name.startswith("python") or exe_name.startswith("pypy")
+        is_compiled = (
+            getattr(sys, "frozen", False)
+            or "__compiled__" in globals()
+            or (not is_python and Path(sys.executable).is_file())
         )
         if is_compiled:
             program = sys.executable
@@ -642,7 +645,7 @@ class LauncherApplication(QObject):
             start("windows", lambda: list_windows_disk_usage(include_rotational=False, cached_rows=cached))
         else:
             start("windows", list_windows_disk_usage)
-        if self._services_enabled and time.monotonic() - self._last_wsl_scan >= 60:
+        if sys.platform == "win32" and self._services_enabled and time.monotonic() - self._last_wsl_scan >= 60:
             self._last_wsl_scan = time.monotonic()
             from core.wsl_manager import list_disk_usage, save_disk_usage_cache, update_distro_cache
             def scan_wsl():
@@ -665,6 +668,17 @@ class LauncherApplication(QObject):
             self._startup_disks_ready = True
             self._reveal_startup()
 
+    @staticmethod
+    def _display_drive_name(row: dict) -> str:
+        if row.get("distro"):
+            return "WSL · " + row["distro"]
+        key = str(row.get("key") or "")
+        if key == "/":
+            return "Macintosh HD" if sys.platform == "darwin" else "Root (/)"
+        if key.startswith("/Volumes/"):
+            return key[len("/Volumes/"):] or key
+        return key
+
     def _update_drives(self):
         rows = []
         for index, row in enumerate(self._windows_usage + self._wsl_usage):
@@ -672,7 +686,7 @@ class LauncherApplication(QObject):
             special = bool(row.get("distro"))
             percent = row.get("percent", int(100 * used / total))
             rows.append({**row, "active": theme.project_drive_enabled(row["key"]),
-                         "name": "WSL · " + row["distro"] if special else row["key"],
+                         "name": self._display_drive_name(row),
                          "distro": row.get("distro", ""),
                          "usage": f"{used / 1024**3:.1f} / {total / 1024**3:.1f} GB",
                          "fraction": min(1., max(0., percent / 100)), "percent": percent,

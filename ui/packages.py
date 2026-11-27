@@ -2,6 +2,7 @@
 """Package and WSL operations for native Quick views, without QWidget owners."""
 import json
 import logging
+import sys
 import threading
 import traceback
 from PySide6.QtCore import QObject, Property, Signal, Slot, QThread, QTimer, QUrl
@@ -60,6 +61,10 @@ class PackagesModel(QObject):
     @Property(bool, notify=changed)
     def error(self):
         return self._error
+
+    @Property(bool, constant=True)
+    def showWsl(self):
+        return sys.platform == "win32"
 
     @Property("QVariantMap", notify=changed)
     def wsl(self):
@@ -143,10 +148,14 @@ class PackagesModel(QObject):
             self._loading = False
             self._error = not ok or not result
             self._replace(result if ok else [])
-            self._wsl = {"checking":True}
-            self.changed.emit()
-            if not self._error:
-                self._job(self._wsl_probe,lambda success,value:self._wsl_ready(success,value,generation))
+            if sys.platform == "win32":
+                self._wsl = {"checking":True}
+                self.changed.emit()
+                if not self._error:
+                    self._job(self._wsl_probe,lambda success,value:self._wsl_ready(success,value,generation))
+            else:
+                self._wsl = {"checking":False,"installed":False,"present":False}
+                self.changed.emit()
         self._job(read,ready)
 
     def _replace(self, rows):

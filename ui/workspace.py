@@ -967,6 +967,9 @@ class WorkspaceSession(QObject):
 
     @Slot()
     def probeWsl(self):
+        if sys.platform != "win32":
+            self._wsl_available = False
+            return
         if self._terminal_factory is not TerminalSession:return
         if self._wsl_probe_running or self._wsl_probe_time is not None and time.monotonic()-self._wsl_probe_time<30:return
         self._wsl_probe_running=True

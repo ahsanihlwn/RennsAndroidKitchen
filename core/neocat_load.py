@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
 import shutil
+import sys
 from core import kitchen_process as subprocess
 
 from core.proc_util import CREATE_NO_WINDOW
@@ -18,7 +19,8 @@ _LEGACY_NEOCAT_DIR = os.path.join(APP_ROOT, "neocat")
 
 
 def _hide(path: str):
-
+    if sys.platform != "win32":
+        return
     try:
         subprocess.run(
             ["attrib", "+H", path],

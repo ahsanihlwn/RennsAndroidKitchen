@@ -174,13 +174,47 @@ def terminal_is_ready() -> bool:
 
 
 def project_storage_key(path: str) -> str:
-
-    normalized = ntpath.normpath(str(path or ""))
+    raw = str(path or "").strip()
+    if not raw:
+        return ""
+    # Always recognize Windows UNC WSL paths and drive-letter paths.
+    normalized = ntpath.normpath(raw)
     if normalized.startswith("\\\\"):
         parts = normalized[2:].split("\\")
         if len(parts) >= 2 and parts[0].casefold() in ("wsl$", "wsl.localhost") and parts[1]:
             return f"WSL:{parts[1]}"
-    return ntpath.splitdrive(normalized)[0]
+    drive = ntpath.splitdrive(normalized)[0]
+    if drive:
+        return drive
+    # On macOS/Linux, map POSIX paths to their mounted volume root so drive filters work.
+    if raw.startswith("/"):
+        norm_posix = posixpath.normpath(raw)
+        try:
+            from core.disk_monitor import _posix_drive_keys
+            mounts = _posix_drive_keys()
+            best = ""
+            for mp in mounts:
+                if mp == "/":
+                    if not best:
+                        best = "/"
+                elif norm_posix == mp or norm_posix.startswith(mp + "/"):
+                    if len(mp) > len(best):
+                        best = mp
+            if best:
+                return best
+        except Exception:
+            pass
+        # Fallback without partition list: walk up os.path.ismount on POSIX.
+        cur = norm_posix
+        while cur and cur != "/":
+            try:
+                if os.path.ismount(cur):
+                    return cur
+            except OSError:
+                break
+            cur = posixpath.dirname(cur)
+        return "/"
+    return ""
 
 
 def _parse_disk_usage(text: str) -> dict | None:
@@ -201,7 +235,8 @@ def _parse_disk_usage(text: str) -> dict | None:
 
 
 def list_disk_usage() -> list[dict]:
-
+    if sys.platform != "win32":
+        return []
     result = []
     for distro in dict.fromkeys(list_distros()):
         rc, output = _run(["--distribution", distro, "--exec", "df", "-P", "-k", "/"], timeout=15, probe=True)

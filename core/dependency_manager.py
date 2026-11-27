@@ -312,14 +312,32 @@ class DependencyManager:
     def _extract_zip(self, zip_path: str) -> str:
         extract_dir = tempfile.mkdtemp()
         try:
-
-
             safe_extract_zip(
                 zip_path, extract_dir,
                 max_members=50_000,
                 max_uncompressed_bytes=1024 * 1024 * 1024,
             )
+            if os.name != "nt":
+                self._ensure_posix_executables(extract_dir)
             return extract_dir
         except Exception:
             shutil.rmtree(extract_dir, ignore_errors=True)
             raise
+
+    @staticmethod
+    def _ensure_posix_executables(root: str) -> None:
+        """Restore +x bit on ELF, Mach-O, and shebang scripts extracted from zip archives."""
+        _MAGIC = (b"\x7fELF", b"#!", b"\xcf\xfa\xed\xfe", b"\xfe\xed\xfa\xcf", b"\xca\xfe\xba\xbe")
+        for base, _, files in os.walk(root):
+            for fname in files:
+                fpath = os.path.join(base, fname)
+                try:
+                    if os.path.islink(fpath):
+                        continue
+                    with open(fpath, "rb") as fh:
+                        head = fh.read(4)
+                    if any(head.startswith(m) for m in _MAGIC):
+                        mode = os.stat(fpath).st_mode
+                        os.chmod(fpath, mode | 0o755)
+                except OSError:
+                    pass

@@ -55,21 +55,30 @@ def scanfsdir(folder):  # 读取解包的目录，返回一个字典
                 allfile.append(os.path.join(root,file).replace(folder,os.path.basename(folder)))
     return allfile
 
-def islink(file):
-    if os.name == 'nt':
-        if not os.path.isdir(file):
-            with open(file, 'rb') as f:
-                magic = f.read(12)
-                if magic == b'!<symlink>\xff\xfe':
-                    point =  f.read()
-                    return point.decode("utf-8").replace('\x00','')
-                else:
-                    return False
-    if os.name == 'posix':
-        if os.path.islink(file):
-            return os.readlink(file)
-        else:
+def _read_cygwin_symlink(file):
+    try:
+        if os.path.isdir(file) or os.path.islink(file):
             return False
+        with open(file, 'rb') as f:
+            magic = f.read(12)
+            if magic == b'!<symlink>\xff\xfe':
+                point = f.read()
+                try:
+                    return point.decode("utf-16-le").rstrip('\x00')
+                except UnicodeDecodeError:
+                    return point.decode("utf-8", errors="ignore").replace('\x00', '')
+    except OSError:
+        pass
+    return False
+
+
+def islink(file):
+    if os.path.islink(file):
+        try:
+            return os.readlink(file)
+        except OSError:
+            return False
+    return _read_cygwin_symlink(file)
 
 def fspatch(fsfile, filename, dirpath):  # 接收两个字典对比
     newfs = {}

@@ -5,6 +5,16 @@ import sys
 _DRIVE_CACHE = {}
 
 
+def _existing_ancestor(path: str) -> str:
+    cur = os.path.abspath(path)
+    while cur and not os.path.exists(cur):
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return cur or "."
+
+
 def is_rotational_drive(path: str) -> bool:
 
     if not path:
@@ -12,20 +22,28 @@ def is_rotational_drive(path: str) -> bool:
 
     try:
         abs_path = os.path.abspath(path)
-        drive = os.path.splitdrive(abs_path)[0].upper()
-
-        # Cache check (e.g. "C:" or "D:")
-        if drive in _DRIVE_CACHE:
-            return _DRIVE_CACHE[drive]
-
         if sys.platform == "win32":
-            res = _detect_windows_rotational(drive)
-            _DRIVE_CACHE[drive] = res
+            cache_key = os.path.splitdrive(abs_path)[0].upper()
+            if cache_key in _DRIVE_CACHE:
+                return _DRIVE_CACHE[cache_key]
+            res = _detect_windows_rotational(cache_key)
+            _DRIVE_CACHE[cache_key] = res
             return res
-        elif sys.platform.startswith("linux"):
-            res = _detect_linux_rotational(abs_path)
-            _DRIVE_CACHE[drive] = res
-            return res
+
+        probe = _existing_ancestor(abs_path)
+        st = os.stat(probe)
+        cache_key = f"dev:{st.st_dev}"
+        if cache_key in _DRIVE_CACHE:
+            return _DRIVE_CACHE[cache_key]
+
+        if sys.platform.startswith("linux"):
+            res = _detect_linux_rotational(probe)
+        elif sys.platform == "darwin":
+            res = _detect_macos_rotational(probe)
+        else:
+            res = False
+        _DRIVE_CACHE[cache_key] = res
+        return res
     except Exception:
         pass
 
@@ -101,13 +119,40 @@ def _detect_windows_rotational(drive: str) -> bool:
 def _detect_linux_rotational(path: str) -> bool:
 
     try:
-        stat = os.stat(path)
-        major = os.major(stat.st_dev)
-        minor = os.minor(stat.st_dev)
-        rot_file = f"/sys/dev/block/{major}:{minor}/queue/rotational"
-        if os.path.isfile(rot_file):
-            with open(rot_file, "r") as f:
-                return f.read().strip() == "1"
+        st = os.stat(path)
+        major = os.major(st.st_dev)
+        minor = os.minor(st.st_dev)
+        for rot_file in (
+            f"/sys/dev/block/{major}:{minor}/queue/rotational",
+            f"/sys/dev/block/{major}:{minor}/../queue/rotational",
+        ):
+            if os.path.isfile(rot_file):
+                with open(rot_file, "r", encoding="utf-8") as f:
+                    return f.read().strip() == "1"
+    except Exception:
+        pass
+    return False
+
+
+def _detect_macos_rotational(path: str) -> bool:
+    import subprocess
+    try:
+        df = subprocess.run(
+            ["df", "-P", path],
+            capture_output=True, text=True, timeout=3, check=False,
+        )
+        lines = [ln.strip() for ln in (df.stdout or "").splitlines() if ln.strip()]
+        if len(lines) >= 2:
+            dev = lines[-1].split()[0]
+            if dev.startswith("/dev/"):
+                info = subprocess.run(
+                    ["diskutil", "info", dev],
+                    capture_output=True, text=True, timeout=3, check=False,
+                )
+                for line in (info.stdout or "").splitlines():
+                    low = line.strip().lower()
+                    if low.startswith("solid state:"):
+                        return "no" in low.split(":", 1)[1]
     except Exception:
         pass
     return False

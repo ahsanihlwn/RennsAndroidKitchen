@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import atexit
 import ctypes
-from ctypes import wintypes as wt
 import io
 import logging
 import os
@@ -21,7 +20,10 @@ import threading
 import time
 
 if os.name == 'nt':
+    from ctypes import wintypes as wt
     import msvcrt
+else:
+    wt = None
 
 _log = logging.getLogger(__name__)
 

@@ -59,7 +59,7 @@ FocusScope {
                 id: imagePreview
                 objectName: "agentAttachmentImage"
                 anchors.fill: parent
-                source: chip.isImage ? (chip.preview.previewUrl || (chip.attachment && chip.attachment.path ? ("file:///" + chip.attachment.path.replace(/\\/g, "/")) : "")) : ""
+                source: chip.isImage ? (chip.preview.previewUrl || (chip.attachment && chip.attachment.path ? (chip.attachment.path.indexOf("/") === 0 ? ("file://" + chip.attachment.path) : ("file:///" + chip.attachment.path.replace(/\\/g, "/"))) : "")) : ""
                 sourceSize: Qt.size(112, 112)
                 fillMode: Image.PreserveAspectCrop
                 asynchronous: true

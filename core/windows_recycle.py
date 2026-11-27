@@ -2,10 +2,15 @@
 from __future__ import annotations
 
 import ctypes as ct
+import datetime
 import ntpath
 import os
+import posixpath
 import re
+import shutil
+import stat
 import sys
+import urllib.parse
 import uuid
 from contextlib import contextmanager
 
@@ -130,8 +135,179 @@ def _recycled_item(path):
         _release(root)
 
 
-def validate_handle(handle):
+def _posix_trash_dirs(platform: str | None = None) -> tuple[str, str | None]:
+    """Return (files_dir, info_dir_or_none) for macOS (~/.Trash) or Linux (XDG Trash)."""
+    plat = sys.platform if platform is None else platform
+    override = (os.environ.get("RAK_TRASH_DIR") or "").strip()
+    if plat == "darwin":
+        files_dir = os.path.abspath(os.path.expanduser(override)) if override else os.path.join(os.path.expanduser("~"), ".Trash")
+        return files_dir, None
+    if override:
+        base = os.path.abspath(os.path.expanduser(override))
+    else:
+        xdg = (os.environ.get("XDG_DATA_HOME") or "").strip()
+        data_home = os.path.expanduser(xdg) if xdg else os.path.join(os.path.expanduser("~"), ".local", "share")
+        base = os.path.join(data_home, "Trash")
+    return os.path.join(base, "files"), os.path.join(base, "info")
 
+
+def _is_posix_handle(handle) -> bool:
+    if not isinstance(handle, dict):
+        return False
+    plat = handle.get("platform")
+    if plat in ("darwin", "linux", "posix"):
+        return True
+    if plat == "win32":
+        return False
+    return sys.platform != "win32"
+
+
+def _posix_validate_handle(handle) -> str:
+    plat = handle.get("platform") or ("darwin" if sys.platform == "darwin" else "linux")
+    files_dir, info_dir = _posix_trash_dirs(plat)
+    fs_path = os.path.abspath(str(handle.get("filesystem_path", "")))
+    files_root = os.path.abspath(files_dir)
+    if not fs_path or os.path.dirname(fs_path) != files_root or os.path.basename(fs_path) in ("", ".", ".."):
+        raise RecycleError("Invalid Trash item location.")
+    if info_dir is not None and handle.get("info_path"):
+        info_path = os.path.abspath(str(handle.get("info_path", "")))
+        info_root = os.path.abspath(info_dir)
+        if os.path.dirname(info_path) != info_root or not info_path.endswith(".trashinfo"):
+            raise RecycleError("Invalid Trash metadata reference.")
+    return fs_path
+
+
+def _posix_unique_name(files_dir: str, info_dir: str | None, base_name: str) -> str:
+    clean = (base_name or "project").replace("/", "_").replace("\0", "_")
+    if clean in (".", ".."):
+        clean = "project"
+    candidate = clean
+    for attempt in range(100):
+        dest = os.path.join(files_dir, candidate)
+        info = os.path.join(info_dir, f"{candidate}.trashinfo") if info_dir else None
+        if not os.path.lexists(dest) and (info is None or not os.path.lexists(info)):
+            return candidate
+        candidate = f"{clean}-{uuid.uuid4().hex[:8]}"
+    raise RecycleError("Could not allocate a unique Trash entry name.")
+
+
+def _posix_move(src: str, dst: str) -> None:
+    try:
+        os.rename(src, dst)
+    except OSError:
+        shutil.move(src, dst)
+
+
+def _posix_rmtree(path: str) -> None:
+    def _on_error(func, subpath, _exc):
+        try:
+            os.chmod(subpath, stat.S_IRWXU)
+            parent = os.path.dirname(subpath)
+            if parent:
+                os.chmod(parent, stat.S_IRWXU)
+        except OSError:
+            pass
+        func(subpath)
+
+    shutil.rmtree(path, onerror=_on_error)
+
+
+def _posix_recycle(path: str, *, on_recycled=None, platform: str | None = None) -> dict:
+    plat = ("darwin" if sys.platform == "darwin" else "linux") if platform is None else platform
+    abs_path = os.path.abspath(path)
+    if abs_path in ("/", "") or not os.path.isdir(abs_path) or os.path.islink(abs_path):
+        raise RecycleError("The project folder is missing or is a symbolic link.")
+    files_dir, info_dir = _posix_trash_dirs(plat)
+    try:
+        os.makedirs(files_dir, exist_ok=True)
+        if info_dir is not None:
+            os.makedirs(info_dir, exist_ok=True)
+    except OSError as exc:
+        raise RecycleError(f"System Trash is unavailable: {exc}") from exc
+
+    name = _posix_unique_name(files_dir, info_dir, os.path.basename(abs_path))
+    dest = os.path.join(files_dir, name)
+    info_path = os.path.join(info_dir, f"{name}.trashinfo") if info_dir else ""
+
+    if info_path:
+        encoded = urllib.parse.quote(abs_path, safe="/")
+        stamp = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            with open(info_path, "w", encoding="utf-8") as fh:
+                fh.write(f"[Trash Info]\nPath={encoded}\nDeletionDate={stamp}\n")
+        except OSError as exc:
+            raise RecycleError(f"Could not write Trash metadata: {exc}") from exc
+
+    try:
+        _posix_move(abs_path, dest)
+    except OSError as exc:
+        if info_path:
+            try:
+                os.unlink(info_path)
+            except OSError:
+                pass
+        raise RecycleError(f"Could not move project to Trash: {exc}") from exc
+
+    handle = {
+        "platform": plat,
+        "parsing_name": dest,
+        "filesystem_path": dest,
+        "info_path": info_path,
+        "original_path": abs_path,
+    }
+    _posix_validate_handle(handle)
+    if on_recycled:
+        on_recycled(handle)
+    return handle
+
+
+def _posix_restore(handle: dict, original_path: str) -> None:
+    src = _posix_validate_handle(handle)
+    original_path = os.path.abspath(original_path)
+    if os.path.lexists(original_path):
+        raise RecycleError("The original project location is already occupied. Move or rename that folder first.")
+    parent = os.path.dirname(original_path)
+    if not os.path.isdir(parent):
+        raise RecycleError("The original parent folder is unavailable. Reconnect the drive or recreate the parent folder.")
+    if not os.path.exists(src):
+        raise RecycleError("This project is no longer in Trash.")
+    try:
+        _posix_move(src, original_path)
+    except OSError as exc:
+        raise RecycleError(f"Could not restore project from Trash: {exc}") from exc
+    if not os.path.isdir(original_path):
+        raise RecycleError("Could not restore the project folder.")
+    info_path = handle.get("info_path")
+    if info_path and os.path.lexists(info_path):
+        try:
+            os.unlink(info_path)
+        except OSError:
+            pass
+
+
+def _posix_purge(handle: dict) -> None:
+    src = _posix_validate_handle(handle)
+    if os.path.lexists(src):
+        try:
+            if os.path.isdir(src) and not os.path.islink(src):
+                _posix_rmtree(src)
+            else:
+                os.unlink(src)
+        except OSError as exc:
+            raise RecycleError(f"Could not permanently remove this Trash item: {exc}") from exc
+    info_path = handle.get("info_path")
+    if info_path and os.path.lexists(info_path):
+        try:
+            os.unlink(info_path)
+        except OSError:
+            pass
+    if os.path.lexists(src):
+        raise RecycleError("Could not permanently remove this Trash item.")
+
+
+def validate_handle(handle):
+    if _is_posix_handle(handle):
+        return _posix_validate_handle(handle)
     path = ntpath.normpath(str(handle.get("filesystem_path", "")))
     parsing = str(handle.get("parsing_name", ""))
     if not re.fullmatch(r"[A-Za-z]:\\\$Recycle\.Bin\\S-1-[0-9-]+\\\$R[^\\]+", path, re.IGNORECASE):
@@ -264,9 +440,11 @@ def _operate(mode, source, *, destination=None, name=None, on_recycled=None):
 
 
 def recycle(path, *, on_recycled=None):
+    if sys.platform != "win32":
+        return _posix_recycle(path, on_recycled=on_recycled)
     path = os.path.abspath(path)
     drive, tail = ntpath.splitdrive(path)
-    if sys.platform != "win32" or not drive or drive.startswith("\\\\") or tail in ("", "\\"):
+    if not drive or drive.startswith("\\\\") or tail in ("", "\\"):
         raise RecycleError("Windows Recycle Bin is unavailable for this project location.")
     kernel = ct.WinDLL("kernel32")
     kernel.GetDriveTypeW.argtypes = [_WSTR]
@@ -325,6 +503,8 @@ def _sanitize_source_attributes(path):
 
 
 def restore(handle, original_path):
+    if _is_posix_handle(handle):
+        return _posix_restore(handle, original_path)
     validate_handle(handle)
     original_path = os.path.abspath(original_path)
     if os.path.lexists(original_path):
@@ -338,6 +518,8 @@ def restore(handle, original_path):
 
 
 def purge(handle):
+    if _is_posix_handle(handle):
+        return _posix_purge(handle)
     validate_handle(handle)
     _operate("purge", handle["filesystem_path"])
     if os.path.lexists(handle["filesystem_path"]):

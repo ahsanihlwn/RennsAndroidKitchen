@@ -1,14 +1,31 @@
 # SPDX-License-Identifier: MPL-2.0
 """Bake Qt Quick shaders for Direct3D, OpenGL, Vulkan and Metal."""
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+
+
+def _find_qsb(pyside_dir: Path) -> Path:
+    name = "qsb.exe" if sys.platform == "win32" else "qsb"
+    candidates = [
+        pyside_dir / name,
+        pyside_dir / "Qt" / "libexec" / name,
+        pyside_dir / "Qt" / "bin" / name,
+    ]
+    for cand in candidates:
+        if cand.is_file():
+            return cand
+    found = shutil.which(name)
+    if found:
+        return Path(found)
+    return candidates[0]
 
 
 def build_shaders(*, force=False):
     import PySide6
     root=Path(__file__).resolve().parents[1]
-    qsb=Path(PySide6.__path__[0])/('qsb.exe' if sys.platform=='win32' else 'qsb')
+    qsb=_find_qsb(Path(PySide6.__path__[0]))
     sources=sorted(path for path in (root/'ui/shaders').iterdir() if path.suffix in ('.frag','.vert'))
     for source in sources:
         target=source.with_suffix(source.suffix+'.qsb')

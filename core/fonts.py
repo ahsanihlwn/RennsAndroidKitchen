@@ -63,6 +63,20 @@ def load_fonts() -> str:
         return ""
 
     _LOADED = True
+    if sys.platform != "win32":
+        from PySide6.QtGui import QFont
+        QFont.insertSubstitutions(
+            "Consolas",
+            [JETBRAINS_MONO_FAMILY, "SF Mono", "Menlo", "DejaVu Sans Mono", "monospace"],
+        )
+        QFont.insertSubstitutions(
+            "Cascadia Mono",
+            [JETBRAINS_MONO_FAMILY, "SF Mono", "Menlo", "DejaVu Sans Mono", "monospace"],
+        )
+        QFont.insertSubstitutions(
+            "Segoe UI",
+            [POPPINS_FAMILY, "SF Pro Text", "Inter", "Ubuntu", "Cantarell", "sans-serif"],
+        )
     # Pilih family bernama 'Poppins' bila ada, jika tidak ambil yang pertama.
     family = POPPINS_FAMILY if POPPINS_FAMILY in families else (
         sorted(families)[0] if families else POPPINS_FAMILY

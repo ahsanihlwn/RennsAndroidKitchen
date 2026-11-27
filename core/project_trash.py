@@ -188,8 +188,23 @@ class ProjectTrash:
 
     @staticmethod
     def _drive_available(path):
-        drive, _ = os.path.splitdrive(os.path.abspath(path))
-        return os.path.isdir(drive + os.sep) if drive else os.path.isdir(os.path.dirname(path))
+        abs_path = os.path.abspath(path)
+        drive, _ = os.path.splitdrive(abs_path)
+        if drive:
+            return os.path.isdir(drive + os.sep)
+        # macOS removable volumes live under /Volumes/<Name>
+        norm = abs_path.replace("\\", "/")
+        if norm.startswith("/Volumes/"):
+            parts = norm.split("/")
+            if len(parts) >= 3 and parts[2]:
+                return os.path.isdir(f"/Volumes/{parts[2]}")
+        # Linux removable mounts commonly live under /media/<user>/<vol> or /run/media/<user>/<vol>
+        for prefix, depth in (("/run/media/", 5), ("/media/", 4)):
+            if norm.startswith(prefix):
+                parts = norm.split("/")
+                if len(parts) >= depth:
+                    return os.path.isdir("/".join(parts[:depth]))
+        return os.path.isdir(os.path.dirname(abs_path)) or os.path.isdir("/")
 
     def delete(self, identifier):
 

@@ -1,17 +1,37 @@
 # SPDX-License-Identifier: MPL-2.0
-# Generated app data lives under %LOCALAPPDATA%/RennsAndroidKitchen.
+# Generated app data lives under the OS-appropriate user data directory:
+#   Windows: %LOCALAPPDATA%/RennsAndroidKitchen
+#   macOS:   ~/Library/Application Support/RennsAndroidKitchen
+#   Linux:   $XDG_DATA_HOME/RennsAndroidKitchen (or ~/.local/share/RennsAndroidKitchen)
 from __future__ import annotations
 
 import hashlib
 import os
 import re
 import shutil
+import sys
 
 
-APP_ROOT = os.path.join(
-    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-    "RennsAndroidKitchen",
-)
+def resolve_app_root(platform: str | None = None, env: dict[str, str] | None = None) -> str:
+    """Return the platform-native RennsAndroidKitchen user data directory."""
+    environ = os.environ if env is None else env
+    override = (environ.get("RAK_APP_DATA_DIR") or "").strip()
+    if override:
+        return os.path.abspath(os.path.expanduser(override))
+
+    plat = sys.platform if platform is None else platform
+    home = os.path.expanduser("~")
+    if plat == "win32":
+        base = environ.get("LOCALAPPDATA") or home
+        return os.path.join(base, "RennsAndroidKitchen")
+    if plat == "darwin":
+        return os.path.join(home, "Library", "Application Support", "RennsAndroidKitchen")
+    xdg = (environ.get("XDG_DATA_HOME") or "").strip()
+    base = os.path.expanduser(xdg) if xdg else os.path.join(home, ".local", "share")
+    return os.path.join(base, "RennsAndroidKitchen")
+
+
+APP_ROOT = resolve_app_root()
 BIN_DIR = os.path.join(APP_ROOT, "bin")
 APP_DIR = os.path.join(APP_ROOT, "app")
 DATA_DIR = os.path.join(APP_ROOT, "data")

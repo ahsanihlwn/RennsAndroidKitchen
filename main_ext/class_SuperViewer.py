@@ -20,11 +20,7 @@ print("[MAIN STAGE] SUPERVIEW")
 SUPER_NAME_RE = re.compile(r"^\s*Name:\s+([a-zA-Z0-9_]+)")
 SUPER_GROUP_RE = re.compile(r"^\s*Group:\s+([a-zA-Z0-9_]+)")
 
-BIN_PATH = os.path.join(
-    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-    "RennsAndroidKitchen",
-    "bin"
-)
+from core.app_paths import BIN_DIR as BIN_PATH
 
 from core.binary_handler import resolve_binary
 from main_ext.class_DeferredCloseViewer import DeferredCloseViewer

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import time
 import uuid
 
@@ -12,6 +13,20 @@ from core.binary_handler import resolve_external_binary
 from core.command_context import OperationError
 from core.native_backend import oem_detect_magic, oem_extract, oem_inspect
 from core.proc_util import CREATE_NO_WINDOW
+
+
+def _resolve_f2fs_tool(*names: str) -> str | None:
+    for stem in names:
+        candidates = (f"{stem}.exe", stem) if os.name == "nt" else (stem, f"{stem}.exe")
+        for cand in candidates:
+            found = resolve_external_binary(BIN_DIR, cand)
+            if found:
+                return found
+        if os.name != "nt":
+            found = shutil.which(stem)
+            if found:
+                return found
+    return None
 
 OEM_CONTAINER_KINDS = frozenset({
     "OZIP",
@@ -79,10 +94,10 @@ def extract_container(path: str, out_dir: str | None = None, selected: list[str]
 def unpack_f2fs(img_path: str, out_dir: str | None = None) -> str:
     if not os.path.isfile(img_path):
         raise FileNotFoundError(img_path)
-    tool = resolve_external_binary(BIN_DIR, "extract.f2fs.exe") or resolve_external_binary(BIN_DIR, "imgkit.exe")
+    tool = _resolve_f2fs_tool("extract.f2fs", "imgkit")
     if not tool:
         raise OperationError(
-            "F2FS extraction tool (extract.f2fs.exe / imgkit.exe) is not installed in bin/."
+            "F2FS extraction tool (extract.f2fs / imgkit) is not installed in bin/ or PATH."
         )
     if out_dir is None:
         out_dir = os.path.dirname(img_path)
@@ -125,10 +140,10 @@ def repack_f2fs(
 ) -> str:
     if not os.path.isdir(folder):
         raise FileNotFoundError(folder)
-    mkfs = resolve_external_binary(BIN_DIR, "mkfs.f2fs.exe")
-    sload = resolve_external_binary(BIN_DIR, "sload.f2fs.exe")
+    mkfs = _resolve_f2fs_tool("mkfs.f2fs")
+    sload = _resolve_f2fs_tool("sload.f2fs")
     if not mkfs or not sload:
-        raise OperationError("F2FS repack requires mkfs.f2fs.exe and sload.f2fs.exe in bin/.")
+        raise OperationError("F2FS repack requires mkfs.f2fs and sload.f2fs in bin/ or PATH (e.g. f2fs-tools).")
 
     base = os.path.dirname(os.path.abspath(folder))
     part = os.path.basename(os.path.abspath(folder))

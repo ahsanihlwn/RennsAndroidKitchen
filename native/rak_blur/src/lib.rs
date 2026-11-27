@@ -17,12 +17,15 @@ mod platform {
     #[link(name = "opengl32")]
     extern "system" {
         fn wglGetProcAddress(name: *const c_char) -> *const c_void;
-        pub fn wglGetCurrentContext() -> *const c_void;
+        fn wglGetCurrentContext() -> *const c_void;
     }
     #[link(name = "kernel32")]
     extern "system" {
         fn GetModuleHandleA(name: *const c_char) -> *const c_void;
         fn GetProcAddress(module: *const c_void, name: *const c_char) -> *const c_void;
+    }
+    pub unsafe fn current_context() -> usize {
+        wglGetCurrentContext() as usize
     }
     pub unsafe fn load(name: &str) -> *const c_void {
         let name = CString::new(name).unwrap();
@@ -34,6 +37,188 @@ mod platform {
             GetModuleHandleA(b"opengl32.dll\0".as_ptr().cast()),
             name.as_ptr(),
         )
+    }
+}
+
+#[cfg(target_os = "linux")]
+mod platform {
+    use super::*;
+    use std::sync::OnceLock;
+
+    const RTLD_LAZY: i32 = 1;
+    const RTLD_NOLOAD: i32 = 4;
+
+    extern "C" {
+        fn dlopen(filename: *const c_char, flag: i32) -> *mut c_void;
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+
+    type GetCtxFn = unsafe extern "C" fn() -> *const c_void;
+    type GetProcFn = unsafe extern "C" fn(*const c_char) -> *const c_void;
+
+    struct LinuxGlLoader {
+        egl_ctx: Option<GetCtxFn>,
+        egl_proc: Option<GetProcFn>,
+        glx_ctx: Option<GetCtxFn>,
+        glx_proc: Option<GetProcFn>,
+    }
+
+    unsafe impl Sync for LinuxGlLoader {}
+    unsafe impl Send for LinuxGlLoader {}
+
+    unsafe fn open_any(names: &[&[u8]]) -> *mut c_void {
+        for &lib in names {
+            let h = dlopen(lib.as_ptr().cast(), RTLD_LAZY | RTLD_NOLOAD);
+            if !h.is_null() {
+                return h;
+            }
+        }
+        for &lib in names {
+            let h = dlopen(lib.as_ptr().cast(), RTLD_LAZY);
+            if !h.is_null() {
+                return h;
+            }
+        }
+        ptr::null_mut()
+    }
+
+    fn loader() -> &'static LinuxGlLoader {
+        static LOADER: OnceLock<LinuxGlLoader> = OnceLock::new();
+        LOADER.get_or_init(|| unsafe {
+            let egl = open_any(&[b"libEGL.so.1\0", b"libEGL.so\0"]);
+            let egl_ctx = if !egl.is_null() {
+                let p = dlsym(egl, b"eglGetCurrentContext\0".as_ptr().cast());
+                if !p.is_null() {
+                    Some(std::mem::transmute::<*mut c_void, GetCtxFn>(p))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let egl_proc = if !egl.is_null() {
+                let p = dlsym(egl, b"eglGetProcAddress\0".as_ptr().cast());
+                if !p.is_null() {
+                    Some(std::mem::transmute::<*mut c_void, GetProcFn>(p))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let glx = open_any(&[b"libGLX.so.0\0", b"libGL.so.1\0", b"libGL.so\0"]);
+            let glx_ctx = if !glx.is_null() {
+                let p = dlsym(glx, b"glXGetCurrentContext\0".as_ptr().cast());
+                if !p.is_null() {
+                    Some(std::mem::transmute::<*mut c_void, GetCtxFn>(p))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let glx_proc = if !glx.is_null() {
+                let mut p = dlsym(glx, b"glXGetProcAddressARB\0".as_ptr().cast());
+                if p.is_null() {
+                    p = dlsym(glx, b"glXGetProcAddress\0".as_ptr().cast());
+                }
+                if !p.is_null() {
+                    Some(std::mem::transmute::<*mut c_void, GetProcFn>(p))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            LinuxGlLoader {
+                egl_ctx,
+                egl_proc,
+                glx_ctx,
+                glx_proc,
+            }
+        })
+    }
+
+    pub unsafe fn current_context() -> usize {
+        let l = loader();
+        if let Some(f) = l.egl_ctx {
+            let ctx = f() as usize;
+            if ctx != 0 {
+                return ctx;
+            }
+        }
+        if let Some(f) = l.glx_ctx {
+            let ctx = f() as usize;
+            if ctx != 0 {
+                return ctx;
+            }
+        }
+        0
+    }
+
+    pub unsafe fn load(name: &str) -> *const c_void {
+        let cname = CString::new(name).unwrap();
+        let l = loader();
+        if let (Some(ctx_fn), Some(proc_fn)) = (l.egl_ctx, l.egl_proc) {
+            if !ctx_fn().is_null() {
+                let addr = proc_fn(cname.as_ptr());
+                if !addr.is_null() {
+                    return addr;
+                }
+            }
+        }
+        if let Some(proc_fn) = l.glx_proc {
+            let addr = proc_fn(cname.as_ptr());
+            if !addr.is_null() {
+                return addr;
+            }
+        }
+        if let Some(proc_fn) = l.egl_proc {
+            let addr = proc_fn(cname.as_ptr());
+            if !addr.is_null() {
+                return addr;
+            }
+        }
+        dlsym(ptr::null_mut(), cname.as_ptr()) as *const c_void
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod platform {
+    use super::*;
+
+    #[link(name = "OpenGL", kind = "framework")]
+    extern "C" {
+        fn CGLGetCurrentContext() -> *const c_void;
+    }
+
+    extern "C" {
+        fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+    }
+
+    // macOS <dlfcn.h> defines RTLD_DEFAULT as ((void *) -2).
+    const RTLD_DEFAULT: *mut c_void = (-2isize) as *mut c_void;
+
+    pub unsafe fn current_context() -> usize {
+        CGLGetCurrentContext() as usize
+    }
+
+    pub unsafe fn load(name: &str) -> *const c_void {
+        let cname = CString::new(name).unwrap();
+        dlsym(RTLD_DEFAULT, cname.as_ptr()) as *const c_void
+    }
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+mod platform {
+    use super::*;
+    pub unsafe fn current_context() -> usize {
+        0
+    }
+    pub unsafe fn load(_name: &str) -> *const c_void {
+        ptr::null()
     }
 }
 
@@ -59,7 +244,6 @@ fn kernel(sigma: f32) -> (Vec<f32>, Vec<f32>) {
     (weights, offsets)
 }
 
-#[cfg(windows)]
 struct Engine {
     context: usize,
     program: u32,
@@ -74,7 +258,6 @@ struct Engine {
     pairs: i32,
 }
 
-#[cfg(windows)]
 unsafe fn compile(kind: u32, source: &str) -> Result<u32, String> {
     let shader = gl::CreateShader(kind);
     let source = CString::new(source).unwrap();
@@ -98,10 +281,9 @@ unsafe fn compile(kind: u32, source: &str) -> Result<u32, String> {
     Ok(shader)
 }
 
-#[cfg(windows)]
 impl Engine {
     unsafe fn new() -> Result<Self, String> {
-        let context = platform::wglGetCurrentContext() as usize;
+        let context = platform::current_context();
         if context == 0 {
             return Err("No current Qt OpenGL context".into());
         }
@@ -158,7 +340,7 @@ impl Engine {
         stride: i32,
         sigma: f32,
     ) -> Result<(), String> {
-        if platform::wglGetCurrentContext() as usize != self.context {
+        if platform::current_context() != self.context {
             return Err("Qt GPU context changed".into());
         }
         if source.is_null()
@@ -281,11 +463,10 @@ impl Engine {
     }
 }
 
-#[cfg(windows)]
 impl Drop for Engine {
     fn drop(&mut self) {
         unsafe {
-            if platform::wglGetCurrentContext() as usize == self.context {
+            if platform::current_context() == self.context {
                 gl::DeleteTextures(3, self.textures.as_ptr());
                 gl::DeleteFramebuffers(1, &self.fbo);
                 gl::DeleteVertexArrays(1, &self.vao);
@@ -295,7 +476,6 @@ impl Drop for Engine {
     }
 }
 
-#[cfg(windows)]
 struct State {
     integers: Vec<(u32, i32)>,
     viewport: [i32; 4],
@@ -304,7 +484,6 @@ struct State {
     texture: i32,
     sampler: i32,
 }
-#[cfg(windows)]
 impl State {
     unsafe fn save() -> Self {
         let mut integers = Vec::new();
@@ -364,7 +543,6 @@ impl State {
         }
     }
 }
-#[cfg(windows)]
 impl Drop for State {
     fn drop(&mut self) {
         unsafe {
@@ -419,16 +597,11 @@ pub extern "C" fn rak_blur_error() -> *const c_char {
 }
 #[no_mangle]
 pub unsafe extern "C" fn rak_blur_create() -> *mut c_void {
-    #[cfg(windows)]
-    {
-        match catch_unwind(AssertUnwindSafe(|| Engine::new())) {
-            Ok(Ok(engine)) => return Box::into_raw(Box::new(engine)).cast(),
-            Ok(Err(message)) => error(&message),
-            Err(_) => error("Gaussian initialization panicked"),
-        }
+    match catch_unwind(AssertUnwindSafe(|| Engine::new())) {
+        Ok(Ok(engine)) => return Box::into_raw(Box::new(engine)).cast(),
+        Ok(Err(message)) => error(&message),
+        Err(_) => error("Gaussian initialization panicked"),
     }
-    #[cfg(not(windows))]
-    error("Windows desktop OpenGL loader unavailable");
     ptr::null_mut()
 }
 #[no_mangle]
@@ -441,25 +614,21 @@ pub unsafe extern "C" fn rak_blur_run(
     stride: i32,
     sigma: f32,
 ) -> i32 {
-    #[cfg(windows)]
-    {
-        if handle.is_null() {
-            error("Null Gaussian engine");
-            return 0;
-        }
-        match catch_unwind(AssertUnwindSafe(|| {
-            (&mut *handle.cast::<Engine>()).run(source, output, width, height, stride, sigma)
-        })) {
-            Ok(Ok(())) => return 1,
-            Ok(Err(message)) => error(&message),
-            Err(_) => error("Gaussian rendering panicked"),
-        }
+    if handle.is_null() {
+        error("Null Gaussian engine");
+        return 0;
+    }
+    match catch_unwind(AssertUnwindSafe(|| {
+        (&mut *handle.cast::<Engine>()).run(source, output, width, height, stride, sigma)
+    })) {
+        Ok(Ok(())) => return 1,
+        Ok(Err(message)) => error(&message),
+        Err(_) => error("Gaussian rendering panicked"),
     }
     0
 }
 #[no_mangle]
 pub unsafe extern "C" fn rak_blur_destroy(handle: *mut c_void) {
-    #[cfg(windows)]
     if !handle.is_null() {
         let _ = catch_unwind(AssertUnwindSafe(|| {
             drop(Box::from_raw(handle.cast::<Engine>()))

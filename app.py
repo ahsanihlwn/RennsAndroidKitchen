@@ -23,10 +23,7 @@ if "--rak-cli" in sys.argv[1:2]:
 
 import traceback, logging, threading as _threading
 
-_LOG_DIR = os.path.join(
-    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-    "RennsAndroidKitchen", "logs",
-)
+from core.app_paths import LOG_DIR as _LOG_DIR
 os.makedirs(_LOG_DIR, exist_ok=True)
 logging.basicConfig(
     filename=os.path.join(_LOG_DIR, "crash.log"),

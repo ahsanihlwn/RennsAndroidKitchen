@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 from core import kitchen_process as subprocess
 import zipfile
 
@@ -13,7 +14,7 @@ from core.proc_util import CREATE_NO_WINDOW
 
 BIN_PATH = BIN_DIR
 
-JAVA_NAME = "java.exe"
+JAVA_NAME = "java.exe" if sys.platform == "win32" else "java"
 APKTOOL_JAR = "apktool.jar"
 APKSIGNER_JAR = "apksigner.jar"
 TESTKEY_PK8 = "testkey.pk8"
@@ -44,11 +45,32 @@ def _find(name: str) -> str:
 
 
 def resolve_java() -> str | None:
-    managed = resolve_external_binary(BIN_PATH, JAVA_NAME)
+    java_name = "java.exe" if sys.platform == "win32" else "java"
+    managed = resolve_external_binary(BIN_PATH, java_name)
     if managed and os.path.isfile(managed):
         return managed
-    system = shutil.which(JAVA_NAME)
-    return system if system and os.path.isfile(system) else None
+    java_home = (os.environ.get("JAVA_HOME") or "").strip()
+    if java_home:
+        cand = os.path.join(java_home, "bin", java_name)
+        if os.path.isfile(cand):
+            return cand
+    system = shutil.which(java_name)
+    if system and os.path.isfile(system):
+        return system
+    if sys.platform == "darwin" and os.path.isfile("/usr/libexec/java_home"):
+        try:
+            proc = subprocess.run(
+                ["/usr/libexec/java_home"],
+                text=True, capture_output=True, timeout=5, check=False,
+            )
+            home = (proc.stdout or "").strip()
+            if home:
+                cand = os.path.join(home, "bin", "java")
+                if os.path.isfile(cand):
+                    return cand
+        except Exception:
+            pass
+    return None
 
 
 def find_java() -> str:

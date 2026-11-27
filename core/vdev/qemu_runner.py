@@ -18,10 +18,12 @@ import gzip
 import hashlib
 import json
 import os
+import platform
 import re
 import shutil
 import socket
 import struct
+import sys
 import threading
 import time
 import urllib.request
@@ -362,10 +364,18 @@ def _candidate_sdk_roots() -> list[str]:
     return roots
 
 
-def _android_emu_subdir() -> str:
+def _android_emu_subdirs() -> list[str]:
     if os.name == "nt":
-        return "windows-x86_64"
-    return "linux-x86_64"
+        return ["windows-x86_64"]
+    arch = platform.machine().lower()
+    is_arm64 = arch in ("arm64", "aarch64")
+    if sys.platform == "darwin":
+        return ["darwin-aarch64", "darwin-x86_64"] if is_arm64 else ["darwin-x86_64"]
+    return ["linux-aarch64", "linux-x86_64"] if is_arm64 else ["linux-x86_64"]
+
+
+def _android_emu_subdir() -> str:
+    return _android_emu_subdirs()[0]
 
 
 def _find_upstream_binary(name: str) -> str:
@@ -422,7 +432,7 @@ def _find_upstream_binary(name: str) -> str:
 
 def _find_android_sdk_qemu(arch: str) -> tuple[str, str]:
     """Return (binary_path, emulator_root) for Android SDK's bundled QEMU ranchu binary."""
-    sub = _android_emu_subdir()
+    subdirs = _android_emu_subdirs()
     names = (
         [_exe("qemu-system-aarch64-headless"), _exe("qemu-system-aarch64")]
         if arch in ("arm64", "arm64_32")
@@ -430,11 +440,12 @@ def _find_android_sdk_qemu(arch: str) -> tuple[str, str]:
     )
     for sdk in _candidate_sdk_roots():
         emu = os.path.join(sdk, "emulator")
-        qdir = os.path.join(emu, "qemu", sub)
-        for nm in names:
-            cand = os.path.join(qdir, nm)
-            if os.path.isfile(cand):
-                return os.path.normpath(cand), os.path.normpath(emu)
+        for sub in subdirs:
+            qdir = os.path.join(emu, "qemu", sub)
+            for nm in names:
+                cand = os.path.join(qdir, nm)
+                if os.path.isfile(cand):
+                    return os.path.normpath(cand), os.path.normpath(emu)
     return "", ""
 
 
@@ -442,14 +453,18 @@ def _find_7z_binary() -> str:
     found = shutil.which("7z") or shutil.which("7za")
     if found and os.path.isfile(found):
         return found
-    if os.name == "nt":
-        for cand in (
+    extra = (
+        (
             r"C:\Program Files\7-Zip\7z.exe",
             r"C:\Program Files (x86)\7-Zip\7z.exe",
             os.path.join(BIN_DIR, "7z.exe"),
-        ):
-            if os.path.isfile(cand):
-                return cand
+        )
+        if os.name == "nt"
+        else ("/opt/homebrew/bin/7z", "/usr/local/bin/7z", "/usr/bin/7z", "/usr/bin/7za")
+    )
+    for cand in extra:
+        if os.path.isfile(cand):
+            return cand
     return ""
 
 
@@ -460,7 +475,9 @@ def ensure_qemu_binary(*, on_progress=None, hint_path: str = "") -> tuple[bool, 
         return True, existing
 
     if os.name != "nt":
-        return False, "Upstream QEMU not found. Install `qemu-system-aarch64` via your system package manager."
+        if sys.platform == "darwin":
+            return False, "Upstream QEMU not found. Install it via Homebrew: `brew install qemu`."
+        return False, "Upstream QEMU not found. Install `qemu-system-arm` / `qemu-system-aarch64` via your system package manager."
 
     sevenz = _find_7z_binary()
     if not sevenz:

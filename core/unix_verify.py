@@ -214,8 +214,12 @@ def _gnu(command,options,locate):
     elif command=='wc':
         arguments=[flag for name,flag in (('lines','-l'),('words','-w'),('bytes','-c'),('chars','-m')) if getattr(options,name)]
     else:
-        for name,flag in (('unified','-u'),('brief','-q'),('recursive','-r'),('report_identical_files','-s'),('ignore_case','-i'),('ignore_all_space','-w'),('ignore_space_change','-b'),('ignore_blank_lines','-B'),('strip_trailing_cr','--strip-trailing-cr')):
+        from core.unix_tools import is_gnu_tool
+        diff_is_gnu = (sys.platform != 'darwin') or is_gnu_tool(binary)
+        for name,flag in (('unified','-u'),('brief','-q'),('recursive','-r'),('report_identical_files','-s'),('ignore_case','-i'),('ignore_all_space','-w'),('ignore_space_change','-b'),('ignore_blank_lines','-B')):
             if getattr(options,name):arguments.append(flag)
+        if getattr(options,'strip_trailing_cr') and diff_is_gnu:
+            arguments.append('--strip-trailing-cr')
         if options.context is not None:
             if options.context<0:raise ValueError('diff context must be nonnegative')
             arguments.extend(['-U',str(options.context)])
@@ -237,11 +241,16 @@ def _gnu(command,options,locate):
             if command=='wc':physical=physical.replace(os.sep,'/')
             operands.append(physical);mapping.append((physical,label))
         if command=='diff' and not options.recursive:
-            for _,label in mapping:arguments.extend(['--label',label])
+            for _,label in mapping:arguments.extend(['-L',label])
         if command=='wc':
-            folder=stack.enter_context(tempfile.TemporaryDirectory(prefix='rak-wc-paths-'))
-            manifest=Path(folder)/'files';manifest.write_bytes(b''.join(path.encode('utf-8')+b'\0' for path in operands))
-            invocation=[binary,*arguments,'--files0-from='+manifest.as_posix()]
+            from core.unix_tools import is_gnu_tool
+            use_files0 = (sys.platform != 'darwin') or is_gnu_tool(binary)
+            if use_files0:
+                folder=stack.enter_context(tempfile.TemporaryDirectory(prefix='rak-wc-paths-'))
+                manifest=Path(folder)/'files';manifest.write_bytes(b''.join(path.encode('utf-8')+b'\0' for path in operands))
+                invocation=[binary,*arguments,'--files0-from='+manifest.as_posix()]
+            else:
+                invocation=[binary,*arguments,'--',*operands]
         else:invocation=[binary,*arguments,'--',*operands]
         result=kitchen_process.run(invocation,stdout=kitchen_process.PIPE,stderr=kitchen_process.PIPE,
             text=True,encoding='utf-8',errors='replace',timeout=120,creationflags=CREATE_NO_WINDOW)

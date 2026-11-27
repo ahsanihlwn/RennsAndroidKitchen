@@ -12,7 +12,12 @@ def main():
     target = repo / "build/rak_blur"
     subprocess.run(["cargo", "build", "--release", "--locked", "--manifest-path", str(crate / "Cargo.toml"),
                     "--target-dir", str(target)], check=True, cwd=repo)
-    filename = "rak_blur.dll" if sys.platform == "win32" else "librak_blur.so"
+    if sys.platform == "win32":
+        filename = "rak_blur.dll"
+    elif sys.platform == "darwin":
+        filename = "librak_blur.dylib"
+    else:
+        filename = "librak_blur.so"
     output = repo / "core/native" / filename
     output.parent.mkdir(exist_ok=True)
     shutil.copy2(target / "release" / filename, output)

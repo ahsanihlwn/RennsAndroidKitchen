@@ -574,10 +574,10 @@ def _linux_command(distro):
         if not wsl:
             raise OperationError("Install WSL with a Linux distribution, Python 3, Git and Repo to fetch this GKI build.")
         command = [wsl, *(["--distribution", distro] if distro else []), "--exec"]
-    elif sys.platform.startswith("linux"):
+    elif sys.platform.startswith("linux") or sys.platform == "darwin":
         command = []
     else:
-        raise OperationError("Fetching GKI build inputs requires Linux or Windows with WSL.")
+        raise OperationError("Fetching GKI build inputs requires Linux, macOS, or Windows with WSL.")
     return [*command, "python3", "-u", "-c"]
 
 

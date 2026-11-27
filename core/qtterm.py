@@ -116,28 +116,40 @@ class CInfo(ctypes.Structure):
         ("sel_bg", ctypes.c_uint32),
     ]
 
-def _find_termcore_dll():
+def _termcore_filename(platform: str | None = None) -> str:
+    plat = sys.platform if platform is None else platform
+    if plat == "win32":
+        return "termcore.dll"
+    if plat == "darwin":
+        return "libtermcore.dylib"
+    return "libtermcore.so"
+
+
+def _find_termcore_dll(platform: str | None = None):
+    fname = _termcore_filename(platform)
     root = Path(__file__).resolve().parent.parent
+    exe_dir = Path(sys.executable).parent
     candidates = [
-        root / "build" / "termcore_runtime" / "release" / "termcore.dll",
-        root / "core" / "terminal" / "core" / "target" / "release" / "termcore.dll",
-        root / "core" / "termcore.dll",
-        root / "core" / "terminal" / "build" / "Release" / "termcore.dll",
-        root / "core" / "terminal" / "build" / "cargo" / "release" / "termcore.dll",
-        Path(sys.executable).parent / "termcore.dll",
+        root / "build" / "termcore_runtime" / "release" / fname,
+        root / "core" / "terminal" / "core" / "target" / "release" / fname,
+        root / "core" / fname,
+        root / "core" / "terminal" / "build" / "Release" / fname,
+        root / "core" / "terminal" / "build" / "cargo" / "release" / fname,
+        exe_dir / "core" / fname,
+        exe_dir / fname,
     ]
     existing = [c for c in candidates if c.is_file()]
     if existing:
         newest = max(existing, key=lambda p: p.stat().st_mtime)
         return str(newest)
-    return "termcore.dll"
+    return fname
 
 _lib_path = _find_termcore_dll()
 try:
     _termcore = ctypes.CDLL(_lib_path)
 except Exception as e:
     _termcore = None
-    print(f"[qtterm] WARNING: Failed to load termcore.dll from '{_lib_path}': {e}")
+    print(f"[qtterm] WARNING: Failed to load {_termcore_filename()} from '{_lib_path}': {e}")
 
 if _termcore:
     _termcore.term_new.restype = ctypes.c_void_p
@@ -228,13 +240,20 @@ def _is_modifier_only(k: int) -> bool:
 # ==============================================================================
 
 def _detect_terminal_font() -> str:
+    from PySide6.QtGui import QFontInfo
     if sys.platform == "win32":
-        from PySide6.QtGui import QFontInfo
-        for fam in ("Cascadia Mono", "Cascadia Code", "Consolas"):
-            if QFontInfo(QFont(fam)).family().lower() == fam.lower():
-                return fam
-        return "Consolas"
-    return "monospace"
+        candidates = ("Cascadia Mono", "Cascadia Code", "Consolas")
+        fallback = "Consolas"
+    elif sys.platform == "darwin":
+        candidates = ("JetBrains Mono", "SF Mono", "Menlo", "Monaco")
+        fallback = "Menlo"
+    else:
+        candidates = ("JetBrains Mono", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono")
+        fallback = "monospace"
+    for fam in candidates:
+        if QFontInfo(QFont(fam)).family().lower() == fam.lower():
+            return fam
+    return fallback
 
 
 class Terminal(QQuickPaintedItem):
@@ -651,7 +670,12 @@ class Terminal(QQuickPaintedItem):
 
         prog = self._program.strip()
         if not prog:
-            prog = os.environ.get("COMSPEC", "cmd.exe") if sys.platform == "win32" else os.environ.get("SHELL", "/bin/bash")
+            if sys.platform == "win32":
+                prog = os.environ.get("COMSPEC", "cmd.exe")
+            elif sys.platform == "darwin":
+                prog = os.environ.get("SHELL") or "/bin/zsh"
+            else:
+                prog = os.environ.get("SHELL") or "/bin/bash"
 
         prog_b = prog.encode("utf-8")
         args_b = [a.encode("utf-8") for a in self._arguments]
@@ -1299,12 +1323,19 @@ class Terminal(QQuickPaintedItem):
 
     # ---- Input Events ----
 
-    def _mods_of(self, m: Qt.KeyboardModifiers) -> int:
+    def _mods_of(self, m: Qt.KeyboardModifiers, *, platform: str | None = None) -> int:
+        plat = sys.platform if platform is None else platform
         r = 0
         if m & Qt.KeyboardModifier.ShiftModifier: r |= TM_SHIFT
         if m & Qt.KeyboardModifier.AltModifier: r |= TM_ALT
-        if m & Qt.KeyboardModifier.ControlModifier: r |= TM_CTRL
-        if m & Qt.KeyboardModifier.MetaModifier: r |= TM_SUPER
+        if plat == "darwin":
+            # Qt swaps Control (Cmd) and Meta (physical Ctrl) on macOS.
+            # Translate physical Ctrl -> TM_CTRL so Ctrl+C/D/Z/L work in the PTY.
+            if m & Qt.KeyboardModifier.MetaModifier: r |= TM_CTRL
+            if m & Qt.KeyboardModifier.ControlModifier: r |= TM_SUPER
+        else:
+            if m & Qt.KeyboardModifier.ControlModifier: r |= TM_CTRL
+            if m & Qt.KeyboardModifier.MetaModifier: r |= TM_SUPER
         return r
 
     def keyPressEvent(self, e: QKeyEvent):
@@ -1313,24 +1344,35 @@ class Terminal(QQuickPaintedItem):
             return
         m = e.modifiers()
         k = e.key()
+        is_mac = sys.platform == "darwin"
+        interrupt_mod = Qt.KeyboardModifier.MetaModifier if is_mac else Qt.KeyboardModifier.ControlModifier
+
+        if is_mac and m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_C:
+            self.copy()
+            e.accept()
+            return
+        if is_mac and m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_A:
+            self.selectAll()
+            e.accept()
+            return
         if (m == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier) and k == Qt.Key.Key_C):
             self.copy()
             e.accept()
             return
-        if m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_C and self._info.has_selection:
+        if (not is_mac) and m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_C and self._info.has_selection:
             self.copy()
             self.clearSelection()
             e.accept()
             return
         if self._output_only:
-            if m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_C:
+            if m == interrupt_mod and k == Qt.Key.Key_C:
                 self.interruptRequested.emit()
                 e.accept()
             else:
                 e.ignore()
             return
         if self._native_cmd_running:
-            if m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_C:
+            if m == interrupt_mod and k == Qt.Key.Key_C:
                 if self._native_cancel is not None:
                     try:
                         self._native_cancel.cancel()
@@ -1339,7 +1381,11 @@ class Terminal(QQuickPaintedItem):
                 self.feedText("^C\r\n")
             e.accept()
             return
-        if (m == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier) and k == Qt.Key.Key_V) or (m == Qt.KeyboardModifier.ShiftModifier and k == Qt.Key.Key_Insert):
+        if (
+            (is_mac and m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_V)
+            or (m == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier) and k == Qt.Key.Key_V)
+            or (m == Qt.KeyboardModifier.ShiftModifier and k == Qt.Key.Key_Insert)
+        ):
             self.paste()
             e.accept()
             return

@@ -16,35 +16,44 @@ def _safe_dir_name(name: str) -> str:
 
 
 def try_create_junction(link_path: str, target_path: str) -> bool:
-    """Create an NTFS directory junction on Windows without requiring admin privileges."""
+    """Create an NTFS directory junction on Windows or a directory symlink on POSIX."""
     try:
-        import _winapi
         target_abs = os.path.abspath(target_path)
         link_abs = os.path.abspath(link_path)
-        if os.path.exists(link_abs):
+        if os.path.lexists(link_abs):
             return False
-        _winapi.CreateJunction(target_abs, link_abs)
+        if os.name == "nt":
+            import _winapi
+            _winapi.CreateJunction(target_abs, link_abs)
+            return os.path.isdir(link_abs)
+        os.symlink(target_abs, link_abs, target_is_directory=True)
         return os.path.isdir(link_abs)
     except Exception:
         return False
 
 
 def _remove_junction_or_stub(path: str) -> None:
-    """Remove an NTFS junction or a `.rak_target` stub directory at *path*.
+    """Remove an NTFS junction, POSIX symlink, or `.rak_target` stub directory at *path*.
 
     Only removes the link itself; never touches the target.
     """
     if not os.path.lexists(path):
         return
-    try:
-        # NTFS junctions appear as directories — os.path.islink is False on
-        # older Pythons, but _winapi / os.stat still distinguishes them.
-        import _winapi  # available on CPython/Windows
-        # os.rmdir removes an empty junction without following it.
-        os.rmdir(path)
-        return
-    except Exception:
-        pass
+    if os.path.islink(path):
+        try:
+            os.unlink(path)
+            return
+        except OSError:
+            pass
+    if os.name == "nt":
+        try:
+            # NTFS junctions appear as directories — os.path.islink is False on
+            # older Pythons, but os.rmdir removes a junction without following it.
+            import _winapi  # noqa: F401
+            os.rmdir(path)
+            return
+        except Exception:
+            pass
     # Fallback: try rmdir for an ordinary empty dir (stub case)
     try:
         if os.path.isdir(path):

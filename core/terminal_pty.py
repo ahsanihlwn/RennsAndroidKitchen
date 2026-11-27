@@ -11,6 +11,7 @@ from typing import Optional
 from PySide6.QtCore import QObject, Property, Signal, Slot
 from PySide6.QtGui import QColor
 from core.app_paths import BIN_DIR
+from core.posix_pty import HAS_POSIX_PTY, PosixPty as _PosixPty
 
 try:
     from winpty import PTY
@@ -92,8 +93,11 @@ class PtyProcessManager:
 
     def start(self, cols: int = 80, rows: int = 24, shell_cmd: Optional[str] = None):
 
-        if not HAS_WINPTY:
-            raise RuntimeError("pywinpty is not available in the current environment.")
+        if sys.platform == "win32":
+            if not HAS_WINPTY:
+                raise RuntimeError("pywinpty is not available in the current environment.")
+        elif not HAS_POSIX_PTY:
+            raise RuntimeError("POSIX PTY support is not available in the current environment.")
 
         # Prepare environment: ensure all binary directories from package.json and BIN_PATH are in PATH
         env = os.environ.copy()
@@ -139,7 +143,8 @@ class PtyProcessManager:
             appname = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
             cmdline = shell_cmd or "/k"
         else:
-            appname = os.environ.get("SHELL", "/bin/bash")
+            default_shell = "/bin/zsh" if sys.platform == "darwin" else "/bin/bash"
+            appname = os.environ.get("SHELL") or (default_shell if os.path.isfile(default_shell) else "/bin/sh")
             cmdline = shell_cmd or ""
 
         cols = max(2, cols)
@@ -147,24 +152,30 @@ class PtyProcessManager:
         self._last_cols = cols
         self._last_rows = rows
 
-        # Use native Windows ConPTY for proper process resize events (Node.js, Claude Code, etc.)
-        backend = getattr(winpty_enums.Backend, "ConPTY", None) if winpty_enums else None
-        try:
-            self.pty = PTY(cols, rows, backend=backend)
-            if backend is not None and sys.platform == "win32":
-                self.windows_pty = {"backend": "conpty", "buildNumber": sys.getwindowsversion().build}
-        except Exception:
-            self.pty = PTY(cols, rows)
-            self.windows_pty = {}
-
-        # Format env string as required by winpty: key=val\0key=val\0\0
-        env_strs = [f"{k}={v}" for k, v in env.items()]
-        env_blob = "\0".join(env_strs) + "\0\0"
-
         # Ensure cwd exists
         launch_dir = self.cwd if os.path.isdir(self.cwd) else os.getcwd()
-        if not self.pty.spawn(appname, cmdline=cmdline, cwd=launch_dir, env=env_blob):
-            raise RuntimeError(f"Could not start the terminal shell: {appname}")
+
+        if sys.platform == "win32":
+            # Use native Windows ConPTY for proper process resize events (Node.js, Claude Code, etc.)
+            backend = getattr(winpty_enums.Backend, "ConPTY", None) if winpty_enums else None
+            try:
+                self.pty = PTY(cols, rows, backend=backend)
+                if backend is not None:
+                    self.windows_pty = {"backend": "conpty", "buildNumber": sys.getwindowsversion().build}
+            except Exception:
+                self.pty = PTY(cols, rows)
+                self.windows_pty = {}
+
+            # Format env string as required by winpty: key=val\0key=val\0\0
+            env_strs = [f"{k}={v}" for k, v in env.items()]
+            env_blob = "\0".join(env_strs) + "\0\0"
+            if not self.pty.spawn(appname, cmdline=cmdline, cwd=launch_dir, env=env_blob):
+                raise RuntimeError(f"Could not start the terminal shell: {appname}")
+        else:
+            self.windows_pty = {}
+            self.pty = _PosixPty(cols, rows)
+            if not self.pty.spawn(appname, cmdline=cmdline, cwd=launch_dir, env=env):
+                raise RuntimeError(f"Could not start the terminal shell: {appname}")
 
         self._running = True
         self._thread = threading.Thread(target=self._reader_loop, daemon=True)
@@ -335,8 +346,8 @@ class TerminalBridge(QObject):
             if raw_line:
                 self.commandSubmitted.emit(raw_line)
 
-            # Auto-convert Unix / Bash command if bash_mode is enabled
-            if getattr(self.pty_mgr, "bash_mode", False) and raw_line:
+            # Auto-convert Unix / Bash command if bash_mode is enabled on Windows cmd.exe
+            if sys.platform == "win32" and getattr(self.pty_mgr, "bash_mode", False) and raw_line:
                 from core.unix_bash_converter import UnixBashConverter
                 conv = UnixBashConverter.convert(raw_line)
                 if conv and conv != raw_line:

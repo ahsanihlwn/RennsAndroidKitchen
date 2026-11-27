@@ -1,9 +1,29 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
+import shlex
+import shutil
+import sys
 
 
 def _quote(path: str) -> str:
-    return '"' + path.replace('"', r'\"') + '"'
+    if sys.platform == "win32":
+        return '"' + path.replace('"', r'\"') + '"'
+    return shlex.quote(path)
+
+
+_WINDOWS_ONLY_EXTS = frozenset({".bat", ".cmd", ".vbs", ".ahk"})
+
+
+def _python_cmd() -> tuple[str, ...]:
+    if sys.platform == "win32":
+        return ("python",)
+    return ("python3",) if shutil.which("python3") else ("python",)
+
+
+def _ps1_cmd() -> tuple[str, ...]:
+    if sys.platform == "win32":
+        return ("powershell", "-ExecutionPolicy", "Bypass", "-File")
+    return ("pwsh", "-File")
 
 
 RUNNABLE_EXT_COMMANDS = {
@@ -53,12 +73,24 @@ RUNNABLE_EXT_COMMANDS = {
 
 
 def is_runnable_file(filepath: str) -> bool:
-    return os.path.splitext(filepath or "")[1].lower() in RUNNABLE_EXT_COMMANDS
+    ext = os.path.splitext(filepath or "")[1].lower()
+    if ext not in RUNNABLE_EXT_COMMANDS:
+        return False
+    if sys.platform != "win32" and ext in _WINDOWS_ONLY_EXTS:
+        return False
+    return True
 
 
 def build_run_command(filepath: str) -> str | None:
     ext = os.path.splitext(filepath or "")[1].lower()
-    prefix = RUNNABLE_EXT_COMMANDS.get(ext)
-    if prefix is None:
+    if ext not in RUNNABLE_EXT_COMMANDS:
         return None
+    if sys.platform != "win32" and ext in _WINDOWS_ONLY_EXTS:
+        return None
+    if ext in (".py", ".pyw"):
+        prefix = _python_cmd()
+    elif ext == ".ps1":
+        prefix = _ps1_cmd()
+    else:
+        prefix = RUNNABLE_EXT_COMMANDS[ext]
     return " ".join([*prefix, _quote(os.path.abspath(filepath))]).strip()

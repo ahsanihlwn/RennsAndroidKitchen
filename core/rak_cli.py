@@ -2200,19 +2200,33 @@ def _call_ipc_server(cmd_line, cwd="", *, argv=None):
         if not port or not token:
             return None
 
-        # Cek apakah PID GUI masih hidup di Windows
-        if sys.platform == "win32" and pid:
-            import ctypes
-            kernel32 = ctypes.windll.kernel32
-            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-            h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-            if not h_proc:
+        # Cek apakah PID GUI masih hidup (Windows & POSIX)
+        if pid:
+            alive = True
+            if sys.platform == "win32":
+                import ctypes
+                kernel32 = ctypes.windll.kernel32
+                PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                h_proc = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+                if not h_proc:
+                    alive = False
+                else:
+                    kernel32.CloseHandle(h_proc)
+            else:
+                try:
+                    os.kill(int(pid), 0)
+                except ProcessLookupError:
+                    alive = False
+                except PermissionError:
+                    alive = True
+                except OSError:
+                    alive = False
+            if not alive:
                 try:
                     os.remove(ipc_file)
                 except Exception:
                     pass
                 return None
-            kernel32.CloseHandle(h_proc)
 
         live_endpoint = True
         socket_timeout=600.0
@@ -2247,7 +2261,14 @@ def _call_ipc_server(cmd_line, cwd="", *, argv=None):
 def _bundled_cli_path():
 
     executable = os.path.abspath(sys.executable)
-    if os.path.basename(executable).lower() == "run.exe" and os.path.isfile(executable):
+    base = os.path.basename(executable).lower()
+    if sys.platform == "win32":
+        if base == "run.exe" and os.path.isfile(executable):
+            return executable
+        return None
+    if base in ("run", "rennsandroidkitchen") and os.path.isfile(executable):
+        return executable
+    if (getattr(sys, "frozen", False) or "__compiled__" in globals()) and os.path.isfile(executable):
         return executable
     return None
 
@@ -2265,6 +2286,20 @@ def _rak_bat_content(cli_exe=None):
         f'set "PYTHONPATH={_proj_root};%PYTHONPATH%"\r\n'
         f'"{sys.executable}" "{os.path.join(_this_dir, "rak_cli.py")}" %*\r\n'
         "exit /b %ERRORLEVEL%\r\n"
+    )
+
+
+def _rak_sh_content(cli_exe=None):
+    import shlex
+    if cli_exe:
+        return (
+            "#!/usr/bin/env sh\n"
+            f"exec {shlex.quote(cli_exe)} --rak-cli \"$@\"\n"
+        )
+    return (
+        "#!/usr/bin/env sh\n"
+        f"export PYTHONPATH={shlex.quote(_proj_root)}${{PYTHONPATH:+:$PYTHONPATH}}\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(os.path.join(_this_dir, 'rak_cli.py'))} \"$@\"\n"
     )
 
 
@@ -2335,15 +2370,24 @@ def _ensure_user_path_entry(path_entry, prepend=False):
         print(f"[RAK_CLI] PATH launcher registration skipped: {e}")
 
 
-def _write_if_changed(path, content):
+def _write_if_changed(path, content, *, executable=False):
+    changed = True
     try:
         with open(path, "r", encoding="utf-8") as f:
             if f.read() == content:
-                return
+                changed = False
     except OSError:
         pass
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
+    if changed:
+        with open(path, "w", encoding="utf-8", newline="\n" if not content.endswith("\r\n") else None) as f:
+            f.write(content)
+    if executable and os.name != "nt":
+        try:
+            mode = os.stat(path).st_mode
+            if (mode & 0o111) != 0o111:
+                os.chmod(path, mode | 0o755)
+        except OSError:
+            pass
 
 
 def _native_shim_content(cli_exe, tool):
@@ -2361,40 +2405,60 @@ def _native_shim_content(cli_exe, tool):
     )
 
 
+def _native_shim_sh_content(cli_exe, tool):
+    import shlex
+    if cli_exe:
+        return (
+            "#!/usr/bin/env sh\n"
+            f"exec {shlex.quote(cli_exe)} --rak-cli {shlex.quote(tool)} \"$@\"\n"
+        )
+    return (
+        "#!/usr/bin/env sh\n"
+        f"export PYTHONPATH={shlex.quote(_proj_root)}${{PYTHONPATH:+:$PYTHONPATH}}\n"
+        f"exec {shlex.quote(sys.executable)} {shlex.quote(os.path.join(_this_dir, 'rak_cli.py'))} {shlex.quote(tool)} \"$@\"\n"
+    )
+
+
 def ensure_rak_bat():
+    from core.app_paths import BIN_DIR
 
     cli_exe = _bundled_cli_path()
-    bat_content = _rak_bat_content(cli_exe)
+    is_win = sys.platform == "win32"
+    launcher_name = "rak.bat" if is_win else "rak"
+    launcher_content = _rak_bat_content(cli_exe) if is_win else _rak_sh_content(cli_exe)
 
     # 1. Local launcher: source root in development, executable directory in a
     # compiled distribution.
     local_dir = os.path.dirname(os.path.abspath(sys.executable)) if cli_exe else _proj_root
-    local_bat = os.path.join(local_dir, "rak.bat")
+    local_launcher = os.path.join(local_dir, launcher_name)
     try:
-        _write_if_changed(local_bat, bat_content)
+        _write_if_changed(local_launcher, launcher_content, executable=not is_win)
     except Exception:
         pass
 
-    # 2. Persistent command shim used by ordinary CMD/PowerShell windows.
-    app_data = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    bin_dir = os.path.join(app_data, "RennsAndroidKitchen", "bin")
+    # 2. Persistent command shim used by ordinary shells.
+    bin_dir = BIN_DIR
     os.makedirs(bin_dir, exist_ok=True)
-    bin_bat = os.path.join(bin_dir, "rak.bat")
+    bin_launcher = os.path.join(bin_dir, launcher_name)
     try:
-        _write_if_changed(bin_bat, bat_content)
+        _write_if_changed(bin_launcher, launcher_content, executable=not is_win)
         _ensure_user_path_entry(bin_dir)
     except Exception as e:
         print(f"[RAK_CLI] Gagal membuat launcher rak: {e}")
 
     # 3. Native platform-tools shims so bare `adb`, `fastboot`, `sqlite3`, etc.
-    # in RAK Terminal or shells always route to rak_native ahead of legacy .exe files.
+    # in RAK Terminal or shells always route to rak_native ahead of legacy binaries.
     try:
         from core.native_tools import NATIVE_PLATFORM_TOOLS
         native_cli_dir = os.path.join(bin_dir, "native_cli")
         os.makedirs(native_cli_dir, exist_ok=True)
         for tool in NATIVE_PLATFORM_TOOLS:
-            shim_path = os.path.join(native_cli_dir, f"{tool}.cmd")
-            _write_if_changed(shim_path, _native_shim_content(cli_exe, tool))
+            if is_win:
+                shim_path = os.path.join(native_cli_dir, f"{tool}.cmd")
+                _write_if_changed(shim_path, _native_shim_content(cli_exe, tool))
+            else:
+                shim_path = os.path.join(native_cli_dir, tool)
+                _write_if_changed(shim_path, _native_shim_sh_content(cli_exe, tool), executable=True)
         _ensure_user_path_entry(native_cli_dir, prepend=True)
     except Exception as e:
         print(f"[RAK_CLI] Gagal membuat shim native_cli: {e}")

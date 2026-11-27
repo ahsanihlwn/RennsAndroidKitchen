@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
 import subprocess
+import sys
 print("[CORE STAGE] LOCK RECOVERY")
 
 
@@ -40,8 +41,11 @@ def _managed_exe_names(bin_root=None):
     for env_data in data.values():
         for b in env_data.get("binaries", []):
             name = b.get("name", "")
-            if name.lower().endswith(".exe"):
+            low = name.lower()
+            if low.endswith(".exe"):
                 names.add(os.path.splitext(name)[0].lower())
+            elif low and "." not in os.path.basename(low):
+                names.add(os.path.basename(low))
 
     return names
 
@@ -74,10 +78,10 @@ def force_release_managed_tools(bin_root=None, *, only_children=False):
                 continue
         return killed
 
-    if only_children:
+    if only_children or sys.platform != "win32":
         return []
 
-    # Fallback tanpa psutil: taskkill by image name langsung, satu per satu.
+    # Fallback tanpa psutil (Windows only): taskkill by image name langsung, satu per satu.
     for stem in names:
         exe_name = f"{stem}.exe"
         try:

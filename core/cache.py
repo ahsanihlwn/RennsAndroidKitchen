@@ -8,6 +8,8 @@ CACHE_VERSION = "v174"   # refresh icon assets in the isolated asset cache
 CACHE_MARK = os.path.join(ASSET_CACHE_DIR, f".ready_{CACHE_VERSION}")
 
 def hide_folder(path):
+    if sys.platform != "win32":
+        return
     try:
         subprocess.run(
             ["attrib", "+H", path],

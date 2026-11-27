@@ -16,13 +16,20 @@ from core.terminal_pty import PtyProcessManager, TerminalBridge, BIN_PATH
 
 
 def _detect_terminal_font() -> str:
+    from PySide6.QtGui import QFont, QFontInfo
     if sys.platform == "win32":
-        from PySide6.QtGui import QFont, QFontInfo
-        for fam in ("Cascadia Mono", "Cascadia Code", "Consolas"):
-            if QFontInfo(QFont(fam)).family().lower() == fam.lower():
-                return fam
-        return "Consolas"
-    return "monospace"
+        candidates = ("Cascadia Mono", "Cascadia Code", "Consolas")
+        fallback = "Consolas"
+    elif sys.platform == "darwin":
+        candidates = ("JetBrains Mono", "SF Mono", "Menlo", "Monaco")
+        fallback = "Menlo"
+    else:
+        candidates = ("JetBrains Mono", "DejaVu Sans Mono", "Liberation Mono", "Ubuntu Mono")
+        fallback = "monospace"
+    for fam in candidates:
+        if QFontInfo(QFont(fam)).family().lower() == fam.lower():
+            return fam
+    return fallback
 
 
 class TerminalSession(QObject):
@@ -63,7 +70,12 @@ class TerminalSession(QObject):
             self._program = "wsl.exe"
             self._arguments = []
         elif not self._is_process_terminal_manager(self._manager):
-            self._program = os.environ.get("COMSPEC", "cmd.exe") if sys.platform == "win32" else os.environ.get("SHELL", "/bin/bash")
+            if sys.platform == "win32":
+                self._program = os.environ.get("COMSPEC", "cmd.exe")
+            elif sys.platform == "darwin":
+                self._program = os.environ.get("SHELL") or "/bin/zsh"
+            else:
+                self._program = os.environ.get("SHELL") or "/bin/bash"
             self._arguments = []
         else:
             self._program = ""
@@ -297,6 +309,8 @@ class TerminalSession(QObject):
                 return shlex.quote(windows_to_wsl_path(path))
             if os.path.isabs(path) or '\\' in path or '/' in path:
                 path = os.path.normpath(path)
+            if sys.platform != "win32":
+                return shlex.quote(path)
             return '"' + path + '"' if any(ch in path for ch in ' &^()') else path
         value = ' '.join(quote(path) for path in paths if path)
         if value:

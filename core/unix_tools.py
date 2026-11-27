@@ -3,23 +3,87 @@
 import os
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 from core.command_context import OperationError
 
 
+_GNU_CACHE: dict[str, bool] = {}
+
+_DARWIN_BREW_GNUBIN = {
+    "sed": ("gnu-sed",),
+    "grep": ("grep",),
+    "diff": ("diffutils",),
+    "head": ("coreutils",),
+    "tail": ("coreutils",),
+    "wc": ("coreutils",),
+}
+
+
+def _install_hint(tool_name: str) -> str:
+    if sys.platform == "darwin":
+        return f"Install GNU {tool_name} via Homebrew (e.g. `brew install gnu-sed grep coreutils diffutils`)."
+    if sys.platform == "win32":
+        return f"Install the Unix tools package or Git for Windows."
+    return f"Install GNU {tool_name} via your system package manager (coreutils/sed/grep/diffutils)."
+
+
+def is_gnu_tool(binary: str) -> bool:
+    """Return True when *binary* reports GNU in `--version` output."""
+    key = os.path.abspath(binary or "")
+    if key in _GNU_CACHE:
+        return _GNU_CACHE[key]
+    from core import kitchen_process
+    from core.proc_util import CREATE_NO_WINDOW
+    ok = False
+    try:
+        res = kitchen_process.run(
+            [binary, "--version"],
+            stdout=kitchen_process.PIPE,
+            stderr=kitchen_process.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=5,
+            creationflags=CREATE_NO_WINDOW,
+        )
+        ok = res.returncode == 0 and "gnu" in (res.stdout or "").lower()
+    except Exception:
+        ok = False
+    _GNU_CACHE[key] = ok
+    return ok
+
+
 def resolve_tool(name):
     from core.app_paths import BIN_DIR
-    from core.binary_handler import resolve_external_binary
-    installed=resolve_external_binary(BIN_DIR,name+'.exe' if os.name=='nt' else name)
-    if installed:return installed
-    installed=shutil.which(name)
-    if installed:return installed
+    try:
+        from core.binary_handler import resolve_external_binary
+        installed = resolve_external_binary(BIN_DIR, name + '.exe' if os.name == 'nt' else name)
+        if installed:
+            return installed
+    except ImportError:
+        pass
+    # On macOS, /usr/bin ships BSD sed/grep/wc/head/tail/diff. Prefer Homebrew GNU tools
+    # when installed so GNU-specific options (--sandbox, --files0-from, etc.) work natively.
+    if sys.platform == "darwin":
+        gnu_alias = shutil.which("g" + name)
+        if gnu_alias:
+            return gnu_alias
+        for formula in _DARWIN_BREW_GNUBIN.get(name, ()):
+            for prefix in ("/opt/homebrew/opt", "/usr/local/opt"):
+                candidate = Path(prefix) / formula / "libexec" / "gnubin" / name
+                if candidate.is_file():
+                    return str(candidate)
+    installed = shutil.which(name)
+    if installed:
+        return installed
     # Git for Windows ships real GNU tools outside its public cmd/ PATH entry.
-    git=shutil.which('git')
-    if git and os.name=='nt':
+    git = shutil.which('git')
+    if git and os.name == 'nt':
         for root in list(Path(git).parents)[:3]:
-            candidate=root/'usr/bin'/(name+'.exe')
-            if candidate.is_file():return str(candidate)
+            candidate = root / 'usr/bin' / (name + '.exe')
+            if candidate.is_file():
+                return str(candidate)
     return None
 
 
@@ -27,11 +91,14 @@ def sed(text,expressions,*,extended=False,quiet=False,separate=False):
     from core import kitchen_process
     from core.proc_util import CREATE_NO_WINDOW
     binary=resolve_tool('sed')
-    if not binary:raise OperationError('GNU sed is unavailable. Install the Unix tools package or Git for Windows; no partial sed emulation was used.')
-    arguments=[binary,'--sandbox']
+    if not binary:raise OperationError(f'GNU sed is unavailable. {_install_hint("sed")} No partial sed emulation was used.')
+    gnu = is_gnu_tool(binary) if sys.platform == "darwin" else True
+    arguments=[binary]
+    if gnu:
+        arguments.append('--sandbox')
     if extended:arguments.append('-E')
     if quiet:arguments.append('-n')
-    if separate:arguments.append('-s')
+    if separate and gnu:arguments.append('-s')
     # MSYS argument parsing can consume unquoted BRE backslashes in Windows
     # command lines. A script file keeps the exact GNU program as data.
     with tempfile.TemporaryDirectory(prefix='rak-sed-') as temporary:
@@ -55,7 +122,7 @@ def grep(arguments,files):
     from core import kitchen_process
     from core.proc_util import CREATE_NO_WINDOW
     binary=resolve_tool('grep')
-    if not binary:raise OperationError('GNU grep is unavailable. Install the Unix tools package or Git for Windows.')
+    if not binary:raise OperationError(f'GNU grep is unavailable. {_install_hint("grep")}')
     output=[];matched=False
     # Keep Windows command lines bounded, including projects with long paths.
     batches=[];batch=[];size=0

@@ -1,6 +1,6 @@
 # Renns Android Kitchen
 
-**Open, edit, and rebuild Android firmware on Windows.**
+**Open, edit, and rebuild Android firmware on Windows, macOS, and Linux.**
 
 Created by **rennsproject!**
 
@@ -77,9 +77,9 @@ RAK identifies supported image types from their contents, so the available actio
 
 ## Get started
 
-RAK is built for Windows 10 and 11.
+RAK supports **Windows 10/11**, **macOS**, and **Linux**.
 
-1. Download a Windows release ZIP, extract it, keep the extracted files together, and launch `run.exe`.
+1. Download a release archive for your platform (`.zip` on Windows, `.tar.gz` on macOS/Linux), extract it, keep the extracted files together, and launch `run.exe` (Windows) or `./run` (macOS/Linux).
 2. Create or open a project and add your firmware files, such as `payload.bin`, `super.img`, or partition `.img` files.
 3. Right-click a file to see the actions available for its format. Choose **Mount** on a supported image to inspect it in place, or **Unpack Image** to work with an extracted folder.
 4. Edit the files you need. Repack an extracted filesystem or build a flashable ZIP when you're done.
@@ -88,51 +88,71 @@ Some operations use helper binaries managed by RAK. Install them through the app
 
 ### Run from source
 
-Use **Python 3.14.x** on Windows. Building the Rust backend also requires Visual Studio C++ tools and a Windows SDK; see the [Rust Windows prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html).
+Use **Python 3.14.x** and a Rust toolchain (**Cargo/rustc >= 1.85**):
 
-```powershell
+- **Windows**: Visual Studio C++ tools and Windows SDK ([Rust Windows prerequisites](https://rust-lang.github.io/rustup/installation/windows-msvc.html)).
+- **macOS**: Xcode Command Line Tools (`xcode-select --install`). For full GNU `sed`/`grep`/`wc`/`diff` parity, optionally install `brew install gnu-sed grep coreutils diffutils`.
+- **Linux**: C/C++ compiler (`build-essential` / `gcc` / `clang`) and standard Qt6 X11/Wayland runtime libraries (`libgl1`, `libegl1`, `libxkbcommon0`, `libxcb-cursor0`, `libfontconfig1`).
+
+```bash
 git clone https://github.com/ahsanihlwn/RennsAndroidKitchen.git
 cd RennsAndroidKitchen
-python requirments.py
-python tools/build_native.py
-python app.py
+python3 requirments.py
+python3 tools/build_native.py
+python3 tools/build_termcore.py
+python3 tools/build_gpu_blur.py
+python3 tools/build_quill.py
+python3 app.py
 ```
 
-`requirments.py` installs the pinned dependencies, checks Rust/Cargo, and installs the Rust toolchain when needed. It reports missing C++ tools or SDK libraries. To check availability without installing:
+*(On Windows, use `python` instead of `python3`.)*
 
-```powershell
-python requirments.py --check
+`requirments.py` installs the pinned dependencies, checks Rust/Cargo, and installs the Rust toolchain when needed. It reports missing C/C++ build tools. To check availability without installing:
+
+```bash
+python3 requirments.py --check
 ```
 
 ### Build a release
 
-Releases are built with **Nuitka**:
+Releases are built with **Nuitka** on Windows, macOS, and Linux:
 
-```powershell
-python build.py
+```bash
+python3 build.py
 ```
 
-The builder prepares Python dependencies, rebuilds or reuses the Rust backend, and creates a ZIP with `run.exe` at its root. ZIPs are written to `release/OPSC/`, using the version and label from `core/flag.py`:
+The builder prepares Python dependencies, bakes Qt Quick shaders, builds or reuses the Rust backends (`rak_native`, `quill_native`, `termcore`, `rak_blur`), and packages the release under `release/OPSC/` using the version and label from `core/flag.py`:
 
 ```text
-RennsAndroidKitchen_OPSC-<APP_VERSION><APP_VERSION_LABEL>.zip
+Windows: RennsAndroidKitchen_OPSC-<APP_VERSION><APP_VERSION_LABEL>.zip
+macOS:   RennsAndroidKitchen_OPSC-<APP_VERSION><APP_VERSION_LABEL>-macos-<arch>.tar.gz
+Linux:   RennsAndroidKitchen_OPSC-<APP_VERSION><APP_VERSION_LABEL>-linux-<arch>.tar.gz
 ```
 
-Use `python build.py --help` for debug, clean-build, job-count, and Rust-rebuild options.
+Use `python3 build.py --help` for debug, clean-build, job-count, macOS `.app` bundle, and Rust-rebuild options.
 
 ### Command line
 
-The packaged `run.exe` also exposes the RAK CLI:
+The packaged executable also exposes the RAK CLI:
 
-```powershell
+```bash
+# Windows
 .\run.exe --rak-cli help
 .\run.exe --rak-cli img ls "C:\ROM\system.img"
-.\run.exe --rak-cli img cat "C:\ROM\system.img" system/build.prop
+
+# macOS / Linux
+./run --rak-cli help
+./run --rak-cli img ls "/path/to/system.img"
+./run --rak-cli img cat "/path/to/system.img" system/build.prop
 ```
 
-The release folder also includes a `rak.bat` launcher. After you open a project, RAK can register `rak` on the user PATH. Application data and managed helper binaries are stored under `%LOCALAPPDATA%\RennsAndroidKitchen`.
+The release folder also includes a `rak.bat` (Windows) or `rak` (macOS/Linux) launcher. Application data and managed helper binaries are stored in the OS-native user data directory:
 
-From a source checkout, use `python app.py --rak-cli help` or `rak.bat help`.
+- **Windows**: `%LOCALAPPDATA%\RennsAndroidKitchen`
+- **macOS**: `~/Library/Application Support/RennsAndroidKitchen`
+- **Linux**: `$XDG_DATA_HOME/RennsAndroidKitchen` (default `~/.local/share/RennsAndroidKitchen`)
+
+From a source checkout, use `python3 app.py --rak-cli help`, `./rak help` (macOS/Linux), or `rak.bat help` (Windows).
 
 ## Current limits
 

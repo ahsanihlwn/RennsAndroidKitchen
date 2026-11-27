@@ -105,7 +105,12 @@ def main():
     if args.list:
         for requirement in get_requirements():
             print(requirement)
-        print("Rust/Cargo + Visual Studio C++ tools and Windows SDK (Windows)")
+        if sys.platform == "win32":
+            print("Rust/Cargo + Visual Studio C++ tools and Windows SDK (Windows)")
+        elif sys.platform == "darwin":
+            print("Rust/Cargo + Xcode Command Line Tools (macOS)")
+        else:
+            print("Rust/Cargo + C/C++ compiler/linker (Linux)")
         return 0
     if args.check:
         python_ready = args.no_python_check or check_python()

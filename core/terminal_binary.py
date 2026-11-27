@@ -18,7 +18,8 @@ def resolve_terminal_binary(bin_root: str, command_name: str):
     cmd_stem = os.path.splitext(cmd)[0]
     native_dir = get_native_cli_directory(bin_root)
     if cmd_stem in NATIVE_PLATFORM_TOOLS and native_dir and os.path.isdir(native_dir):
-        for ext in (".cmd", ".bat"):
+        exts = (".cmd", ".bat") if os.name == "nt" else ("", ".sh")
+        for ext in exts:
             candidate = os.path.join(native_dir, f"{cmd_stem}{ext}")
             if os.path.isfile(candidate):
                 return candidate
@@ -88,11 +89,24 @@ def get_terminal_binary_directories(bin_root: str) -> list[str]:
 
 
 def get_external_cli_directories() -> list[str]:
-
-    local_appdata = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
-    agy_dir = os.path.join(local_appdata, "agy", "bin")
-    agy_exe = os.path.join(agy_dir, "agy.exe")
-    return [agy_dir] if os.path.isfile(agy_exe) else []
+    if os.name == "nt":
+        local_appdata = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
+        agy_dir = os.path.join(local_appdata, "agy", "bin")
+        agy_exe = os.path.join(agy_dir, "agy.exe")
+        return [agy_dir] if os.path.isfile(agy_exe) else []
+    home = os.path.expanduser("~")
+    candidates = [
+        os.path.join(home, ".agy", "bin"),
+        os.path.join(home, ".local", "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ]
+    dirs = []
+    for directory in candidates:
+        if os.path.isdir(directory) and directory not in dirs:
+            if os.path.isfile(os.path.join(directory, "agy")) or directory in ("/opt/homebrew/bin", "/usr/local/bin"):
+                dirs.append(directory)
+    return dirs
 
 
 def get_windows_path_directories() -> list[str]:

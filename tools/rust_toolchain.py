@@ -92,6 +92,17 @@ def windows_build_errors():
     return errors
 
 
+def posix_build_errors():
+    errors = []
+    if sys.platform == "darwin":
+        if not (shutil.which("clang") or shutil.which("cc")):
+            errors.append("Missing Xcode Command Line Tools (run: xcode-select --install)")
+    else:
+        if not (shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")):
+            errors.append("Missing C compiler/linker (install build-essential, gcc, or clang)")
+    return errors
+
+
 def rust_status():
     add_cargo_path()
     details = []
@@ -127,13 +138,33 @@ def rust_status():
                 details.append("Visual Studio C++ tools + Windows SDK: ready")
         except (OSError, RuntimeError, subprocess.SubprocessError) as error:
             errors.append(f"Windows build tools: {error}")
+    else:
+        build_errors = posix_build_errors()
+        errors.extend(build_errors)
+        if not build_errors:
+            label = "Xcode Command Line Tools" if sys.platform == "darwin" else "C compiler/linker"
+            details.append(f"{label}: ready")
     details.extend(errors)
     return {"ready": not errors, "compiler_ready": compiler_ready, "details": details, "errors": errors}
 
 
 def install_rust():
     if sys.platform != "win32":
-        raise RuntimeError(f"Install Rust/Cargo with rustup: {RUST_DOWNLOAD}")
+        rustup = shutil.which("rustup")
+        print("Rust: installing stable toolchain", flush=True)
+        if rustup:
+            subprocess.run([rustup, "toolchain", "install", "stable", "--profile", "minimal"], cwd=ROOT, check=True)
+        else:
+            with tempfile.TemporaryDirectory(prefix="rak-rust-setup-") as scratch:
+                installer = Path(scratch) / "rustup-init.sh"
+                with urlopen("https://sh.rustup.rs", timeout=60) as response, installer.open("wb") as destination:
+                    shutil.copyfileobj(response, destination)
+                subprocess.run([
+                    "sh", str(installer), "-y", "--profile", "minimal",
+                    "--default-toolchain", "stable", "--no-modify-path",
+                ], cwd=ROOT, check=True)
+        add_cargo_path(prepend=True)
+        return
     target = windows_target()
     toolchain = f"stable-{target}"
     rustup = shutil.which("rustup")
@@ -167,6 +198,12 @@ def ensure_rust():
         install_rust()
         status = rust_status()
     if not status["ready"]:
-        raise RuntimeError(f"{'; '.join(status['errors'])}. Toolchain setup: {RUST_DOWNLOAD}; C++ setup: {MSVC_DOWNLOAD}")
+        if sys.platform == "win32":
+            hint = f"Toolchain setup: {RUST_DOWNLOAD}; C++ setup: {MSVC_DOWNLOAD}"
+        elif sys.platform == "darwin":
+            hint = f"Toolchain setup: {RUST_DOWNLOAD}; C/C++ setup: xcode-select --install"
+        else:
+            hint = f"Toolchain setup: {RUST_DOWNLOAD}; install build-essential / gcc / clang"
+        raise RuntimeError(f"{'; '.join(status['errors'])}. {hint}")
     for detail in status["details"]:
         print(detail, flush=True)

@@ -7,15 +7,26 @@ import sys
 from PySide6.QtGui import QImage
 
 
+def library_filename(platform: str | None = None) -> str:
+    plat = sys.platform if platform is None else platform
+    if plat == "win32":
+        return "rak_blur.dll"
+    if plat == "darwin":
+        return "librak_blur.dylib"
+    return "librak_blur.so"
+
+
+def library_path(platform: str | None = None) -> Path:
+    return Path(__file__).with_name("native") / library_filename(platform)
+
+
 class RustGaussian:
     def __init__(self):
         self.handle = None
         self.frames = 0
         self.error = None
         try:
-            if sys.platform != "win32":
-                raise OSError("Rust OpenGL loader currently supports Windows")
-            library = ctypes.CDLL(str(Path(__file__).with_name("native") / "rak_blur.dll"))
+            library = ctypes.CDLL(str(library_path()))
             library.rak_blur_abi.restype = ctypes.c_uint
             if library.rak_blur_abi() != 1:
                 raise OSError("Rust blur ABI mismatch")

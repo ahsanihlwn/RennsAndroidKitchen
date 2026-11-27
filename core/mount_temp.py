@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
+import sys
 import hashlib
 import shutil
 from core import kitchen_process as subprocess
@@ -11,6 +12,8 @@ TEMP_DIR = MOUNT_RUNTIME_DIR
 
 
 def _hide(path):
+    if sys.platform != "win32":
+        return
     try:
         subprocess.run(["attrib", "+H", path], check=False, capture_output=True,
                         creationflags=CREATE_NO_WINDOW)

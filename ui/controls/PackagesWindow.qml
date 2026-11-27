@@ -70,8 +70,9 @@ DialogWindow {
                     }
                 }
             }
-            RakLabel { width: list.width; height: 22; text: dialog.s.dep_wsl_section; font.pixelSize: 10; font.weight: Font.DemiBold; color: dialog.c.FG_DESC }
+            RakLabel { visible: Boolean(dialog.backend && dialog.backend.showWsl); width: list.width; height: 22; text: dialog.s.dep_wsl_section; font.pixelSize: 10; font.weight: Font.DemiBold; color: dialog.c.FG_DESC }
             SmoothRectangle {
+                visible: Boolean(dialog.backend && dialog.backend.showWsl)
                 readonly property var info: dialog.backend?dialog.backend.wsl:({checking:true})
                 width: list.width; height: Math.max(64,wslText.height+28); radius: 10; color: dialog.c.b02; border.color: dialog.c.b07
                 Image { visible: !!(parent.info.installed || parent.info.present); x: 13; y: (parent.height-17)/2; width: 15; height: 15; sourceSize.width: width; sourceSize.height: height; source: visible ? dialog.model.icon(parent.info.installed?"check":"warning","") : "" }
