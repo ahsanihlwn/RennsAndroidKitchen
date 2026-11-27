@@ -41,9 +41,6 @@ Third-party files retain their original licenses and copyright notices:
   Apache-2.0. Ported to Qt Quick with this application's geometry and colors.
 - core/update_metadata_pb2.py: generated from AOSP update_metadata.proto;
   the upstream schema uses Apache-2.0.
-- core/qwebchannel.js: LGPL-3.0, as an available option in its source header.
-- core/xterm* and core/marked.min.js: MIT.
-- assets/monaco/: see the included license and third-party notices.
 - fonts/: see OFL.txt.
 
 Copies of additional vendored license texts are in licenses/.

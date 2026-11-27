@@ -14,8 +14,6 @@ _ROOT = Path(__file__).resolve().parent.parent
 def _probe(label: str, code: str) -> tuple[bool, str]:
     env = os.environ.copy()
     env.setdefault("QT_QPA_PLATFORM", "offscreen")
-    env.setdefault("QTWEBENGINE_DISABLE_SANDBOX", "1")
-    env.setdefault("QTWEBENGINE_CHROMIUM_FLAGS", "--disable-gpu --no-sandbox")
 
     started = time.perf_counter()
     try:
