@@ -1,18 +1,18 @@
 # Quill Native 0.3 — Floem editor-core
 
-Editor kode desktop dengan **engine Rust, host Python/PySide6, dan UI Qt Quick**. Tidak menggunakan Chromium, Electron, Qt WebEngine, Monaco JavaScript, atau server localhost. QML tetap memakai runtime ekspresi milik Qt; ini bukan browser.
+A desktop code editor with a **Rust engine, Python/PySide6 host, and Qt Quick UI**. It does not use Chromium, Electron, Qt WebEngine, Monaco JavaScript, or a localhost server. QML continues to use Qt's expression runtime; this is not a browser.
 
-Versi ini mengganti engine dokumen buatan prototipe dengan **`floem-editor-core = 0.2.0` (MIT)** dan **`lapce-xi-rope = 0.3.2` (Apache-2.0)**. Buffer, transaksi edit/delta, undo/redo, struktur cursor/selection, gerakan grapheme/kata, dan action indent/outdent menggunakan core upstream. Floem UI, winit, wgpu, browser, dan Chromium tidak ditarik sebagai dependency aplikasi ini.
+This version replaces the prototype custom document engine with **`floem-editor-core = 0.2.0` (MIT)** and **`lapce-xi-rope = 0.3.2` (Apache-2.0)**. Text buffers, edit/delta transactions, undo/redo, cursor/selection structures, grapheme/word movement, and indent/outdent actions use the upstream core. Floem UI, winit, wgpu, browser, and Chromium crates are not pulled in as dependencies.
 
-PySide/Qt Quick tetap menjadi UI. Adapter di `native/src/editor_floem.rs` menangani koordinat Qt, I/O, pemangkasan history, dan jembatan Python. Lexer coloring 19 bahasa tetap lexer ringan prototipe; **integrasi ini tidak menambahkan Tree-sitter, LSP atau semua fitur UI Lapce/Monaco**.
+PySide/Qt Quick remains the UI layer. The adapter in `native/src/editor_floem.rs` handles Qt coordinates, I/O, history compaction, and the Python bridge. The 19-language lexical colorer remains the lightweight prototype lexer; **this integration does not add Tree-sitter, LSP, or all Lapce/Monaco UI features**.
 
-Source core dipakai melalui dependency Cargo yang dipin, tanpa fork atau patch upstream. Lisensi dan versi dependency dicatat di [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md); teks lisensi core disertakan di `THIRD_PARTY_LICENSES/` dan package Python.
+The upstream core is consumed via pinned Cargo dependencies without forking or patching upstream. Dependency versions and licenses are recorded in [DEPENDENCY_LICENSES.md](DEPENDENCY_LICENSES.md); full core license texts are included in `THIRD_PARTY_LICENSES/` and the Python package.
 
-## Jalankan di Windows
+## Running on Windows
 
-Prasyarat: Python 3.10+ 64-bit, Rust stable melalui [rustup](https://rustup.rs/), dan MSVC C++ build tools dengan Windows SDK untuk mengompilasi extension. Pengembangan dan pengujian paket ini dilakukan di Linux dengan Python 3.12.14; belum ada `.exe` atau wheel Windows yang telah diuji.
+Prerequisites: 64-bit Python 3.10+, stable Rust via [rustup](https://rustup.rs/), and MSVC C++ build tools with the Windows SDK to compile the extension. Development and testing of this package were performed on Linux with Python 3.12.14; no Windows `.exe` or wheel has been tested yet.
 
-Ekstrak ZIP, masuk folder `quill-native`, lalu jalankan di PowerShell:
+Extract the ZIP, enter the `quill-native` folder, and run in PowerShell:
 
 ```powershell
 py -3 -m venv .venv
@@ -20,21 +20,21 @@ py -3 -m venv .venv
 .\.venv\Scripts\python.exe -m quill_native samples\hello.py
 ```
 
-Build pertama membutuhkan internet untuk mengambil dependency Rust/Python. Setelah terpasang, editor dapat berjalan offline dan tidak melakukan akses jaringan. Untuk membuka dokumen kosong:
+The first build requires internet access to fetch Rust/Python dependencies. Once installed, the editor runs offline and makes no network requests. To open an empty document:
 
 ```powershell
 .\.venv\Scripts\python.exe -m quill_native
 ```
 
-`run.ps1` menyediakan cara singkat untuk membuat environment dan menginstal project saat pertama digunakan:
+`run.ps1` provides a shortcut to create the environment and install the project on first run:
 
 ```powershell
 .\run.ps1 samples\hello.rs
 ```
 
-## Jalankan di Linux/macOS
+## Running on Linux/macOS
 
-Butuh Python 3.10+, Rust stable, compiler/linker platform, dan dukungan desktop Qt. Linux juga memerlukan library sistem untuk plugin platform Qt yang dipakai.
+Requires Python 3.10+, stable Rust, a platform compiler/linker, and Qt desktop support. Linux also requires the system libraries for the active Qt platform plugin.
 
 ```sh
 python3 -m venv .venv
@@ -42,74 +42,74 @@ python3 -m venv .venv
 .venv/bin/python -m quill_native samples/hello.rs
 ```
 
-Atau `sh run.sh samples/hello.py`. macOS belum diuji. Script launcher menginstal jika package belum ada atau versinya belum 0.3.0. Setelah mengubah source, instal ulang dengan `python -m pip install --force-reinstall --no-deps .` menggunakan interpreter environment tersebut.
+Or `sh run.sh samples/hello.py`. macOS has not been tested. The launcher script installs the package if missing or if its version is not yet `0.3.0`. After modifying source files, reinstall with `python -m pip install --force-reinstall --no-deps .` using that environment's interpreter.
 
-## Fitur yang sudah terhubung
+## Wired features
 
-- UI Qt Quick native: area kode, nomor baris, baris aktif, status posisi/ukuran/EOL, scrollbar, pencarian, dan pemilih bahasa.
-- Buka/simpan file UTF-8, pertahankan BOM dan line ending asli, simpan melalui temporary file di direktori yang sama lalu atomic replace.
-- Konfirmasi Save/Discard/Cancel untuk dokumen yang belum disimpan ketika New/Open/Close.
-- Cursor, selection dengan mouse/keyboard, double-click memilih kata, select all, copy/cut/paste, gerakan kata, Home/End/Page Up/Page Down.
-- Undo/redo dengan penggabungan ketikan berdekatan, posisi cursor tersimpan, serta dirty tracking yang kembali bersih saat undo ke state tersimpan.
-- Auto-indent dasar saat Enter mengikuti indent yang terdeteksi. Tab memasukkan unit indent; jika ada selection, Tab/Shift+Tab menjalankan indent/outdent blok lewat action bawaan Floem. Status bar menampilkan unit indent.
-- Coloring leksikal stateful untuk 19 pilihan bahasa, ditambah Plain Text. Deteksi dari ekstensi dan pilihan manual.
-- Input method preedit/commit dasar, koordinat UTF-16 untuk Qt, navigasi/delete per grapheme untuk emoji dan combining characters.
-- Zoom font dengan Ctrl+wheel atau Ctrl++ / Ctrl+-.
+- Native Qt Quick UI: code viewport, line numbers, active line highlight, position/size/EOL status, scrollbars, find, and language selector.
+- Open/save UTF-8 files, preserve original BOM and line endings, save via temporary file in the same directory followed by atomic replace.
+- Save/Discard/Cancel confirmation for unsaved documents on New/Open/Close.
+- Cursor and selection via mouse/keyboard, double-click word selection, select all, copy/cut/paste, word movement, Home/End/Page Up/Page Down.
+- Undo/redo with adjacent-typing coalescing, preserved cursor positions, and dirty tracking that returns clean when undoing back to the saved state.
+- Basic auto-indent on Enter following detected indentation. Tab inserts an indent unit; with a selection, Tab/Shift+Tab runs block indent/outdent via Floem's built-in actions. The status bar shows the indent unit.
+- Stateful lexical coloring for 19 languages plus Plain Text, detected by extension or selected manually.
+- Basic IME preedit/commit, UTF-16 coordinates for Qt, and per-grapheme navigation/deletion for emoji and combining characters.
+- Font zoom with Ctrl+wheel or Ctrl++ / Ctrl+-.
 
-Bahasa: Rust, Python, JavaScript, TypeScript, C, C++, C#, Java, Go, JSON, HTML, XML, CSS, Shell, SQL, TOML, YAML, Markdown, dan QML. Highlight mencakup keyword, string, comment, number, type/function identifier sederhana, operator, dan tag sesuai profil bahasa. Multiline comment, nested Rust comment, Python triple string, Rust raw string, dan JS template memiliki state antarbaris. Profil ini bukan grammar lengkap Monaco/TextMate/tree-sitter: regex literal JS, JSX, f-string/template interpolation, macro kompleks, dan embedded language belum diparse penuh.
+Languages: Rust, Python, JavaScript, TypeScript, C, C++, C#, Java, Go, JSON, HTML, XML, CSS, Shell, SQL, TOML, YAML, Markdown, and QML. Highlighting covers keywords, strings, comments, numbers, simple type/function identifiers, operators, and tags per language profile. Multiline comments, nested Rust comments, Python triple-quoted strings, Rust raw strings, and JS templates maintain cross-line state. This profile is not a full Monaco/TextMate/tree-sitter grammar: JS regex literals, JSX, f-string/template interpolation, complex macros, and embedded languages are not fully parsed.
 
-## Kenapa penyimpanan dan renderingnya ringan
+## Why storage and rendering stay lightweight
 
-| Lapisan | Implementasi |
+| Layer | Implementation |
 | --- | --- |
-| Dokumen | `floem_editor_core::buffer::Buffer` dengan Xi Rope UTF-8; satu engine aktif di Rust |
-| Edit | `Buffer::edit` menghasilkan delta dan invalidasi baris. Cursor/selection dipindahkan dengan delta upstream |
-| History | `Buffer::do_undo` / `do_redo` upstream. Host membatasi jendela undo ke 128 grup. Karena rilis core belum punya API GC publik, adapter berkala merekonstruksi Buffer dengan replay grup yang dipertahankan lewat API core |
-| Python/Qt | Hanya menerima teks dan span untuk viewport; tidak menyimpan `QTextDocument` atau salinan string seluruh file |
-| Rendering | `QQuickPaintedItem` berukuran viewport memakai `QTextLayout` untuk shaping; bukan canvas sebesar seluruh dokumen |
-| Cache layout | Maksimal 192 baris, dengan maksimum 8.192 karakter yang ditampilkan per baris |
-| Coloring | Lexer Rust per baris; cache hanya state awal baris, bukan token semua dokumen. Setelah edit, suffix state dibatalkan |
-| Propagasi warna | Dikerjakan bertahap, paling banyak 1.500 baris atau sekitar 128 KiB teks per langkah, lalu dilanjutkan timer. Baris jauh dapat tampil tanpa warna sementara |
-| Pencarian | KMP streaming terhadap rope; tidak mengalokasikan satu string sebesar seluruh file |
-| Dependency Qt | Menggunakan `PySide6-Essentials`, tidak menginstal Qt WebEngine sebagai dependency |
+| Document | `floem_editor_core::buffer::Buffer` backed by UTF-8 Xi Rope; one active engine in Rust |
+| Edits | `Buffer::edit` produces deltas and line invalidations. Cursors/selections move via upstream deltas |
+| History | Upstream `Buffer::do_undo` / `do_redo`. The host caps the undo window at 128 groups. Since the core release lacks a public GC API, the adapter periodically rebuilds the Buffer by replaying retained groups via the core API |
+| Python/Qt | Receives only viewport text and spans; never stores a `QTextDocument` or a full-file string copy |
+| Rendering | Viewport-sized `QQuickPaintedItem` using `QTextLayout` for shaping, rather than a full-document canvas |
+| Layout cache | Up to 192 lines, displaying at most 8,192 characters per line |
+| Coloring | Per-line Rust lexer; caches only line-start state rather than tokens for the whole document. Edits invalidate suffix state |
+| Color propagation | Incremental work, at most 1,500 lines or ~128 KiB of text per step, resumed on a timer. Distant lines may briefly appear uncolored |
+| Search | Streaming KMP over the rope without allocating a single full-file string |
+| Qt dependency | Uses `PySide6-Essentials`; does not install Qt WebEngine |
 
-`QQuickPaintedItem` menggunakan QPainter untuk menggambar viewport ke surface Qt Quick. Ini belum renderer glyph khusus yang seluruhnya berjalan di GPU. Layout dilakukan lewat Qt, sehingga shaping/font fallback tidak ditulis ulang di Python. `QSG_RENDER_LOOP=basic` dipilih agar callback paint Python tidak berebut GIL dengan thread GUI. Renderer GPU/platform tetap boleh digunakan; software renderer hanya dipaksa dalam pengujian headless.
+`QQuickPaintedItem` uses `QPainter` to draw the viewport onto a Qt Quick surface. This is not yet a dedicated full-GPU glyph renderer. Text layout is handled by Qt so shaping and font fallback are not reimplemented in Python. `QSG_RENDER_LOOP=basic` is selected so Python paint callbacks do not contend over the GIL with a separate GUI render thread. Platform GPU renderers remain usable; the software renderer is forced only in headless tests.
 
-History memakai cache metadata replay dan snapshot Xi Rope dengan structural sharing. Rekonstruksi dilakukan secara amortized sekitar 256 grup, 1.024 operasi core, atau penambahan biaya perubahan sekitar 32 MiB sejak pemangkasan terakhir; saat itu adapter menargetkan soft budget 16 MiB. Grup besar atau redo dapat melampaui target. Ini bukan batas keras RAM, dan rekonstruksi history masih dapat menghasilkan jeda pada edit besar. Tidak ada salinan dokumen UTF-8 penuh di Python.
+History uses a replay metadata cache and Xi Rope snapshots with structural sharing. Reconstruction runs amortized around every 256 groups, 1,024 core operations, or ~32 MiB of added edit cost since the last compaction, targeting a 16 MiB soft budget. Large groups or redo stacks can exceed that target. This is not a hard RAM cap, and history reconstruction can still cause a pause on large edits. No full UTF-8 document copy lives in Python.
 
-Offset core berupa byte UTF-8. Konversi kolom Qt UTF-16 menggunakan metric Xi Rope; posisi di tengah surrogate pair dipindah sebelum emoji. Pemanggilan eksplisit `char_count()` menghitung scalar seluruh dokumen; fungsi itu tidak dipakai pada hot path render/edit.
+Core offsets are UTF-8 byte offsets. Qt UTF-16 column conversion uses Xi Rope metrics; positions inside a surrogate pair snap before the emoji. Calling `char_count()` explicitly counts scalars across the whole document and is not used on render/edit hot paths.
 
-Ukuran ZIP source tidak sama dengan kebutuhan disk/RAM aplikasi. Paket Qt, Python, dan extension hasil kompilasi dipasang terpisah.
+Source ZIP size does not match application disk/RAM requirements. Qt, Python, and compiled extension packages are installed separately.
 
-## Pengukuran yang benar-benar dijalankan
+## Actual measurements performed
 
-Pengujian pada Linux x86-64, Python 3.12.14, Qt/PySide6 6.10.3, release build Rust. Backend GUI `offscreen/software`, satu proses per kasus, bukan pengukuran Windows/GPU dan bukan perbandingan dengan Chromium.
+Tested on Linux x86-64, Python 3.12.14, Qt/PySide6 6.10.3, Rust release build. Headless `offscreen/software` GUI backend, one process per case; these are not Windows/GPU numbers and not a comparison against Chromium.
 
-| Kasus | Ukuran file | Baris | RSS proses setelah sekitar 800 ms | Proses anak |
+| Case | File size | Lines | Process RSS after ~800 ms | Child processes |
 | --- | --- | --- | --- | --- |
-| Python kecil | 67 byte | 4 | 86,98 MiB | 0 |
-| Rust besar | 10,68 MiB | 160.001 | 98,47 MiB | 0 |
+| Small Python | 67 bytes | 4 | 86.98 MiB | 0 |
+| Large Rust | 10.68 MiB | 160,001 | 98.47 MiB | 0 |
 
-Pada file besar tersebut, backend membuka file secara streaming dalam 33,382 ms pada satu run. Dari 1.000 insert satu karakter di posisi tersebar, median 0,0186 ms dan p95 0,0491 ms. **Angka insert ini hanya backend + pemanggilan PyO3/history, belum termasuk paint, layout, coloring, atau waktu input sampai layar.** First frame pada dua run sekitar 168–286 ms. Ini pengukuran run versi ini, bukan bukti lebih cepat dari prototipe sebelumnya. Hasil dipengaruhi cache OS, mesin, backend dan driver; RSS juga mencakup shared mappings.
+On the large file, the backend streamed the file open in 33.382 ms in one run. Across 1,000 single-character inserts at scattered positions, median was 0.0186 ms and p95 was 0.0491 ms. **These insert timings cover only the backend plus PyO3/history calls, excluding paint, layout, coloring, or end-to-end input latency.** First frame across two runs took ~168–286 ms. These are measurements of this build, not proof of speedup over the previous prototype. Results depend on OS caches, hardware, backend, and drivers; RSS also includes shared mappings.
 
-Lihat [BENCHMARK.json](BENCHMARK.json) untuk hasil mentah dan [benchmark.py](benchmark.py) untuk mengulang. Install `psutil` agar probe mencetak RSS:
+See [BENCHMARK.json](BENCHMARK.json) for raw results and [benchmark.py](benchmark.py) to repeat them. Install `psutil` so the probe reports RSS:
 
 ```sh
 python -m pip install psutil
 python benchmark.py --headless --output BENCHMARK.json
 ```
 
-Hilangkan `--headless` jika ingin mengukur dengan backend desktop mesin sendiri. Angka lokal itulah yang lebih relevan untuk penggunaan lo.
+Omit `--headless` to measure with your own desktop backend. Local measurements are the ones most relevant to your environment.
 
-## Pengujian
+## Testing
 
-Sudah dijalankan:
+Already executed:
 
-- 11 unit test Rust untuk Unicode/CRLF, surrogate offsets, decoder UTF-8 antar-chunk, core history, compaction, cursor/dirty tracking, dan lexer.
-- 20 test Python/Qt: 2.500 edit acak ditambah 5.000 operasi edit/undo/redo/branching dibanding referensi independen, keyboard/mouse lewat QQuickWindow, clipboard, IME sintetis, AltGr, unsaved guard, gagal load/save, long-line mode, block indent/outdent, dan cache terbatas. Termasuk pengujian history melewati batas 128 grup dan compaction.
-- Clippy seluruh target dengan `-D warnings`.
-- Build wheel release, instal wheel tersebut, dan jalankan test/probe dari package hasil instalasi. QML dan extension native sudah diverifikasi ikut masuk wheel.
-- UI dirender dan diperiksa secara visual di sandbox.
+- 11 Rust unit tests for Unicode/CRLF, surrogate offsets, cross-chunk UTF-8 decoding, core history, compaction, cursor/dirty tracking, and the lexer.
+- 20 Python/Qt tests: 2,500 random edits plus 5,000 edit/undo/redo/branching operations compared against an independent reference, keyboard/mouse via `QQuickWindow`, clipboard, synthetic IME, AltGr, unsaved guards, load/save failures, long-line mode, block indent/outdent, and bounded caches. Includes testing history past the 128-group limit and compaction.
+- Clippy across all targets with `-D warnings`.
+- Built the release wheel, installed it, and ran tests/probes from the installed package. Verified QML and native extensions are bundled in the wheel.
+- Rendered and visually inspected the UI in a sandbox.
 
 ```sh
 python -m pip install -r requirements-dev.txt
@@ -118,15 +118,15 @@ cargo clippy --locked --manifest-path native/Cargo.toml --all-targets -- -D warn
 python -m pytest -q
 ```
 
-Pengujian UI memakai offscreen/software secara default. Tes IME memakai event Qt sintetis, belum memverifikasi seluruh perilaku IME Windows/macOS yang sebenarnya. Jika ingin pengembangan editable:
+UI tests use `offscreen/software` by default. IME tests use synthetic Qt events and have not verified all real Windows/macOS IME behavior. For editable development installs:
 
 ```sh
 maturin develop --release --locked
 ```
 
-## Dipakai di aplikasi PySide lo
+## Using in your PySide application
 
-`NativeEditor` adalah tipe Qt Quick yang bisa didaftarkan ke QML milik aplikasi yang sudah ada:
+`NativeEditor` is a Qt Quick type that can be registered into an existing application's QML:
 
 ```python
 from PySide6.QtQml import qmlRegisterType
@@ -145,36 +145,36 @@ NativeEditor {
 }
 ```
 
-Daftarkan tipe sebelum `engine.load()`. Jika menggabungkan ke aplikasi sendiri, set `QSG_RENDER_LOOP=basic` sebelum membuat `QGuiApplication`. Host dapat memanggil `loadPath(path)`, `saveCurrent()`, `setLanguage(name)`, `undo()`, `redo()`, dan `findNext(text, backwards)`. Signal `openRequested`, `saveAsRequested`, `confirmRequested`, `errorOccurred`, dan `closeApproved` dapat dihubungkan ke dialog/UI host; contoh lengkap ada di `Main.qml`. Untuk perubahan file yang dilakukan pengguna, pakai alur `request()`/`openUrl()` agar unsaved guard dijalankan; `loadPath()` adalah operasi langsung untuk host/startup.
+Register the type before calling `engine.load()`. When integrating into your own app, set `QSG_RENDER_LOOP=basic` before creating `QGuiApplication`. The host can call `loadPath(path)`, `saveCurrent()`, `setLanguage(name)`, `undo()`, `redo()`, and `findNext(text, backwards)`. Signals `openRequested`, `saveAsRequested`, `confirmRequested`, `errorOccurred`, and `closeApproved` can be wired to host dialogs/UI; see `Main.qml` for a full example. For user-driven file switches, use `request()`/`openUrl()` so unsaved guards run; `loadPath()` is a direct host/startup operation.
 
-Core dapat dipakai tanpa Qt:
+The core can also be used without Qt:
 
 ```python
 from quill_native._engine import Document
 
-doc = Document("Halo 🦀\n", "contoh.rs")
+doc = Document("Hello 🦀\n", "example.rs")
 assert doc.backend() == "floem-editor-core/0.2.0"
-doc.set_cursor(0, 5)  # baris dan kolom zero-based; kolom UTF-16
+doc.set_cursor(0, 5)  # zero-based line and UTF-16 column
 doc.insert("Rust ")
 rows, color_ready = doc.viewport(0, 30)
 doc.undo()
 ```
 
-## Batasan versi ini
+## Limitations of this version
 
-- Satu dokumen aktif, belum workspace/multitab, minimap, folding, autocomplete, LSP, debugger, atau extension ecosystem Monaco.
-- Belum word wrap, regex search/replace, multi-cursor pada UI, atau aksesibilitas editor setara komponen Qt bawaan. Gerakan vertikal memakai kolom UTF-16, belum mempertahankan posisi visual horizontal pada baris bertab/bidirectional.
-- Baris panjang ditampilkan hanya 8.192 karakter pertama untuk menjaga waktu layout. Baris di atas 32 KiB tidak diwarnai. Isi asli tetap disimpan utuh, tetapi navigasi/hit testing visual pada bagian yang tidak terlihat belum lengkap. Ini belum editor yang cocok untuk mengedit file minified satu baris berukuran besar.
-- Semua I/O dan operasi UI masih di thread GUI. Buka/simpan/pencarian file sangat besar dapat menahan UI; propagasi coloring sudah bertahap. Batas history adalah soft budget, bukan jaminan RAM total.
-- Input file UTF-8 valid dengan LF/CRLF, termasuk mixed LF/CRLF. File dengan bare CR ditolak secara eksplisit agar `Buffer::new` upstream tidak diam-diam mengubah line ending; file asli tidak diubah. Constructor `Document(text)` mengikuti normalisasi bare CR bawaan core. Belum pilihan encoding lain atau decoding file biner.
-- Belum ada pengujian atau executable Windows/macOS. Source dapat dibangun di platform tersebut, tetapi hasilnya perlu diverifikasi di mesin target.
+- Single active document; no multi-tab/workspace, minimap, folding, autocomplete, LSP, debugger, or Monaco extension ecosystem.
+- No word wrap, regex search/replace, UI multi-cursor, or full accessibility parity with built-in Qt text controls. Vertical cursor movement tracks UTF-16 columns rather than preserving visual horizontal position across tabbed or bidirectional lines.
+- Long lines display only the first 8,192 characters to keep layout fast. Lines over 32 KiB are not syntax-highlighted. Full contents are preserved on disk/in buffer, but visual navigation/hit-testing in the truncated tail is incomplete. This is not yet suited for editing huge single-line minified files.
+- All I/O and UI operations still run on the GUI thread. Opening/saving/searching very large files can stall the UI; color propagation is incremental. The history cap is a soft budget, not a total RAM guarantee.
+- Accepts valid UTF-8 files with LF/CRLF, including mixed LF/CRLF. Files containing bare CR are explicitly rejected so upstream `Buffer::new` does not silently alter line endings; original files remain untouched. The `Document(text)` constructor follows the core's built-in bare-CR normalization. No other encodings or binary file decoding are supported yet.
+- No Windows/macOS test runs or executables yet. The source can be built on those platforms, but results should be verified on the target machine.
 
-## Sumber teknis
+## Technical references
 
 - [Floem editor core 0.2.0](https://docs.rs/floem-editor-core/0.2.0/floem_editor_core/)
 - [Lapce Xi Rope 0.3.2](https://docs.rs/lapce-xi-rope/0.3.2/lapce_xi_rope/)
-- [PyO3](https://pyo3.rs/) dan [maturin](https://www.maturin.rs/)
+- [PyO3](https://pyo3.rs/) and [maturin](https://www.maturin.rs/)
 - [PySide6 QQuickPaintedItem](https://doc.qt.io/qtforpython-6/PySide6/QtQuick/QQuickPaintedItem.html)
 - [PySide6 QTextLayout](https://doc.qt.io/qtforpython-6/PySide6/QtGui/QTextLayout.html)
 
-Lisensi source project: MIT. Dependency Rust/Qt/Python memiliki lisensi masing-masing. Laporan SPDX Rust beserta pilihan lisensi permisif disertakan; source dependency diambil oleh Cargo, bukan dibundel dalam ZIP ini. Penggunaan Qt tetap mengikuti ketentuan lisensi Qt/PySide yang dipilih pengguna.
+Project source license: MIT. Rust/Qt/Python dependencies retain their respective licenses. An SPDX Rust report and permissive license texts are included; dependency sources are fetched by Cargo rather than bundled in this ZIP. Qt usage remains subject to the Qt/PySide license terms chosen by the user.

@@ -68,7 +68,7 @@ RAK identifies supported image types from their contents, so the available actio
 
 ## Inside the workspace
 
-- **File tree and editor.** Create, move, copy, rename, and delete files in an unpacked partition; edit text in the built-in Monaco editor; inspect images, audio, video, archives, and binary data without leaving RAK.
+- **File tree and editor.** Create, move, copy, rename, and delete files in an unpacked partition; edit text in the built-in Quill Native code editor; inspect images, audio, video, archives, and binary data without leaving RAK.
 - **Android filesystem metadata.** Edit permissions and SELinux contexts, create symlinks, and set up filesystem metadata for a partition folder. A NEOCAT scan is available for recognized filesystem roots.
 - **NeoBranch.** Keep separate sets of changes for an unpacked filesystem and switch between them while retaining the original partition files.
 - **Terminal and CLI.** Use the integrated terminal or the packaged `rak` command for repeatable file and image operations. The image commands include listing, reading, extracting, writing, changing permissions and SELinux contexts, deleting, and reporting space usage.
