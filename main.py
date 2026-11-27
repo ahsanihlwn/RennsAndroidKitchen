@@ -21,8 +21,8 @@ class Main(QuickWorkspace):
                 profile_provider = acc.profile_provider
             preferences = LauncherModel(palette=theme.name, language=ui_lang._current_lang,
                 profile=acc.profile(),
-                settings={"effects":theme.effect_level,"animations":theme.animations_enabled,
-                          "treeMode":theme.tree_view_mode},parent=parent)
+                settings={"effects":theme.effect_level,"blurRadius":theme.blur_radius,
+                          "animations":theme.animations_enabled,"treeMode":theme.tree_view_mode},parent=parent)
             acc.changed.connect(lambda: preferences.replaceProfile(acc.profile()))
         self._owned_preferences = preferences
         self._enable_cli=options.pop('enable_cli_services',True)
@@ -103,6 +103,11 @@ def run_workspace_worker():
         app = QApplication(sys.argv)
     apply_app_font(app, polish_widgets=False)
     install_error_reporter()
+    try:
+        from core.vdev.qemu_runner import cleanup_vdev_ephemeral_caches
+        cleanup_vdev_ephemeral_caches(include_extracted=True, async_run=True)
+    except Exception:
+        pass
 
     theme.load()
     ui_lang.init()
@@ -115,7 +120,7 @@ def run_workspace_worker():
     from ui.runtime import IconProvider
     from ui.workspace_window import (
         ViewerDocument, HexDocument, SoDocument, PartitionDocument,
-        ImageDocument, MediaDocument, ArchiveDocument, DocumentImages
+        ImageDocument, MarkdownDocument, MediaDocument, ArchiveDocument, DocumentImages
     )
 
     qmlRegisterType(ViewerDocument, "Renns.Workspace", 1, 0, "ViewerDocument")
@@ -123,6 +128,7 @@ def run_workspace_worker():
     qmlRegisterType(SoDocument, "Renns.Workspace", 1, 0, "SoDocument")
     qmlRegisterType(PartitionDocument, "Renns.Workspace", 1, 0, "PartitionDocument")
     qmlRegisterType(ImageDocument, "Renns.Workspace", 1, 0, "ImageDocument")
+    qmlRegisterType(MarkdownDocument, "Renns.Workspace", 1, 0, "MarkdownDocument")
     qmlRegisterType(MediaDocument, "Renns.Workspace", 1, 0, "MediaDocument")
     qmlRegisterType(ArchiveDocument, "Renns.Workspace", 1, 0, "ArchiveDocument")
 
@@ -149,6 +155,7 @@ def run_workspace_worker():
         print(f"[MAIN STAGE] worker handle_command project={project}", flush=True)
         p1 = cmd["p1"]
         p2 = cmd.get("p2")
+        theme.load()
         palette = cmd.get("palette") or theme.name
         lang = cmd.get("lang") or ui_lang._current_lang
 
@@ -156,6 +163,15 @@ def run_workspace_worker():
             theme.set(palette)
         if lang and lang != ui_lang._current_lang:
             ui_lang.set_lang(lang)
+        cmd_settings = cmd.get("settings") or {}
+        if "effects" in cmd_settings and cmd_settings["effects"] != theme.effect_level:
+            theme.set_effect_level(cmd_settings["effects"])
+        if "blurRadius" in cmd_settings and int(cmd_settings["blurRadius"]) != theme.blur_radius:
+            theme.set_blur_radius(int(cmd_settings["blurRadius"]))
+        if "animations" in cmd_settings and bool(cmd_settings["animations"]) != theme.animations_enabled:
+            theme.set_animations_enabled(bool(cmd_settings["animations"]))
+        if "treeMode" in cmd_settings and cmd_settings["treeMode"] != theme.tree_view_mode:
+            theme.set_tree_view_mode(cmd_settings["treeMode"])
 
         preferences = LauncherModel(
             palette=palette,
@@ -163,6 +179,7 @@ def run_workspace_worker():
             profile=account_state.profile(),
             settings={
                 "effects": theme.effect_level,
+                "blurRadius": theme.blur_radius,
                 "animations": theme.animations_enabled,
                 "treeMode": theme.tree_view_mode
             },
@@ -247,6 +264,11 @@ def run_workspace_standalone(argv=None):
         app = QApplication(sys.argv if argv is None else [sys.argv[0]] + list(argv))
     apply_app_font(app, polish_widgets=False)
     install_error_reporter()
+    try:
+        from core.vdev.qemu_runner import cleanup_vdev_ephemeral_caches
+        cleanup_vdev_ephemeral_caches(include_extracted=True, async_run=True)
+    except Exception:
+        pass
 
     parser = argparse.ArgumentParser(description="RAK Workspace Editor")
     parser.add_argument("project", help="Path to project directory")
@@ -274,6 +296,7 @@ def run_workspace_standalone(argv=None):
         profile=account_state.profile(),
         settings={
             "effects": theme.effect_level,
+            "blurRadius": theme.blur_radius,
             "animations": theme.animations_enabled,
             "treeMode": theme.tree_view_mode
         },

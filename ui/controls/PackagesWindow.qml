@@ -10,7 +10,13 @@ DialogWindow {
     implicitWidth: 540; implicitHeight: 420; title: s.dep_title
     onPrepareRequested: if (backend) backend.refresh()
     onDismissed: if (backend) backend.close()
-    Image { x: 18; y: 18; width: 15; height: 15; sourceSize.width: width; sourceSize.height: height; source: dialog.model.icon("package","") }
+    WorkspaceNativeIcon {
+        x: 18; y: 18; width: 15; height: 15; iconSize: 15
+        iconKey: "package"
+        strokeColor: dialog.c.FG
+        accentColor: dialog.accentColor
+        isLight: (dialog.c && dialog.c.is_light !== undefined) ? dialog.c.is_light : false
+    }
     RakLabel { x: 44; y: 16; height: 20; text: dialog.s.dep_title; font.pixelSize: 14; font.weight: Font.DemiBold; color: dialog.c.FG }
     SmoothRectangle { x: 18; y: 48; width: 504; height: 1; color: dialog.c.b07 }
     Flickable {
@@ -68,7 +74,15 @@ DialogWindow {
             SmoothRectangle {
                 readonly property var info: dialog.backend?dialog.backend.wsl:({checking:true})
                 width: list.width; height: Math.max(64,wslText.height+28); radius: 10; color: dialog.c.b02; border.color: dialog.c.b07
-                Image { x: 13; y: (parent.height-17)/2; width: 15; height: 15; sourceSize.width: width; sourceSize.height: height; source: dialog.model.icon(parent.info.installed?"check":parent.info.present?"warning":"package","") }
+                Image { visible: !!(parent.info.installed || parent.info.present); x: 13; y: (parent.height-17)/2; width: 15; height: 15; sourceSize.width: width; sourceSize.height: height; source: visible ? dialog.model.icon(parent.info.installed?"check":"warning","") : "" }
+                WorkspaceNativeIcon {
+                    visible: !parent.info.installed && !parent.info.present
+                    x: 13; y: (parent.height-17)/2; width: 15; height: 15; iconSize: 15
+                    iconKey: "package"
+                    strokeColor: dialog.c.FG_MUTED
+                    accentColor: dialog.accentColor
+                    isLight: (dialog.c && dialog.c.is_light !== undefined) ? dialog.c.is_light : false
+                }
                 Column {
                     id: wslText
                     x: 40; y: 14; width: parent.width-64-(wslAction.visible?wslAction.width+10:0); spacing: 1

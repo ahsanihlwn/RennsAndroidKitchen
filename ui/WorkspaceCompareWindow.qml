@@ -161,7 +161,7 @@ DialogWindow {
                     width: Math.max(48, parent.width * 0.28); height: parent.height; radius: 2
                     color: window.c.accent_hex
                     SequentialAnimation on x {
-                        running: indBar.visible && window.visible && (!window.model || window.model.settings.animations)
+                        running: indBar.visible && window.visible
                         loops: Animation.Infinite
                         NumberAnimation { from: -indBar.width; to: track.width; duration: 1050; easing.type: Easing.InOutSine }
                     }

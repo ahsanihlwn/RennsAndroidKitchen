@@ -144,7 +144,7 @@ class WorkspaceAgent(QObject):
         value={'path':row['path'],'document_path':row['documentPath'],'revision':tab.get('revision',''),
                'unsaved':bool(tab.get('unsaved')),'read_only':bool(tab.get('read_only')),
                'virtual':bool(tab.get('virtual')),'language':tab.get('language',''),
-               'selection':deepcopy(self.owner.editor.bridge._selections.get(row['documentPath'],{})),
+               'selection':deepcopy(self.owner.editor.bridge.get_selection(row['documentPath'])),
                'branch':deepcopy(tab.get('neobranch'))}
         if content:
             value['content']=tab['content'][:262144];value['truncated']=len(tab['content'])>262144
@@ -297,7 +297,8 @@ class WorkspaceAgent(QObject):
                                                    'application_error':getattr(result,'application_error',False),
                                                    'error_code':getattr(result,'code','operation_failed')})
                 operation(self.owner,'Agent edit '+os.path.basename(payload['path']),
-                          lambda:apply(files,payload['path'],payload['revision'],payload['content']),settled=settled)
+                          lambda:apply(files,payload['path'],payload['revision'],payload['content']),settled=settled,
+                          lane='light',targets=(payload['path'],))
                 return
             row,tab=self._document(payload['path'])
             if tab.get('read_only'):raise ValueError('This document is read-only')

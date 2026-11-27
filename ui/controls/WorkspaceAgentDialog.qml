@@ -41,10 +41,10 @@ DialogWindow {
                 width: form.width; height: Math.max(30, choiceRow.implicitHeight+10); implicitHeight: height
                 leftAligned: true; leftPadding: 8; rightPadding: 10; cornerRadius: 7; edgeWidth: 1
                 fillColor: isChosen?dialog.c.a12:"transparent"
-                hoverFillColor: isChosen?dialog.c.a18:dialog.c.b05
-                downFillColor: dialog.c.a24
+                hoverFillColor: isChosen?dialog.c.a16:dialog.c.b04
+                downFillColor: dialog.c.a22
                 edgeColor: isChosen?dialog.c.a35:"transparent"
-                hoverEdgeColor: isChosen?dialog.c.a50:dialog.c.b10
+                hoverEdgeColor: isChosen?dialog.c.a50:dialog.c.b08
                 onClicked: {dialog.answer=modelData;answerField.text=""}
                 contentItem: Row {
                     id: choiceRow; spacing: 8

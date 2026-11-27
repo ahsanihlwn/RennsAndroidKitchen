@@ -43,9 +43,10 @@ RakButton {
     property string currentMenu: "main" // "main" or "models"
     property Item popupBoundsItem: null
     property string pickedModel: ""
+    readonly property bool loadingModels: !!(chat && chat.modelsLoading)
 
     height: 26
-    implicitWidth: contentItem.implicitWidth + leftPadding + rightPadding
+    implicitWidth: loadingModels ? 104 : (contentItem.implicitWidth + leftPadding + rightPadding)
     font.pixelSize: 11
     leftPadding: 6
     rightPadding: 6
@@ -53,14 +54,49 @@ RakButton {
     edgeWidth: 0
     labelColor: colors.FG2
     hoverLabelColor: colors.FG
-    hoverFillColor: colors.b06
-    downFillColor: colors.b10
-    enabled: true
+    hoverFillColor: loadingModels ? "transparent" : colors.b06
+    downFillColor: loadingModels ? "transparent" : colors.b10
+    enabled: !loadingModels
 
     contentItem: Item {
         implicitWidth: labelRow.implicitWidth + 14
+        Item {
+            id: modelSkeleton
+            objectName: "agentChatModelSkeleton"
+            visible: control.loadingModels
+            anchors.fill: parent
+            property real phase: 0.0
+            SequentialAnimation on phase {
+                loops: Animation.Infinite
+                running: modelSkeleton.visible
+                NumberAnimation { from: 0.0; to: 1.0; duration: 750; easing.type: Easing.InOutSine }
+                NumberAnimation { from: 1.0; to: 0.0; duration: 750; easing.type: Easing.InOutSine }
+            }
+            readonly property bool isLight: !!(control.colors && control.colors.is_light)
+            readonly property color boneColor: isLight
+                ? Qt.rgba(0.08, 0.10, 0.14, 0.09 + 0.07 * phase)
+                : Qt.rgba(1.0, 1.0, 1.0, 0.08 + 0.07 * phase)
+            readonly property color boneSoftColor: isLight
+                ? Qt.rgba(0.08, 0.10, 0.14, 0.05 + 0.04 * phase)
+                : Qt.rgba(1.0, 1.0, 1.0, 0.04 + 0.045 * phase)
+
+            Row {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 5
+                SmoothRectangle {
+                    width: 58; height: 10; radius: 5
+                    color: modelSkeleton.boneColor
+                }
+                SmoothRectangle {
+                    width: 22; height: 8; radius: 4
+                    anchors.verticalCenter: parent.verticalCenter
+                    color: modelSkeleton.boneSoftColor
+                }
+            }
+        }
         Row {
             id: labelRow
+            visible: !control.loadingModels
             anchors.left: parent.left
             anchors.right: arrow.left
             anchors.rightMargin: 4
@@ -89,6 +125,7 @@ RakButton {
         }
         Image {
             id: arrow
+            visible: !control.loadingModels
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             width: 8; height: 8
@@ -121,6 +158,7 @@ RakButton {
     }
 
     function openChoices() {
+        if (control.loadingModels) return
         control.resetPressFeedback()
         control.currentMenu = "main"
         control.chat.refreshEfforts()
@@ -128,6 +166,7 @@ RakButton {
         menu.open()
     }
 
+    onLoadingModelsChanged: if (loadingModels) menu.dismissImmediate()
     onVisibleChanged: if (!visible) menu.dismissImmediate()
     Connections {
         target: control.Window.window

@@ -22,8 +22,9 @@ class ProcessTerminalManager:
     def shutdown(self):self._detached=True
     def get_plain_text(self):return re.sub(r'\x1b\[[0-9;]*[A-Za-z]','',self._buffer)
     def feed(self,text):
+        text=text.replace('\r\n','\n').replace('\n','\r\n')
         self._buffer=(self._buffer+text)[-100000:]
-        if not self._detached:self.signals.data_ready.emit(text.replace('\r\n','\n').replace('\n','\r\n'))
+        if not self._detached:self.signals.data_ready.emit(text)
     def observe(self,process,command):
         self._processes.add(process)
         self.feed('\n> '+command+'\n')
@@ -37,7 +38,8 @@ class ProcessTerminalManager:
     def complete(self,process,code):
         if process not in self._processes:return
         self._processes.discard(process);self.feed(f'\n[exit {code}]\n')
-        if not self._processes:self.signals.process_exited.emit(code)
+        safe_code = int(code) if isinstance(code, (int, float)) else 0
+        if not self._processes:self.signals.process_exited.emit(safe_code)
     def write(self,text):
         if '\x03' in text:
             for process in tuple(self._processes):process.kill()

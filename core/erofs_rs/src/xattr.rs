@@ -178,7 +178,25 @@ pub fn encode_vfs_capability_v2(caps: u64) -> [u8; 20] {
 
 /// Compute EROFS xattr name filter bitmask contribution (0 bit = present, 1 bit = not present).
 pub fn xattr_name_filter_bit(name_index: u8, name: &[u8]) -> u32 {
-    let mut h = xxh32(&[name_index], XATTR_FILTER_SEED);
-    h = xxh32(name, h);
+    let h = xxh32(name, XATTR_FILTER_SEED.wrapping_add(name_index as u32));
     1u32 << (h & 31)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn xattr_filter_bit_matches_spec() {
+        let bit = xattr_name_filter_bit(XATTR_INDEX_SECURITY, b"selinux");
+        assert_eq!(bit, 0x0000_0800);
+        assert_eq!(!bit, 0xFFFF_F7FF);
+
+        let cap_bit = xattr_name_filter_bit(XATTR_INDEX_SECURITY, b"capability");
+        assert_ne!(cap_bit, 0);
+        assert_eq!(
+            cap_bit,
+            xattr_name_filter_bit(XATTR_INDEX_SECURITY, b"capability")
+        );
+    }
 }

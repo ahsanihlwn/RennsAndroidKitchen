@@ -34,7 +34,7 @@ _ANSI_STRIP_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 class PtySignals(QObject):
     data_ready = Signal(str)
-    process_exited = Signal(int)
+    process_exited = Signal(object)
 
 
 class PtyProcessManager:
@@ -360,7 +360,39 @@ class TerminalBridge(QObject):
             except Exception as e:
                 print(f"[TerminalBridge] Error in handle_terminal_input: {e}", flush=True)
 
+            if not getattr(self.pty_mgr, "wsl_mode", False) and raw_line:
+                from core.terminal_native_router import is_locked_terminal_command
+                if is_locked_terminal_command(raw_line):
+                    erase_seq = "\x1b" if sys.platform == "win32" else "\x15\x0b"
+                    self.pty_mgr.write(erase_seq)
+                    self.run_locked_native(raw_line, echo_cmd=True, prompt_cr=True)
+                    return
+
         self.pty_mgr.write(data)
+
+    def run_locked_native(self, cmd: str, *, echo_cmd: bool = True, prompt_cr: bool = True):
+        from core.terminal_native_router import split_command_tokens, run_locked_terminal_command
+        tokens = split_command_tokens(cmd)
+        if not tokens:
+            return
+
+        def _emit(chunk: str):
+            text = chunk.replace("\r\n", "\n").replace("\n", "\r\n")
+            self.pty_mgr.signals.data_ready.emit(text)
+
+        if echo_cmd:
+            _emit(cmd + "\n")
+
+        def _worker():
+            try:
+                run_locked_terminal_command(tokens, cwd=self.pty_mgr.cwd, emit=_emit)
+            except Exception as exc:
+                _emit(f"error: {exc}\n")
+            finally:
+                if prompt_cr:
+                    self.pty_mgr.write("\r")
+
+        threading.Thread(target=_worker, name="RAK-BridgeNativeCmd", daemon=True).start()
 
     @Slot(int, int)
     def resizePty(self, cols: int, rows: int):

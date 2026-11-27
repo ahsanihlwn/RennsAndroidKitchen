@@ -10,7 +10,7 @@ use erofs_rs::edit::{
     write_path_selinux,
 };
 use erofs_rs::error::{ErofsError, Result};
-use erofs_rs::extract::{ExtractOptions, extract_image};
+use erofs_rs::extract::{ExtractOptions, SymlinkMode, extract_image};
 use erofs_rs::mount_index::MountRegistry;
 use erofs_rs::pack::{InodeFormatMode, PackOptions, pack_directory};
 use erofs_rs::reader::{ErofsImage, FileNode, is_text_bytes};
@@ -48,9 +48,10 @@ COMMANDS:
   list <image> [path]                  List image entries (--tree, --long, --shallow, --filter <STR>)
   stat <image> <path>                  Show detailed inode metadata, xattrs & physical blocks
   read <image> <path>                  Read file contents to stdout or -o <file> (--check-text)
-  unpack <image> -o <dir>              Multi-threaded extract + Android fs_config/file_contexts
+  unpack <image> -o <dir>              Multi-threaded extract + Android fs_config/file_contexts/fs_options
                                        (--target <P>, --targets-file <F>, --recursive, --config-only,
-                                        --no-config, --overwrite, --verify-digest, --threads <N>)
+                                        --no-config, --overwrite, --verify-digest,
+                                        --symlink-mode auto|cygwin|native, --threads <N>)
   pack <src_dir> <out_img>             Build an EROFS image from a directory
                                        (--algo none|lz4|lz4hc|deflate|zstd|lzma, --level <N>,
                                         --pcluster <BYTES>, --block-size <BYTES>, --fs-config <F>,
@@ -611,6 +612,7 @@ fn cmd_unpack(args: &[String], offset: u64, json_mode: bool) -> Result<()> {
     let mut write_configs = true;
     let mut overwrite = false;
     let mut verify_digest = false;
+    let mut symlink_mode = SymlinkMode::Auto;
     let mut threads = 0usize;
     let mut quiet = false;
     let mut pos = Vec::new();
@@ -635,6 +637,10 @@ fn cmd_unpack(args: &[String], offset: u64, json_mode: bool) -> Result<()> {
             "--no-config" => write_configs = false,
             "--overwrite" | "-f" => overwrite = true,
             "--verify-digest" => verify_digest = true,
+            "--symlink-mode" => {
+                i += 1;
+                symlink_mode = SymlinkMode::parse(require_pos(args, i, "--symlink-mode")?)?;
+            }
             "--quiet" | "-q" => quiet = true,
             "--threads" | "-j" => {
                 i += 1;
@@ -674,6 +680,7 @@ fn cmd_unpack(args: &[String], offset: u64, json_mode: bool) -> Result<()> {
         write_configs,
         overwrite,
         verify_digest,
+        symlink_mode,
         threads,
         quiet,
     };

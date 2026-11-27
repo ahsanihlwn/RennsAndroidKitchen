@@ -106,9 +106,10 @@ class WorkspaceBranches(QObject):
         except ValueError as error:
             self.session.message(str(error), 'Create NeoBranch');return
         from ui.workspace_actions import operation
+        branch_targets=(os.path.join(self.session.project,root),os.path.join(self.session.project,'neobranch',root))
         def work():
             return run_branch_operation(manager,root,'create',name,color)
-        operation(self.session, f'preparing-neobranch-{root}-{name}', work)
+        operation(self.session, f'preparing-neobranch-{root}-{name}', work, lane='exclusive', targets=branch_targets)
 
     @Slot(str)
     def choose(self, choice):
@@ -123,7 +124,8 @@ class WorkspaceBranches(QObject):
                 active=manager.get_active_branch(root)
                 if active and active['name']==name and not self._prepare_switch():return
                 from ui.workspace_actions import operation
-                operation(self.session, 'Delete NeoBranch '+name, lambda:run_branch_operation(manager,root,'delete',name))
+                branch_targets=(os.path.join(self.session.project,root),os.path.join(self.session.project,'neobranch',root))
+                operation(self.session, 'Delete NeoBranch '+name, lambda:run_branch_operation(manager,root,'delete',name), lane='exclusive', targets=branch_targets)
             self.session.message(ui_lang.t('rc_delete_branch_msg',name=name),
                                  ui_lang.t('rc_delete_branch_title'),confirm=delete,
                                  danger=True,accept=ui_lang.t('rc_delete'))
@@ -134,6 +136,7 @@ class WorkspaceBranches(QObject):
         if not self._prepare_switch():
             return
         from ui.workspace_actions import operation
+        branch_targets=(os.path.join(self.session.project,root),os.path.join(self.session.project,'neobranch',root))
         def work():
             return run_branch_operation(manager,root,'switch',name)
-        operation(self.session, 'Checkout NeoBranch '+(name or 'Source'), work)
+        operation(self.session, 'Checkout NeoBranch '+(name or 'Source'), work, lane='exclusive', targets=branch_targets)

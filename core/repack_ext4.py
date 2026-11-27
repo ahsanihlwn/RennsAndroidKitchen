@@ -17,35 +17,9 @@ def align_up(value: int, align: int) -> int:
 
 def get_tree_usage_bytes(root_dir: str, dir_block_size: int = 4096,
                          inode_overhead_bytes: int = 256) -> int:
+    from core.aosp_fs_helper import estimate_ext4_usage_bytes
+    return estimate_ext4_usage_bytes(root_dir, block_size=dir_block_size)
 
-    total_bytes = 0
-    dir_count = 0
-    inode_count = 0
-
-    for dirpath, dirnames, filenames in os.walk(root_dir):
-        dir_count += 1
-        inode_count += 1  # folder = 1 inode
-
-        # Anggap tiap folder minimal makan 1 block
-        total_bytes += dir_block_size
-
-        for name in filenames:
-            inode_count += 1
-            fp = os.path.join(dirpath, name)
-
-            if os.path.islink(fp):
-                # symlink: anggap 1 block juga
-                total_bytes += dir_block_size
-            else:
-                try:
-                    total_bytes += os.path.getsize(fp)
-                except OSError:
-                    # broken file, permission error, dll -> skip
-                    pass
-
-    # overhead inode table, kira-kira aja (256 bytes per inode)
-    inode_overhead = inode_count * inode_overhead_bytes
-    return total_bytes + inode_overhead
 
 def choose_ext4_size(
     partition_dir: str,
@@ -59,50 +33,19 @@ def choose_ext4_size(
     preserve_old_size: bool = False,
     precomputed_total: int | None = None,
 ) -> int:
-
-
-    if precomputed_total is not None:
-        total = precomputed_total
-    else:
-        # Hitung REAL "size on disk"
-        total = 0
-        for root, dirs, files in os.walk(partition_dir):
-            # folder minimal 1 block
-            total += block_size
-
-            for f in files:
-                fp = os.path.join(root, f)
-                try:
-                    raw = os.path.getsize(fp)
-                except:
-                    raw = 0
-
-                # hitung "size on disk" = dibagi jml block
-                blocks = (raw + block_size - 1) // block_size
-                total += blocks * block_size
-
-    min_size = min_size_mb * 1024 * 1024
-    min_free = min_free_mb * 1024 * 1024
-    max_free = max_free_mb * 1024 * 1024
-
-
-    free = int(total * spare_ratio)
-    free = max(min_free, free)
-    free = min(max_free, free)
-    need = max(total + free, min_size)
-
-    # Align to block
-    need = align_up(need, block_size)
-
-    # Align ke N MB
-    if align_mb > 0:
-        need = align_up(need, align_mb * 1024 * 1024)
-
-
-    if preserve_old_size and old_size and old_size > 0 and need <= old_size:
-        return old_size
-
-    return need
+    from core.aosp_fs_helper import estimate_ext4_image_size
+    return estimate_ext4_image_size(
+        partition_dir,
+        old_size=old_size,
+        block_size=block_size,
+        spare_ratio=max(spare_ratio, 0.08),
+        align_mb=align_mb,
+        min_size_mb=min_size_mb,
+        min_free_mb=min_free_mb,
+        max_free_mb=max_free_mb,
+        preserve_old_size=preserve_old_size,
+        precomputed_total=precomputed_total,
+    )
 
 # HELPER: PARSE _info
 
@@ -162,8 +105,6 @@ def main(partition_dir):
             return False, f"_info hilang: {info_path}"
         if not os.path.exists(fs_config_path):
             return False, f"fs_config hilang: {fs_config_path}"
-        if not os.path.exists(file_contexts_path):
-            return False, f"file_contexts hilang: {file_contexts_path}"
         if not os.path.isdir(partition_dir):
             return False, f"Folder partisi tidak valid: {partition_dir}"
 
@@ -172,18 +113,31 @@ def main(partition_dir):
 
         try:
             old_size = int(info.get("Size", "0"))
-        except:
+        except Exception:
             old_size = None
 
         try:
             block_size = int(info.get("BlockSize", "4096") or "4096")
-        except:
+        except Exception:
             block_size = 4096
 
+        from core.aosp_fs_helper import normalize_ext4_mount_point, prepare_tree_and_configs_for_target
         mount_point = info.get("MountPoint", f"/{partition_name}")
-        mount_point_clean = mount_point.lstrip("/") or partition_name   # <-- FIX: gak boleh kosong
+        mount_point_clean = normalize_ext4_mount_point(mount_point, partition_name)
+        prepare_tree_and_configs_for_target(
+            partition_dir,
+            partition_name,
+            config_dir,
+            info.get("Format", "EXT4"),
+            mount_point=mount_point,
+        )
+        if not os.path.exists(file_contexts_path):
+            return False, f"file_contexts hilang: {file_contexts_path}"
+        volume_label = info.get("VolumeName", "").strip() or None
 
         # Hitung size
+        from core.threader_control import report_progress
+        report_progress(2, "Scanning EXT4 partition size")
         used_bytes = get_tree_usage_bytes(partition_dir, dir_block_size=block_size)
 
         final_size = choose_ext4_size(
@@ -214,6 +168,7 @@ def main(partition_dir):
             file_contexts=file_contexts_path,
             fs_config=fs_config_path,
             block_size=block_size,
+            label=volume_label,
         )
 
         return True, out_img

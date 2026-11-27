@@ -8,7 +8,7 @@ import shlex
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Property, Signal, Slot, QUrl
+from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer, QUrl, Qt
 from PySide6.QtGui import QColor
 from shiboken6 import isValid
 
@@ -32,6 +32,7 @@ class TerminalSession(QObject):
     fontChanged = Signal()
     warningRaised = Signal(str, str)
     firstCommandSubmitted = Signal(str)
+    commandActivitySettled = Signal()
 
     def __init__(self, cwd=None, *, bin_root=None, bash_mode=False, wsl_mode=False,
                  manager=None, parent=None):
@@ -69,7 +70,17 @@ class TerminalSession(QObject):
             self._arguments = []
 
         self._bridge.terminalReady.connect(self._send_theme)
-        self._bridge.commandSubmitted.connect(self._report_first_command)
+        self._bridge.commandSubmitted.connect(self._on_command_activity)
+        self._command_activity_pending = False
+        self._activity_timer = QTimer(self)
+        self._activity_timer.setSingleShot(True)
+        self._activity_timer.setInterval(450)
+        self._activity_timer.timeout.connect(self._emit_activity_settled)
+        if hasattr(self._manager, "signals") and hasattr(self._manager.signals, "data_ready"):
+            try:
+                self._manager.signals.data_ready.connect(self._on_pty_output_activity, Qt.QueuedConnection)
+            except Exception:
+                pass
 
     @staticmethod
     def _is_process_terminal_manager(mgr):
@@ -85,7 +96,7 @@ class TerminalSession(QObject):
 
     @Property(QUrl, constant=True)
     def url(self):
-        return QUrl.fromLocalFile(str(Path(__file__).resolve().parents[1] / "core" / "terminal.html"))
+        return QUrl()
 
     @Property(str, notify=configChanged)
     def program(self):
@@ -102,6 +113,10 @@ class TerminalSession(QObject):
     @Property(bool, notify=configChanged)
     def autoStart(self):
         return bool(self._program)
+
+    @Property(bool, constant=True)
+    def wslMode(self):
+        return self._wsl_mode
 
     @Property(str, notify=fontChanged)
     def fontFamily(self):
@@ -137,8 +152,15 @@ class TerminalSession(QObject):
 
     @Slot(QObject)
     def bindTerminal(self, term_item):
+        if self._term_item is term_item:
+            return
         self._term_item = term_item
         if term_item is not None:
+            if self._is_process_terminal_manager(self._manager):
+                term_item.startOutput()
+                term_item.interruptRequested.connect(self._interrupt_process_terminal)
+            if hasattr(term_item, "nativeCommandSubmitted"):
+                term_item.nativeCommandSubmitted.connect(self._on_command_activity)
             if hasattr(self._manager, "signals") and hasattr(self._manager.signals, "data_ready"):
                 self._manager.signals.data_ready.connect(term_item.feedText)
             buf = getattr(self._manager, "_buffer", None)
@@ -150,6 +172,10 @@ class TerminalSession(QObject):
             self._bridge.is_ready = True
             self._bridge.terminalReady.emit()
             self._send_theme()
+
+    @Slot()
+    def _interrupt_process_terminal(self):
+        self._manager.write("\x03")
 
     @Slot(result=bool)
     def start(self):
@@ -168,6 +194,8 @@ class TerminalSession(QObject):
 
     @Slot()
     def stop(self):
+        self._activity_timer.stop()
+        self._command_activity_pending = False
         if not self._active:
             return
         if self._term_item is not None and isValid(self._term_item):
@@ -238,7 +266,16 @@ class TerminalSession(QObject):
     @Slot(str)
     def runCommand(self, command):
         if self._active:
-            self._report_first_command(command)
+            self._on_command_activity(command)
+            if not self._wsl_mode:
+                from core.terminal_native_router import is_locked_terminal_command
+                if is_locked_terminal_command(command):
+                    if self._term_item is not None and isValid(self._term_item) and hasattr(self._term_item, "runNativeCommand"):
+                        self._term_item.runNativeCommand(command)
+                        return
+                    if self._custom_manager and hasattr(self._bridge, "run_locked_native"):
+                        self._bridge.run_locked_native(command)
+                        return
             from core.terminal_titles import normalize_terminal_command
             cmd_norm = command if self._wsl_mode else normalize_terminal_command(command, self._bin_root)
             if self._term_item is not None and isValid(self._term_item):
@@ -273,3 +310,22 @@ class TerminalSession(QObject):
         if clean and not self._first_command_seen:
             self._first_command_seen = True
             self.firstCommandSubmitted.emit(clean)
+
+    @Slot(str)
+    def _on_command_activity(self, command):
+        self._report_first_command(command)
+        if str(command or '').strip():
+            self._command_activity_pending = True
+            self._activity_timer.start()
+
+    @Slot()
+    def _on_pty_output_activity(self):
+        if self._active and self._command_activity_pending:
+            self._activity_timer.start()
+
+    @Slot()
+    def _emit_activity_settled(self):
+        if not self._active or not self._command_activity_pending:
+            return
+        self._command_activity_pending = False
+        self.commandActivitySettled.emit()

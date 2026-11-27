@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from core.vdev.stages import (
     s10_kernel,
-    s0_device, s1_mount, s2_selinux, s3_vintf, s4_init, s11_avc, s5_linker,
-    s6_runtime, s7_framework, s8_apex, s9_impact,
+    s0_device, s1_mount, s2_selinux, s3_vintf, s4_init, s15_configs, s11_avc, s5_linker,
+    s6_runtime, s7_framework, s8_apex, s14_hardware, s13_dex_bytecode, s9_impact, s12_system_server,
 )
 
 STAGES = (
@@ -14,12 +14,16 @@ STAGES = (
     s2_selinux,
     s3_vintf,
     s4_init,
+    s15_configs,
     s11_avc,
     s5_linker,
     s6_runtime,
     s7_framework,
     s8_apex,
+    s14_hardware,
+    s13_dex_bytecode,
     s9_impact,
+    s12_system_server,
 )
 
 __all__ = ["STAGES"]

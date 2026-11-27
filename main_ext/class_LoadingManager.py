@@ -195,12 +195,78 @@ class LoadingManager(QObject):
             "started": False,   # True begitu member pertama selesai/aktif
             "region":  region,  # 'heavy' | 'light'
             "started_at": monotonic(),
+            "subtasks": {},
+            "total_weight": 0.0,
         }
         self._group_order.append(bid)
         self._debug("batch_start", batch=bid, action=action, region=region, total=self._groups[bid]["total"], label=label)
         self._cancel_fade()
         self._refresh()
         return bid
+
+    def register_task(self, batch_id: int, task_id: str, member_name: str, weight: float = 1.0, folder_path: str = ""):
+        g = self._groups.get(batch_id)
+        if not g or not task_id:
+            return
+        w = max(1.0, float(weight or 1.0))
+        norm_folder = ""
+        if folder_path:
+            import os
+            norm_folder = os.path.normcase(os.path.normpath(str(folder_path)))
+        g["subtasks"][task_id] = {
+            "id": task_id,
+            "label": self._clean_member_name(member_name or g["label"]),
+            "weight": w,
+            "progress": 0,
+            "stage": "Queued",
+            "state": "queued",
+            "folder": norm_folder,
+        }
+        g["total_weight"] = sum(s["weight"] for s in g["subtasks"].values())
+
+    def mark_task_active(self, batch_id: int, task_id: str, member_name: str | None = None):
+        g = self._groups.get(batch_id)
+        if not g:
+            return
+        sub = g["subtasks"].get(task_id)
+        if sub is not None:
+            sub["state"] = "running"
+            if sub["stage"] == "Queued":
+                sub["stage"] = "Starting"
+        self.mark_group_active(batch_id, member_name)
+
+    def _recompute_group_progress(self, g: dict, active_sub: dict | None = None):
+        subs = g.get("subtasks")
+        if not subs:
+            return
+        reg_weight = sum(s["weight"] for s in subs.values())
+        unreg = max(0, int(g.get("total", 1)) - len(subs))
+        avg_w = (reg_weight / len(subs)) if subs else 1.0
+        denom = max(1.0, reg_weight + unreg * avg_w)
+        weighted_sum = 0.0
+        all_done = (g["ok"] + g["fail"]) >= g["total"]
+        for s in subs.values():
+            p = 100.0 if s["state"] in ("done", "error") else float(max(0, min(99, s["progress"])))
+            weighted_sum += s["weight"] * p
+        pct = int(weighted_sum / denom)
+        if not all_done:
+            pct = min(99, pct)
+        else:
+            pct = 100
+        prev_pct = g.get("progress", -1)
+        g["progress"] = max(prev_pct, pct) if prev_pct >= 0 else pct
+        if len(subs) <= 1:
+            if active_sub is not None and active_sub.get("stage"):
+                g["stage"] = active_sub["stage"]
+        else:
+            done_cnt = g["ok"] + g["fail"]
+            running = [s for s in subs.values() if s["state"] == "running"]
+            focus = active_sub if (active_sub and active_sub["state"] == "running") else (running[0] if running else None)
+            if focus:
+                st = f" ({focus['stage']})" if focus.get("stage") and focus["stage"] not in ("Starting", "Queued") else ""
+                g["stage"] = f"{done_cnt}/{g['total']} · {focus['label']} {focus['progress']}%{st}"
+            else:
+                g["stage"] = f"{done_cnt}/{g['total']} completed"
 
     def mark_group_active(self, batch_id: int, member_name: str | None = None):
 
@@ -232,6 +298,13 @@ class LoadingManager(QObject):
             g["fail"] += 1
 
         # Catat ke history + counter sesi (per member)
+        # Catat ke history + counter sesi (per member)
+        sub = g.get("subtasks", {}).get(task_id) if task_id else None
+        if sub is not None:
+            sub["state"] = "done" if ok else "error"
+            sub["progress"] = 100
+            sub["stage"] = "Done" if ok else "Failed"
+        self._recompute_group_progress(g)
         self._record_history(member_name or g["label"], ok, g["label"], monotonic()-g["started_at"], detail, task_id)
 
         done = g["ok"] + g["fail"]
@@ -342,15 +415,81 @@ class LoadingManager(QObject):
             rows.append({"batch_id":batch_id,"label":group["label"], "done":done, "total":group["total"],
                          "progress":group.get('progress',-1),"stage":group.get('stage',''),
                          "members":list(group["members"]), "active":bool(group["started"]),
-                         "elapsed":max(0.0,monotonic()-group["started_at"])})
+                         "elapsed":max(0.0,monotonic()-group["started_at"]),
+                         "subtasks":[
+                             {"id":s["id"],"label":s["label"],"progress":s["progress"],
+                              "stage":s["stage"],"state":s["state"],"weight":s["weight"]}
+                             for s in group.get("subtasks",{}).values()
+                         ]})
         return rows
 
-    def update_progress(self, batch_id, progress=-1, stage=''):
+    def update_task_progress(self, batch_id, task_id, progress=-1, stage=''):
+        g = self._groups.get(batch_id)
+        if g is None:
+            return
+        g["started"] = True
+        sub = g.get("subtasks", {}).get(task_id)
+        if sub is None and len(g.get("subtasks", {})) == 1:
+            sub = next(iter(g["subtasks"].values()))
+        if sub is not None:
+            if progress >= 0:
+                p = max(0, min(100 if sub["state"] in ("done", "error") else 99, int(progress)))
+                sub["progress"] = max(sub["progress"], p)
+            if stage:
+                sub["stage"] = str(stage)
+            self._recompute_group_progress(g, active_sub=sub)
+        else:
+            g['progress'] = max(-1, min(100, int(progress)))
+            g['stage'] = str(stage)
+        self._refresh()
+
+    def update_progress(self, batch_id, progress=-1, stage='', task_id=None):
+        if task_id is not None:
+            self.update_task_progress(batch_id, task_id, progress, stage)
+            return
         group=self._groups.get(batch_id)
         if group is None:return
-        group['progress']=max(-1,min(99,int(progress)))
+        if len(group.get("subtasks", {})) == 1:
+            only_id = next(iter(group["subtasks"]))
+            self.update_task_progress(batch_id, only_id, progress, stage)
+            return
+        group['progress']=max(-1,min(100,int(progress)))
         group['stage']=str(stage)
         self._refresh()
+
+    def get_progress_info(self):
+        total_w = 0.0
+        weighted_p = 0.0
+        stages = []
+        for batch_id in self._group_order:
+            group = self._groups.get(batch_id)
+            if not group or not group.get("started") or "progress" not in group:
+                continue
+            pct = int(group.get("progress", -1))
+            if pct < 0:
+                continue
+            w = max(1.0, float(group.get("total_weight") or group.get("total") or 1.0))
+            total_w += w
+            weighted_p += w * pct
+            st = str(group.get("stage") or "")
+            if st:
+                stages.append(st)
+        if total_w > 0:
+            overall = max(0, min(100, int(weighted_p / total_w)))
+            return overall, (stages[0] if len(stages) == 1 else f"{len(stages)} tasks active" if stages else "")
+        return -1, ""
+
+    def get_path_progress(self, norm_path: str) -> int:
+        if not norm_path:
+            return -1
+        for batch_id in self._group_order:
+            g = self._groups.get(batch_id)
+            if not g:
+                continue
+            for sub in g.get("subtasks", {}).values():
+                if sub.get("folder") == norm_path and sub.get("state") in ("queued", "running"):
+                    return int(sub.get("progress", 0))
+        return -1
 
     def clear_history(self):
 

@@ -29,6 +29,14 @@ Item {
     property real ringFill: 0.0          // sweeps from 0.0 to 1.0 when collapsing
     property real barFill: 1.0           // fills from 0.0 to 1.0 when expanding
 
+    function beginStartupReveal() {
+        if (!anims || collapsed) { barFill = 1.0; return }
+        startupBarFill.stop()
+        barFill = 0.25
+        startupBarFill.start()
+    }
+    NumberAnimation { id: startupBarFill; target: sidebar; property: "barFill"; from: 0.25; to: 1.0; duration: 420; easing.type: Easing.OutCubic }
+
     implicitWidth: contentWidth
     width: contentWidth
 
@@ -253,6 +261,29 @@ Item {
             color: sidebar.c.b06
         }
 
+        // ── Sliding active pill for Navigation items ──────────────────────────
+        SmoothRectangle {
+            id: navActivePill
+            x: panel.itemX
+            y: navColumn.y + (sidebar.model.page === "settings" ? 45 : 0)
+            width: panel.itemWidth
+            height: 40
+            radius: 8
+            color: sidebar.c.a12
+            border.color: sidebar.c.a35
+            border.width: 1
+            opacity: (sidebar.model.page === "projects" || sidebar.model.page === "settings") ? 1 : 0
+            visible: opacity > 0.001
+            Behavior on y {
+                enabled: sidebar.anims
+                NumberAnimation { duration: 240; easing.type: Easing.OutCubic }
+            }
+            Behavior on opacity {
+                enabled: sidebar.anims
+                NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
+            }
+        }
+
         // ── Navigation items (Projects & Settings) ─────────────────────────────
         Column {
             id: navColumn
@@ -268,11 +299,11 @@ Item {
                 width: parent.width; height: 40; implicitHeight: 40
                 leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
                 cornerRadius: 8; edgeWidth: 1
-                fillColor: sidebar.model.page === "projects" ? sidebar.c.a12 : "transparent"
-                hoverFillColor: sidebar.model.page === "projects" ? sidebar.c.a12 : sidebar.c.b05
+                fillColor: "transparent"
+                hoverFillColor: sidebar.model.page === "projects" ? "transparent" : sidebar.c.b05
                 downFillColor: sidebar.model.page === "projects" ? sidebar.c.a18 : sidebar.c.b09
-                edgeColor: sidebar.model.page === "projects" ? sidebar.c.a35 : "transparent"
-                hoverEdgeColor: sidebar.model.page === "projects" ? sidebar.c.a45 : "transparent"
+                edgeColor: "transparent"
+                hoverEdgeColor: sidebar.model.page === "projects" ? sidebar.c.a35 : "transparent"
                 animatePress: sidebar.model.settings.animations
                 onClicked: {
                     if (sidebar.model.page !== "projects") sidebar.model.navigate("projects")
@@ -333,11 +364,11 @@ Item {
                 width: parent.width; height: 40; implicitHeight: 40
                 leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
                 cornerRadius: 8; edgeWidth: 1
-                fillColor: sidebar.model.page === "settings" ? sidebar.c.a12 : "transparent"
-                hoverFillColor: sidebar.model.page === "settings" ? sidebar.c.a12 : sidebar.c.b05
+                fillColor: "transparent"
+                hoverFillColor: sidebar.model.page === "settings" ? "transparent" : sidebar.c.b05
                 downFillColor: sidebar.model.page === "settings" ? sidebar.c.a18 : sidebar.c.b09
-                edgeColor: sidebar.model.page === "settings" ? sidebar.c.a35 : "transparent"
-                hoverEdgeColor: sidebar.model.page === "settings" ? sidebar.c.a45 : "transparent"
+                edgeColor: "transparent"
+                hoverEdgeColor: sidebar.model.page === "settings" ? sidebar.c.a35 : "transparent"
                 animatePress: sidebar.model.settings.animations
                 onClicked: {
                     if (sidebar.model.page !== "settings") sidebar.model.navigate("settings")
@@ -404,11 +435,11 @@ Item {
                     height: 44; implicitHeight: 44
                     leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
                     cornerRadius: 8; edgeWidth: 1
-                    fillColor: modelData.active ? sidebar.c.b03 : "transparent"
-                    hoverFillColor: sidebar.c.b06
+                    fillColor: modelData.active ? sidebar.c.b04 : "transparent"
+                    hoverFillColor: sidebar.c.b07
                     downFillColor: sidebar.c.b10
                     edgeColor: modelData.distro ? (modelData.active ? sidebar.c.a30 : sidebar.c.a12) : "transparent"
-                    hoverEdgeColor: modelData.distro ? (modelData.active ? sidebar.c.a45 : sidebar.c.a24) : "transparent"
+                    hoverEdgeColor: modelData.distro ? (modelData.active ? sidebar.c.a45 : sidebar.c.a24) : sidebar.c.b10
                     animatePress: sidebar.model.settings.animations
                     toolTip: (modelData.name || modelData.key) + "\n" +
                            (modelData.used / 1073741824).toFixed(1) + " / " +

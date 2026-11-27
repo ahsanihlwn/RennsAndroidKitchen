@@ -5,7 +5,13 @@ import re
 import uuid
 
 
-EXT_FORMATS = {"EXT2", "EXT3", "EXT4"}
+from core.aosp_fs_helper import (
+    EXT_FORMATS,
+    estimate_ext4_image_size,
+    estimate_ext4_usage_bytes,
+    parse_erofs_mount_point,
+    prepare_tree_and_configs_for_target,
+)
 
 
 def _read_kv_file(path):
@@ -45,26 +51,6 @@ def _read_fs_options(path):
     return data
 
 
-def _tree_size_bytes(path):
-    total = 0
-    for root, dirs, files in os.walk(path):
-        total += 4096
-        for name in files:
-            fp = os.path.join(root, name)
-            try:
-                total += os.path.getsize(fp)
-            except OSError:
-                pass
-    return total
-
-
-def _align_up(value, align):
-    if align <= 0:
-        return value
-    rem = value % align
-    return value if rem == 0 else value + align - rem
-
-
 def _remove_file(path):
     if os.path.exists(path):
         os.remove(path)
@@ -78,8 +64,12 @@ def _write_text(path, text):
 
 def _build_ext_info(partition_dir, part_name, fs_options):
     block_size = 4096
-    used = _tree_size_bytes(partition_dir)
-    size = _align_up(max(used, 16 * 1024 * 1024), 4 * 1024 * 1024)
+    used = estimate_ext4_usage_bytes(partition_dir, block_size=block_size)
+    size = estimate_ext4_image_size(
+        partition_dir,
+        block_size=block_size,
+        precomputed_total=used,
+    )
     block_count = max(1, math.ceil(size / block_size))
     used_blocks = math.ceil(used / block_size)
     free_blocks = max(0, block_count - used_blocks)
@@ -146,8 +136,6 @@ def convert_filesystem_metadata(partition_dir, target_fs=None):
         return False, f"Config folder not found: {config_dir}"
     if not os.path.isfile(fs_config_path):
         return False, f"fs_config not found: {fs_config_path}"
-    if not os.path.isfile(file_contexts_path):
-        return False, f"file_contexts not found: {file_contexts_path}"
 
     if target_fs is None:
         if os.path.isfile(options_path):
@@ -162,7 +150,18 @@ def convert_filesystem_metadata(partition_dir, target_fs=None):
     if target_fs in EXT_FORMATS:
         if not os.path.isfile(options_path):
             return False, f"EROFS options not found: {options_path}"
+        if not os.path.isfile(file_contexts_path):
+            return False, f"file_contexts not found: {file_contexts_path}"
         fs_options = _read_fs_options(options_path)
+        if not fs_options.get("MountPoint"):
+            fs_options["MountPoint"] = parse_erofs_mount_point(options_path, part_name)
+        prepare_tree_and_configs_for_target(
+            partition_dir,
+            part_name,
+            config_dir,
+            target_fs,
+            mount_point=fs_options["MountPoint"],
+        )
         _write_text(info_path, _build_ext_info(partition_dir, part_name, fs_options))
         _remove_file(options_path)
         return True, "Converted metadata to EXT4"
@@ -171,6 +170,17 @@ def convert_filesystem_metadata(partition_dir, target_fs=None):
         if not os.path.isfile(info_path):
             return False, f"EXT info not found: {info_path}"
         info = _read_kv_file(info_path)
+        mp = (info.get("MountPoint") or f"/{part_name}").strip()
+        if not mp.startswith("/"):
+            mp = "/" + mp
+        info["MountPoint"] = mp
+        prepare_tree_and_configs_for_target(
+            partition_dir,
+            part_name,
+            config_dir,
+            target_fs,
+            mount_point=mp,
+        )
         _write_text(options_path, _build_erofs_options(partition_dir, part_name, info, config_dir))
         _remove_file(info_path)
         return True, "Converted metadata to EROFS"

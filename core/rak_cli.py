@@ -1531,6 +1531,234 @@ def _execute_command(line, wait=True, timeout=120.0, cwd=None):
         updated = update_all_agent_files(cwd or os.getcwd())
         return True, f"Agent instructions synchronized ({', '.join(updated)})"
 
+    if cmd in ("vdev", "boot-analyze", "boot_analyze"):
+        import shlex
+        _usage = (
+            "usage: rak vdev analyze <target> [--json] [--no-vbmeta] [--force-permissive] [--verify-hashtree]\n"
+            "     | rak vdev diff <stock> <port> [--json]\n"
+            "     | rak vdev correlate <log_file> [--rom <target>] [--json]\n"
+            "     | rak vdev autofix <rom_dir> [--preview <id> | --apply <id> | --undo <manifest>] [--json]\n"
+            "     | rak vdev logic-map <target> [--json]\n"
+            "     | rak vdev qemu status [--json]\n"
+            "     | rak vdev qemu plan|boot <target> [--abi auto|arm64|arm64_32|arm32] [--kernel <path>] [--ram 2048] [--cpus 4] [--timeout 90] [--correlate] [--json]"
+        )
+        try:
+            tokens = [_cli_unquote(token) for token in shlex.split(rest, posix=False)]
+        except ValueError as exc:
+            return False, f"invalid vdev command: {exc}"
+        if not tokens:
+            return False, _usage
+        sub = tokens[0].lower()
+        as_json = "--json" in tokens
+
+        def _flag_value(flag_name):
+            if flag_name in tokens:
+                idx = tokens.index(flag_name)
+                if idx + 1 < len(tokens):
+                    return tokens[idx + 1]
+            return ""
+
+        _value_flags = {"--rom", "--preview", "--apply", "--undo", "--abi", "--kernel", "--ram", "--cpus", "--timeout"}
+        pos = []
+        skip_next = False
+        for t in tokens[1:]:
+            if skip_next:
+                skip_next = False
+                continue
+            if t in _value_flags:
+                skip_next = True
+                continue
+            if t.startswith("--"):
+                continue
+            pos.append(t)
+
+        opts = {
+            "verify_hashtree": "--verify-hashtree" in tokens,
+            "vbmeta_enabled": "--no-vbmeta" not in tokens,
+            "avb_disabled": "--no-vbmeta" in tokens,
+            "force_permissive": "--force-permissive" in tokens,
+        }
+        if sub in ("analyze", "scan", "sim") and pos:
+            from core.vdev import analyze as _vdev_analyze
+            target = _cli_path(pos[0], cwd)
+            rep = _vdev_analyze(target, options=opts)
+            if as_json:
+                return (not rep.error), rep.to_json()
+            sim = rep.boot_simulation or {}
+            return (not rep.error), f"{rep.verdict()} | sim={sim.get('verdict', '?')} | autofix={len(rep.autofix)}"
+        if sub == "diff" and len(pos) >= 2:
+            from core.vdev import compare_firmwares as _vdev_cmp
+            diff = _vdev_cmp(_cli_path(pos[0], cwd), _cli_path(pos[1], cwd), options=opts)
+            if as_json:
+                return True, json.dumps(diff, indent=2, ensure_ascii=False)
+            return True, (
+                f"stock={diff['stock_summary']['verdict']} | port={diff['port_summary']['verdict']} | "
+                f"new_blockers={len(diff['new_blockers'])} new_warns={len(diff['new_warns'])}"
+            )
+        if sub == "correlate" and pos:
+            from core.vdev.logcat_correlator import correlate_log as _correlate_log
+            log_path = _cli_path(pos[0], cwd)
+            if not os.path.isfile(log_path):
+                return False, f"log file not found: {log_path}"
+            try:
+                with open(log_path, "r", encoding="utf-8", errors="replace") as fh:
+                    raw_log = fh.read(8 * 1024 * 1024)
+            except OSError as exc:
+                return False, f"cannot read log file: {exc}"
+            rom_arg = _flag_value("--rom")
+            vfs_obj = None
+            rep_obj = None
+            if rom_arg:
+                from core.vdev import analyze as _vdev_analyze
+                holder = {}
+                rep_obj = _vdev_analyze(
+                    _cli_path(rom_arg, cwd),
+                    options=opts,
+                    on_vfs=lambda vfs, *_a: holder.setdefault("vfs", vfs),
+                )
+                vfs_obj = holder.get("vfs")
+            res = _correlate_log(raw_log, vfs=vfs_obj, report=rep_obj)
+            if as_json:
+                return True, json.dumps(res, indent=2, ensure_ascii=False)
+            return True, (
+                f"events={res.get('totalEvents', 0)} matched_static={res.get('matchedStatic', 0)} "
+                f"runtime_only={res.get('runtimeOnly', 0)} avc={res.get('avcCount', 0)}"
+            )
+        if sub == "autofix":
+            from core.vdev.autofix import preview_autofix, apply_autofix, undo_autofix
+            undo_manifest = _flag_value("--undo")
+            if undo_manifest:
+                res = undo_autofix(_cli_path(undo_manifest, cwd))
+                if as_json:
+                    return bool(res.get("ok")), json.dumps(res, indent=2, ensure_ascii=False)
+                return bool(res.get("ok")), str(res.get("message") or res)
+            if not pos:
+                return False, _usage
+            from core.vdev import analyze as _vdev_analyze
+            rom_dir = _cli_path(pos[0], cwd)
+            holder = {}
+            rep = _vdev_analyze(
+                rom_dir,
+                options=opts,
+                on_vfs=lambda _v, _r, layout, *_a: holder.setdefault("layout", layout),
+            )
+            if rep.error:
+                return False, rep.error
+            recipes = {str(r.get("id", "")): r for r in (rep.autofix or [])}
+            prev_id = _flag_value("--preview")
+            apply_id = _flag_value("--apply")
+            if prev_id:
+                rec = recipes.get(prev_id)
+                if not rec:
+                    return False, f"autofix recipe not found: {prev_id} (available: {', '.join(sorted(recipes)) or 'none'})"
+                res = preview_autofix(rec, rom_dir, layout=holder.get("layout"))
+                if as_json:
+                    return bool(res.get("ok")), json.dumps(res, indent=2, ensure_ascii=False)
+                diffs = "\n".join(f"[{c['action']}] {c['vpath']}\n{c['diff']}" for c in (res.get("changes") or []))
+                return bool(res.get("ok")), diffs or str(res.get("reason") or "")
+            if apply_id:
+                rec = recipes.get(apply_id)
+                if not rec:
+                    return False, f"autofix recipe not found: {apply_id} (available: {', '.join(sorted(recipes)) or 'none'})"
+                res = apply_autofix(rec, rom_dir, layout=holder.get("layout"))
+                if as_json:
+                    return bool(res.get("ok")), json.dumps(res, indent=2, ensure_ascii=False)
+                return bool(res.get("ok")), str(res.get("message") or res)
+            if as_json:
+                return True, json.dumps(rep.autofix or [], indent=2, ensure_ascii=False)
+            if not rep.autofix:
+                return True, "No autofix recipes needed."
+            return True, "\n".join(f"{r.get('id', '')}: {r.get('title', '')}" for r in rep.autofix)
+        if sub in ("logic-map", "logic_map") and pos:
+            from core.vdev import analyze as _vdev_analyze
+            target = _cli_path(pos[0], cwd)
+            captured = {}
+
+            def _cap_stage(st, ctx):
+                if ctx is None:
+                    return
+                if st.key == "dex_bytecode":
+                    captured["dex_logic"] = (ctx.shared.get("dex_bytecode") or {}).get("logic_map") or {}
+                elif st.key == "linker":
+                    captured["daemon_symbols"] = (ctx.shared.get("linker") or {}).get("daemon_symbol_audit") or []
+                elif st.key == "hardware":
+                    captured["hardware"] = ctx.shared.get("hardware") or {}
+                elif st.key == "kernel":
+                    captured["kernel_config"] = ctx.shared.get("kernel_config") or {}
+                    captured["kernel_hardware"] = ctx.shared.get("kernel_hardware") or {}
+
+            rep = _vdev_analyze(target, options=opts, on_stage=_cap_stage)
+            if rep.error:
+                return False, rep.error
+            if as_json:
+                return True, json.dumps(captured, indent=2, ensure_ascii=False)
+            lm = captured.get("dex_logic") or {}
+            hw = (captured.get("hardware") or {}).get("subsystems") or {}
+            kcfg = captured.get("kernel_config") or {}
+            khw = captured.get("kernel_hardware") or {}
+            return True, (
+                f"services={lm.get('system_services_count', 0)} jni={lm.get('jni_libraries_count', 0)} "
+                f"binder={lm.get('binder_calls_count', 0)} daemons={len(captured.get('daemon_symbols') or [])} "
+                f"hw_subsystems={len(hw)} kernel_configs={kcfg.get('total', 0)} "
+                f"ko_total={khw.get('ko_total', 0)} of_aliases={khw.get('of_alias_count', 0)}"
+            )
+        if sub == "qemu":
+            from core.vdev.qemu_runner import detect_qemu_environment, prepare_qemu_plan, run_qemu_blocking
+            qsub = pos[0].lower() if pos else "status"
+            if qsub == "status":
+                env_info = detect_qemu_environment()
+                if as_json:
+                    return True, json.dumps(env_info, indent=2, ensure_ascii=False)
+                return True, (
+                    f"available={env_info['available']} backend={env_info['backend']} "
+                    f"abis={','.join(env_info['supportedAbis']) or 'none'} "
+                    f"arm64_kernel={env_info['arm64Kernel'] or 'missing'} "
+                    f"license={env_info['license']}"
+                )
+            if qsub in ("plan", "boot") and len(pos) >= 2:
+                target = _cli_path(pos[1], cwd)
+                abi = _flag_value("--abi") or "auto"
+                kpath = _flag_value("--kernel")
+                if kpath:
+                    kpath = _cli_path(kpath, cwd)
+                ram_mb = int(_flag_value("--ram") or 2048)
+                cpus = int(_flag_value("--cpus") or 4)
+                timeout_s = int(_flag_value("--timeout") or 90)
+                plan = prepare_qemu_plan(
+                    target,
+                    abi=abi,
+                    kernel_path=kpath,
+                    ram_mb=ram_mb,
+                    cpus=cpus,
+                    headless=True,
+                    permissive="--force-permissive" in tokens or "--permissive" in tokens or True,
+                    avb_disabled="--no-vbmeta" in tokens or True,
+                    timeout_sec=timeout_s,
+                    auto_download_kernel=(qsub == "boot"),
+                )
+                if qsub == "plan":
+                    if as_json:
+                        return plan.ok, json.dumps(plan.to_dict(), indent=2, ensure_ascii=False)
+                    if not plan.ok:
+                        return False, plan.error
+                    return True, (
+                        f"backend={plan.backend} abi={plan.abi_mode} disks={len(plan.disks)} "
+                        f"ramdisk={plan.ramdisk_path} cmd={' '.join(plan.command[:6])}..."
+                    )
+                if not plan.ok:
+                    return False, plan.error
+                res = run_qemu_blocking(plan, timeout_sec=timeout_s)
+                if "--correlate" in tokens and res.get("logText"):
+                    from core.vdev.logcat_correlator import correlate_log as _correlate_log
+                    res["correlation"] = _correlate_log(res["logText"])
+                if as_json:
+                    return bool(res.get("ok")), json.dumps(res, indent=2, ensure_ascii=False)
+                return bool(res.get("ok")), (
+                    f"{res.get('summary', '')} | milestones={','.join(res.get('milestones') or ()) or 'none'}"
+                )
+            return False, _usage
+        return False, _usage
+
     if cmd in ("policy", "sepolicy", "neocat_policy"):
         import shlex
         try:

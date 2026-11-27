@@ -92,8 +92,8 @@ Item {
                     x: overlay.shakeOffset; width: parent.width; height: 41; cornerRadius: 8
                     enabled: !!overlay.backend && !overlay.backend.busy
                     text: overlay.backend?(overlay.backend.busy?"    ":"")+overlay.backend.label:"Sign in"
-                    fillColor: overlay.c.BTN_PRIMARY_BG || overlay.c.a90; edgeColor: overlay.c.BTN_PRIMARY_EDGE || overlay.c.accent_hex; hoverFillColor: overlay.c.BTN_PRIMARY_HOVER || overlay.c.accent_hex; hoverEdgeColor: overlay.c.BTN_PRIMARY_EDGE_HOVER || overlay.c.accent_hex; downFillColor: overlay.c.BTN_PRIMARY_DOWN || overlay.c.a80
-                    disabledFillColor: overlay.c.BTN_PRIMARY_DISABLED_BG || overlay.c.a35; disabledEdgeColor: overlay.c.BTN_PRIMARY_DISABLED_EDGE || overlay.c.a20; disabledLabelColor: overlay.c.BTN_PRIMARY_DISABLED_FG || "#8cffffff"; labelColor: overlay.c.BTN_PRIMARY_FG || "white"; hoverLabelColor: overlay.c.BTN_PRIMARY_FG_HOVER || "white"
+                    fillColor: overlay.c.BTN_PRIMARY_BG || overlay.c.a24; edgeColor: overlay.c.BTN_PRIMARY_EDGE || overlay.c.a45; hoverFillColor: overlay.c.BTN_PRIMARY_HOVER || overlay.c.a35; hoverEdgeColor: overlay.c.BTN_PRIMARY_EDGE_HOVER || overlay.c.a65; downFillColor: overlay.c.BTN_PRIMARY_DOWN || overlay.c.a45
+                    disabledFillColor: overlay.c.BTN_PRIMARY_DISABLED_BG || overlay.c.a12; disabledEdgeColor: overlay.c.BTN_PRIMARY_DISABLED_EDGE || overlay.c.a18; disabledLabelColor: overlay.c.BTN_PRIMARY_DISABLED_FG || "#8cffffff"; labelColor: overlay.c.BTN_PRIMARY_FG || "white"; hoverLabelColor: overlay.c.BTN_PRIMARY_FG_HOVER || "white"
                     font.pixelSize: 13; font.weight: Font.DemiBold
                     onClicked: overlay.submit()
                     Spinner { x: 12; anchors.verticalCenter: parent.verticalCenter; width: 16; height: 16; thickness: 3; inset: 3; accent: "white"; visible: !!overlay.backend && overlay.backend.busy }

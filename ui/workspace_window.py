@@ -15,6 +15,7 @@ from ui.hex_viewer import HexDocument
 from ui.so_viewer import SoDocument
 from ui.partition_viewer import PartitionDocument
 from ui.image_viewer import ImageDocument,DocumentImages
+from ui.markdown_viewer import MarkdownDocument
 from ui.media_viewer import MediaDocument
 from ui.archive_viewer import ArchiveDocument
 
@@ -39,6 +40,7 @@ class QuickWorkspace(QObject):
             qmlRegisterType(SoDocument, "Renns.Workspace", 1, 0, "SoDocument")
             qmlRegisterType(PartitionDocument, "Renns.Workspace", 1, 0, "PartitionDocument")
             qmlRegisterType(ImageDocument, "Renns.Workspace", 1, 0, "ImageDocument")
+            qmlRegisterType(MarkdownDocument, "Renns.Workspace", 1, 0, "MarkdownDocument")
             qmlRegisterType(MediaDocument, "Renns.Workspace", 1, 0, "MediaDocument")
             qmlRegisterType(ArchiveDocument, "Renns.Workspace", 1, 0, "ArchiveDocument")
             _registered = True
@@ -70,6 +72,9 @@ class QuickWorkspace(QObject):
             self.engine.addImageProvider("rak", IconProvider())
         if self.engine.imageProvider("documents") is None:
             self.engine.addImageProvider("documents", DocumentImages())
+        if self.engine.imageProvider("qemu_screen") is None:
+            from core.vdev.qemu_display import QemuScreenProvider
+            self.engine.addImageProvider("qemu_screen", QemuScreenProvider())
         if qml_engine is not None and qml_component is not None:
             self.window = qml_component.createWithInitialProperties({"workspace": self.session, "preferences": preferences})
             if self.window is None or qml_component.isError():

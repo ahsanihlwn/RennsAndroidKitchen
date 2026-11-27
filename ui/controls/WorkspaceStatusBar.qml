@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
+import QtQuick.Shapes
 
 Item {
     id: bar
@@ -57,7 +58,30 @@ Item {
                 objectName: "workspaceStatusSpinner"
                 anchors.fill: parent; accent: bar.c.accent_hex; thickness: 3; inset: 3
                 opacity: parent.activeMix; scale: .8+.2*parent.activeMix
-                spinning: status.visible && opacity>0
+                visible: bar.workspace.statusProgress < 0
+                spinning: status.visible && opacity>0 && visible
+            }
+            Shape {
+                id: statusBarRing
+                anchors.fill: parent
+                visible: bar.currentState==="active" && bar.workspace.statusProgress >= 0
+                opacity: parent.activeMix
+                preferredRendererType: Shape.CurveRenderer
+                antialiasing: true
+                readonly property color accentCol: bar.c.accent_hex
+                ShapePath {
+                    strokeColor: Qt.rgba(statusBarRing.accentCol.r, statusBarRing.accentCol.g, statusBarRing.accentCol.b, 0.22)
+                    strokeWidth: 2.4; capStyle: ShapePath.RoundCap; fillColor: "transparent"
+                    PathAngleArc { centerX: 7; centerY: 7; radiusX: 4.8; radiusY: 4.8; startAngle: 0; sweepAngle: 360 }
+                }
+                ShapePath {
+                    strokeColor: statusBarRing.accentCol; strokeWidth: 2.4; capStyle: ShapePath.RoundCap; fillColor: "transparent"
+                    PathAngleArc {
+                        centerX: 7; centerY: 7; radiusX: 4.8; radiusY: 4.8; startAngle: -90
+                        sweepAngle: 360 * Math.max(0, Math.min(100, bar.workspace.statusProgress)) / 100
+                        Behavior on sweepAngle { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                    }
+                }
             }
             Image {
                 objectName: "workspaceStatusResult"

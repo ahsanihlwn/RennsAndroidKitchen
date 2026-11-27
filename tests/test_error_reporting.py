@@ -303,6 +303,97 @@ class ErrorReportingTests(unittest.TestCase):
         self.assertEqual(self.presenter.messages, [])
         self.assertEqual(self.presenter.operations, [])
 
+    def test_auth_error_stays_inline_without_operation_or_fatal_dialog(self):
+        from ui.auth import AuthModel
+
+        class FakeAuthService(QObject):
+            signin_success = Signal(dict)
+            google_success = Signal(dict)
+            signup_success = Signal(dict)
+            signup_pending = Signal(str, str, str)
+            signin_error = Signal(str)
+            signup_error = Signal(str)
+            google_error = Signal(str)
+
+        service = FakeAuthService()
+        auth = AuthModel(service=service)
+        shakes = []
+        auth.shake.connect(shakes.append)
+        service.signin_error.emit('Incorrect email or password.')
+        self.app.processEvents()
+        time.sleep(0.05)
+        self.app.processEvents()
+        self.assertEqual(auth.alert, 'Incorrect email or password.')
+        self.assertFalse(auth.busy)
+        self.assertEqual(shakes, [''])
+        self.assertEqual(self.presenter.messages, [])
+        self.assertEqual(self.presenter.operations, [])
+
+    def test_incompatible_viewer_files_stay_inline_without_popup_or_operation_dialog(self):
+        from unittest.mock import patch
+        from ui.archive_viewer import ArchiveDocument
+        from ui.partition_viewer import PartitionDocument
+        from ui.so_viewer import SoDocument
+        from ui.viewers import ViewerDocument, viewer_kind
+
+        java_class = Path(self.temporary.name) / 'Calculator.class'
+        java_class.write_bytes(b'\xca\xfe\xba\xbe\x00\x00\x00A\x003\n\x00\x02\x00\x03\x07' + b'\x00' * 128)
+        self.assertEqual(viewer_kind(str(java_class)), 'choose')
+
+        bad_file = Path(self.temporary.name) / 'mismatch.bin'
+        bad_file.write_bytes(b'not a binary or archive or payload')
+        bad_zip = Path(self.temporary.name) / 'mismatch.zip'
+        bad_zip.write_bytes(b'not a zip archive')
+
+        so_doc = SoDocument(self.presenter)
+        so_msgs = []
+        so_doc.messageRequested.connect(lambda *args: so_msgs.append(args))
+        self.addCleanup(so_doc.close)
+        so_doc.load(str(java_class))
+        self.wait(lambda: not so_doc.busy)
+
+        archive_doc = ArchiveDocument(self.presenter)
+        self.addCleanup(archive_doc.close)
+        archive_doc.load(str(bad_zip))
+        self.wait(lambda: bool(archive_doc.status))
+
+        part_doc = PartitionDocument(self.presenter)
+        part_msgs = []
+        part_doc.messageRequested.connect(lambda *args: part_msgs.append(args))
+        self.addCleanup(part_doc.close)
+        part_doc.load(str(bad_file), 'payload')
+        self.wait(lambda: not part_doc.busy)
+
+        viewer_doc = ViewerDocument(self.presenter)
+        self.addCleanup(viewer_doc.close)
+        viewer_doc.load(str(bad_file), 'elf')
+        self.wait(lambda: not viewer_doc.busy)
+
+        self.app.processEvents()
+        time.sleep(0.05)
+        self.app.processEvents()
+
+        self.assertEqual(so_msgs, [])
+        self.assertEqual(part_msgs, [])
+        self.assertEqual(self.presenter.messages, [])
+        self.assertEqual(self.presenter.operations, [])
+        self.assertIn('Error:', so_doc.status)
+        self.assertNotIn('Traceback', so_doc.status)
+        self.assertIn('Unsupported binary format', so_doc.overview)
+        self.assertIn('Error:', archive_doc.status)
+        self.assertNotIn('Traceback', archive_doc.status)
+        self.assertTrue(part_doc.error)
+        self.assertNotIn('Traceback', part_doc.error)
+        self.assertTrue(viewer_doc.error)
+        self.assertNotIn('Traceback', viewer_doc.error)
+
+        bug_doc = SoDocument(self.presenter)
+        self.addCleanup(bug_doc.close)
+        with patch('ui.so_viewer.binary_core.analyze_file', side_effect=TypeError('ACTUAL_VIEWER_BUG')):
+            bug_doc.load(str(bad_file))
+            self.wait(lambda: not bug_doc.busy)
+        self.assert_all_outputs('TypeError: ACTUAL_VIEWER_BUG', fatal=True)
+
 
 
 if __name__ == '__main__':

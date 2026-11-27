@@ -282,8 +282,37 @@ class VirtualFS:
 
     def walk_files(self, vdir, limit=100000):
 
+        base = normalize(vdir)
+        node = self.lookup(base)
+        # Fast path: single walked ImageSource with no nested sub-mounts inside `base`
+        if (node is not None and node.is_dir and getattr(node.source, "_walked", False)):
+            prefix = "/" if base == "/" else base + "/"
+            has_submount = any(
+                m.point != base and m.point.startswith(prefix) for m in self.mounts
+            )
+            if not has_submount:
+                out = []
+                dir_pub = node.source._dir_pub
+                rel_root = node.rel.strip("/")
+                stack = [(rel_root, base)]
+                while stack and len(out) < limit:
+                    cur_rel, cur_vp = stack.pop()
+                    ents = dir_pub.get(cur_rel)
+                    if not ents:
+                        continue
+                    for name, (kind, _sz) in ents.items():
+                        child_vp = ("/" + name) if cur_vp == "/" else (cur_vp + "/" + name)
+                        if kind == KIND_DIR:
+                            child_rel = name if not cur_rel else (cur_rel + "/" + name)
+                            stack.append((child_rel, child_vp))
+                        else:
+                            out.append(child_vp)
+                            if len(out) >= limit:
+                                break
+                return out
+
         out = []
-        stack = [normalize(vdir)]
+        stack = [base]
         seen = set()
         while stack and len(out) < limit:
             cur = stack.pop()

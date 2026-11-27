@@ -23,7 +23,14 @@ DialogWindow {
             id: titlebar; width: parent.width; height: 48
             Row {
                 x: 18; height: parent.height; spacing: 10
-                Image { width: 16; height: 16; source: "image://icons/android_tools"; anchors.verticalCenter: parent.verticalCenter; smooth: true }
+                WorkspaceNativeIcon {
+                    width: 16; height: 16; iconSize: 16
+                    iconKey: "android_tools"
+                    strokeColor: dialog.c.accent_hex || dialog.c.FG
+                    accentColor: dialog.c.accent_hex || "#38bdf8"
+                    isLight: !!(dialog.c && dialog.c.is_light)
+                    anchors.verticalCenter: parent.verticalCenter
+                }
                 RakLabel { text: "Android Tools"; font.pixelSize: 13; font.weight: Font.Bold; font.letterSpacing: .3; height: parent.height; color: dialog.c.FG }
                 SmoothRectangle {
                     width: Math.min(200,badgeText.implicitWidth+18); height: 22; anchors.verticalCenter: parent.verticalCenter
@@ -137,7 +144,7 @@ DialogWindow {
                 color: dialog.backend.failed?dialog.c.RED_STATUS:dialog.c.accent_hex
                 visible: queueList.count>0
                 Behavior on width {
-                    enabled: dialog.backend.flashProgress >= 0
+                    enabled: dialog.model.settings.animations && dialog.backend.flashProgress >= 0
                     NumberAnimation { duration: 110; easing.type: Easing.OutCubic }
                 }
             }
@@ -147,7 +154,7 @@ DialogWindow {
                 x: 16+phase*Math.max(0,parent.width-32-width); y: 35
                 width: Math.min(90,(parent.width-32)*.22); height: 3; radius: 1; color: dialog.c.accent_hex
                 visible: dialog.backend.running && dialog.backend.flashProgress<0
-                NumberAnimation on phase { from: 0; to: 1; duration: 1000; loops: Animation.Infinite; running: queueMarquee.visible && dialog.model.settings.animations }
+                NumberAnimation on phase { from: 0; to: 1; duration: 1000; loops: Animation.Infinite; running: queueMarquee.visible }
             }
             Item {
                 width: parent.width; height: 38

@@ -2,7 +2,9 @@ use std::fs::File;
 use std::path::Path;
 
 use crate::extfs::{
-    Superblock, Volume, COMPAT_HAS_JOURNAL, INCOMPAT_64BIT, INCOMPAT_EXTENTS, RO_COMPAT_SPARSE_SUPER2,
+    Superblock, Volume, COMPAT_HAS_JOURNAL, INCOMPAT_64BIT, INCOMPAT_EXTENTS, INCOMPAT_FLEX_BG,
+    RO_COMPAT_DIR_NLINK, RO_COMPAT_EXTRA_ISIZE, RO_COMPAT_HUGE_FILE, RO_COMPAT_METADATA_CSUM,
+    RO_COMPAT_SPARSE_SUPER2,
 };
 
 pub struct DetectedType {
@@ -56,7 +58,16 @@ pub fn detect_type(sb: &Superblock) -> DetectedType {
     let is_64bit = (sb.s_feature_incompat & INCOMPAT_64BIT) != 0;
     let sparse_super2 = (sb.s_feature_ro_compat & RO_COMPAT_SPARSE_SUPER2) != 0;
 
-    let fs_type = if sb.s_inode_size >= 256 {
+    let has_ext4_incompat =
+        (sb.s_feature_incompat & (INCOMPAT_EXTENTS | INCOMPAT_64BIT | INCOMPAT_FLEX_BG)) != 0;
+    let has_ext4_ro_compat = (sb.s_feature_ro_compat
+        & (RO_COMPAT_HUGE_FILE
+            | RO_COMPAT_DIR_NLINK
+            | RO_COMPAT_EXTRA_ISIZE
+            | RO_COMPAT_METADATA_CSUM))
+        != 0;
+
+    let fs_type = if has_ext4_incompat || has_ext4_ro_compat {
         if has_extents {
             "EXT4"
         } else {

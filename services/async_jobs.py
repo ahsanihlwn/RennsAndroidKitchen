@@ -6,6 +6,7 @@ import weakref
 import shiboken6
 from PySide6.QtCore import QObject
 from core.threader import run_in_pool
+from core.threader_control import threader_control
 
 
 class AsyncJobs(QObject):
@@ -17,6 +18,11 @@ class AsyncJobs(QObject):
         self._running = {}
         self._latest = {}
         self._stopped = False
+
+    def effective_limit(self):
+        if self.limit is None:
+            return max(1, threader_control.pool_limit())
+        return max(1, int(self.limit))
 
     def submit(self, key, fn, arg, callback, *, priority=False, report_operation_errors=True):
         if self._stopped:
@@ -30,7 +36,7 @@ class AsyncJobs(QObject):
         return serial
 
     def _pump(self):
-        while not self._stopped and len(self._running) < self.limit:
+        while not self._stopped and len(self._running) < self.effective_limit():
             key = next((key for key in self._pending if key not in self._running), None)
             if key is None:
                 return

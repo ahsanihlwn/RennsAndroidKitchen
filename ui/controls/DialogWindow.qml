@@ -86,6 +86,7 @@ C.Popup {
         id: scroll
         objectName: "dialogScroll"
         contentWidth: width; contentHeight: dialog.implicitHeight
+        interactive: contentHeight > height + 0.5
         clip: true; boundsBehavior: Flickable.StopAtBounds
         focus: true
         Keys.onEscapePressed: dialog.dismiss()

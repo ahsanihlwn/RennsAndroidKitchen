@@ -235,10 +235,24 @@ impl SparseFile {
         sparsify: bool,
         use_crc: bool,
     ) -> Result<(), SparseError> {
+        self.write_to_file_with_progress(file, sparsify, use_crc, |_, _| {})
+    }
+
+    /// Write to a `File` with `(written_bytes, total_bytes)` progress notifications.
+    pub fn write_to_file_with_progress<F>(
+        &mut self,
+        file: &mut File,
+        sparsify: bool,
+        use_crc: bool,
+        on_bytes: F,
+    ) -> Result<(), SparseError>
+    where
+        F: FnMut(u64, u64),
+    {
         if sparsify {
-            self.write_sparse(file, use_crc)
+            self.write_sparse_with_progress(file, use_crc, on_bytes)
         } else {
-            self.write_raw_file(file)
+            self.write_raw_file_with_progress(file, on_bytes)
         }
     }
 
@@ -248,6 +262,19 @@ impl SparseFile {
         out: &mut W,
         use_crc: bool,
     ) -> Result<(), SparseError> {
+        self.write_sparse_with_progress(out, use_crc, |_, _| {})
+    }
+
+    /// Write Android sparse format with `(written_bytes, total_bytes)` progress notifications.
+    pub fn write_sparse_with_progress<W: Write, F>(
+        &mut self,
+        out: &mut W,
+        use_crc: bool,
+        mut on_bytes: F,
+    ) -> Result<(), SparseError>
+    where
+        F: FnMut(u64, u64),
+    {
         self.split_large_blocks();
 
         let blk_sz = self.block_size as u64;
@@ -275,6 +302,9 @@ impl SparseFile {
             image_checksum: 0,
         };
         out.write_all(&header.to_bytes())?;
+
+        let total_data_bytes: u64 = self.blocks.iter().map(|b| b.len).sum::<u64>().max(1);
+        let mut done_data_bytes: u64 = 0;
 
         let zero_block = vec![0u8; self.block_size as usize];
         let mut copy_buf = vec![0u8; STREAM_BUF_SIZE];
@@ -310,6 +340,8 @@ impl SparseFile {
                             crc32 = sparse_crc32(crc32, &zero_block[..zero_pad]);
                         }
                     }
+                    done_data_bytes = done_data_bytes.saturating_add(bb.len);
+                    on_bytes(done_data_bytes, total_data_bytes);
                 }
                 BackedBlockKind::Fill(val) => {
                     let ch = ChunkHeader {
@@ -327,6 +359,8 @@ impl SparseFile {
                             crc32 = sparse_crc32(crc32, &val_bytes);
                         }
                     }
+                    done_data_bytes = done_data_bytes.saturating_add(bb.len);
+                    on_bytes(done_data_bytes, total_data_bytes);
                 }
                 BackedBlockKind::Source { source, offset } => {
                     let ch = ChunkHeader {
@@ -347,6 +381,8 @@ impl SparseFile {
                             crc32 = sparse_crc32(crc32, &copy_buf[..step]);
                         }
                         rem -= step as u64;
+                        done_data_bytes = done_data_bytes.saturating_add(step as u64);
+                        on_bytes(done_data_bytes, total_data_bytes);
                     }
                     if zero_pad > 0 {
                         out.write_all(&zero_block[..zero_pad])?;
@@ -379,8 +415,17 @@ impl SparseFile {
         Ok(())
     }
 
-    fn write_raw_file(&mut self, file: &mut File) -> Result<(), SparseError> {
+    fn write_raw_file_with_progress<F>(
+        &mut self,
+        file: &mut File,
+        mut on_bytes: F,
+    ) -> Result<(), SparseError>
+    where
+        F: FnMut(u64, u64),
+    {
         let blk_sz = self.block_size as u64;
+        let total_data_bytes: u64 = self.blocks.iter().map(|b| b.len).sum::<u64>().max(1);
+        let mut done_data_bytes: u64 = 0;
         let mut copy_buf = vec![0u8; STREAM_BUF_SIZE];
         let mut fill_buf = vec![0u8; self.block_size as usize];
         let mut last_block: u64 = 0;
@@ -400,6 +445,8 @@ impl SparseFile {
                     if pad > 0 {
                         file.seek(SeekFrom::Current(pad as i64))?;
                     }
+                    done_data_bytes = done_data_bytes.saturating_add(bb.len);
+                    on_bytes(done_data_bytes, total_data_bytes);
                 }
                 BackedBlockKind::Fill(val) => {
                     let val_bytes = val.to_le_bytes();
@@ -415,6 +462,8 @@ impl SparseFile {
                     if pad > 0 {
                         file.seek(SeekFrom::Current(pad as i64))?;
                     }
+                    done_data_bytes = done_data_bytes.saturating_add(bb.len);
+                    on_bytes(done_data_bytes, total_data_bytes);
                 }
                 BackedBlockKind::Source { source, offset } => {
                     let mut src = source.borrow_mut();
@@ -425,6 +474,8 @@ impl SparseFile {
                         src.read_exact(&mut copy_buf[..step])?;
                         file.write_all(&copy_buf[..step])?;
                         rem -= step as u64;
+                        done_data_bytes = done_data_bytes.saturating_add(step as u64);
+                        on_bytes(done_data_bytes, total_data_bytes);
                     }
                     if pad > 0 {
                         file.seek(SeekFrom::Current(pad as i64))?;

@@ -10,8 +10,8 @@ Item {
     readonly property var s: model.strings
     readonly property bool glassChrome: headerGlass.rendering
     property var presentationMotion: null
-    readonly property bool motionInBackdrop: true
-    readonly property real headingOpacity: presentationMotion ? presentationMotion.opacityAt(page,40) : 1
+    readonly property real headingOpacity: presentationMotion ? presentationMotion.headerOpacity(page) : 1
+    readonly property real headingOffsetY: presentationMotion ? presentationMotion.headerOffsetY(page) : 0
     property alias footer: footer
     property alias createButton: newProject
     property alias importButton: importProject
@@ -25,22 +25,6 @@ Item {
             if (card && card.modelData.path===path) return card.menuAnchor
         }
         return null
-    }
-    function revealBands() {
-        const list = activeList
-        let cuts=[0,headerGlass.height], result=[]
-        let visibleRow = 0
-        for (let row=0; row<list.count; ++row) {
-            const item = list.itemAtIndex(row)
-            if (item && (!item.visible || item.height <= 0)) continue
-            let bottom=list.y+visibleRow*74+66-list.contentY
-            if (bottom>=list.y && bottom<=list.y+list.height) cuts.push(bottom)
-            ++visibleRow
-        }
-        cuts.push(height)
-        cuts.sort((a,b)=>a-b)
-        for (let i=0;i<cuts.length-1;++i) if(cuts[i+1]>cuts[i]) result.push({top:cuts[i],bottom:cuts[i+1]})
-        return result
     }
     property bool trash: false
     property real trashProgress: 0
@@ -106,6 +90,7 @@ Item {
     RakLabel {
         id: heading
         opacity: page.headingOpacity
+        transform: Translate { y: page.headingOffsetY }
         z: 2
         x: 16; y: 16; height: 32
         text: page.s.hdr_my_projects
@@ -127,6 +112,7 @@ Item {
     RakField {
         id: search
         opacity: page.headingOpacity
+        transform: Translate { y: page.headingOffsetY }
         z: 2
         enabled: !page.trash && !page.model.busy && opacity>.99
         objectName: "projectSearch"
@@ -384,6 +370,7 @@ Item {
         id: filterBar
         z: 2
         opacity: page.headingOpacity
+        transform: Translate { y: page.headingOffsetY }
         x: 16; y: 60
         spacing: 8
 
@@ -392,8 +379,8 @@ Item {
             objectName: "allProjectsDrive"
             height: 32
             cornerRadius: 16
-            fillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a14 : page.c.BG2
-            hoverFillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a20 : page.c.b06
+            fillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a14 : page.c.b04
+            hoverFillColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a20 : page.c.b08
             downFillColor: page.c.a30
             edgeColor: (!page.trash && !page.model.favoriteFilter) ? page.c.a35 : page.c.b08
             edgeWidth: 1
@@ -437,8 +424,8 @@ Item {
             objectName: "favoriteDrive"
             height: 32
             cornerRadius: 16
-            fillColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fef3c7" : "#2b2515") : page.c.BG2
-            hoverFillColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fde68a" : "#3b331c") : page.c.b06
+            fillColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fef3c7" : "#2b2515") : page.c.b04
+            hoverFillColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#fde68a" : "#3b331c") : page.c.b08
             downFillColor: page.c.b10
             edgeColor: (!page.trash && page.model.favoriteFilter) ? (page.c.is_light ? "#f59e0b" : "#5a4520") : page.c.b08
             edgeWidth: 1
@@ -482,8 +469,8 @@ Item {
             objectName: "trashDrive"
             height: 32
             cornerRadius: 16
-            fillColor: page.trash ? (page.c.is_light ? "#fee2e2" : "#301a1a") : page.c.BG2
-            hoverFillColor: page.trash ? (page.c.is_light ? "#fecaca" : "#422323") : page.c.b06
+            fillColor: page.trash ? (page.c.is_light ? "#fee2e2" : "#301a1a") : page.c.b04
+            hoverFillColor: page.trash ? (page.c.is_light ? "#fecaca" : "#422323") : page.c.b08
             downFillColor: page.c.b10
             edgeColor: page.trash ? (page.c.is_light ? "#fca5a5" : "#552424") : page.c.b08
             edgeWidth: 1
@@ -552,6 +539,9 @@ Item {
             readonly property var menuAnchor: cardLoader.item ? cardLoader.item.menuAnchor : null
             readonly property real pathOffset: cardLoader.item ? cardLoader.item.pathOffset : 0
             readonly property bool hiddenByFavorite: page.model.favoriteFilter && !modelData.pinned
+            readonly property int visIdx: Math.max(0, Math.min(7, Math.floor(Math.max(0, y - projects.contentY) / 74)))
+            readonly property real pageItemOpacity: page.presentationMotion ? page.presentationMotion.itemOpacity(page, visIdx) : 1
+            readonly property real pageItemOffsetY: page.presentationMotion ? page.presentationMotion.itemOffsetY(page, visIdx) : 0
             property bool everShown: false
             property real reveal: 1
             Component.onCompleted: {
@@ -593,13 +583,18 @@ Item {
                 height: 66
                 active: rowDelegate.everShown
                 visible: rowDelegate.reveal > 0.001
-                opacity: rowDelegate.reveal
-                transform: Scale {
-                    origin.x: cardLoader.width / 2
-                    origin.y: 33
-                    xScale: 0.96 + 0.04 * rowDelegate.reveal
-                    yScale: 0.96 + 0.04 * rowDelegate.reveal
-                }
+                opacity: rowDelegate.reveal * rowDelegate.pageItemOpacity
+                transform: [
+                    Scale {
+                        origin.x: cardLoader.width / 2
+                        origin.y: 33
+                        xScale: 0.96 + 0.04 * rowDelegate.reveal
+                        yScale: 0.96 + 0.04 * rowDelegate.reveal
+                    },
+                    Translate {
+                        y: rowDelegate.pageItemOffsetY
+                    }
+                ]
                 sourceComponent: ProjectCard {
                     model: page.model; trash: false
                     modelData: rowDelegate.modelData; index: rowDelegate.index
@@ -611,6 +606,7 @@ Item {
         }
         RakLabel {
             anchors.centerIn: parent; width: parent.width - 32
+            opacity: page.headingOpacity
             visible: page.model.favoriteFilter && page.model.visibleProjectsCount === 0 && !projectMotion.active; text: page.s.favorites_empty; color: page.c.FG3
             horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 11
         }
@@ -632,7 +628,10 @@ Item {
             required property int index
             property alias menuAnchor: card.menuAnchor
             readonly property real pathOffset: card.pathOffset
+            readonly property int visIdx: Math.max(0, Math.min(7, Math.floor(Math.max(0, y - trashProjects.contentY) / 74)))
             width: trashProjects.width; height: 74
+            opacity: page.presentationMotion ? page.presentationMotion.itemOpacity(page, visIdx) : 1
+            transform: Translate { y: page.presentationMotion ? page.presentationMotion.itemOffsetY(page, visIdx) : 0 }
             ProjectCard {
                 id: card
                 model: page.model; trash: true
@@ -644,6 +643,7 @@ Item {
         }
         RakLabel {
             anchors.centerIn: parent; width: parent.width - 32
+            opacity: page.headingOpacity
             visible: trashProjects.count === 0 && !projectMotion.active; text: page.s.trash_empty; color: page.c.FG3
             horizontalAlignment: Text.AlignHCenter; wrapMode: Text.WordWrap; font.pixelSize: 11
         }
@@ -654,7 +654,6 @@ Item {
         model: page.model; view: page.activeList; trash: page.trash
         clip: !page.glassChrome
     }
-    PageRevealMask { anchors.fill: parent; motion: page.presentationMotion; page: page; topInset: headerGlass.height; bottomInset: footer.height }
     }
     GlassBand { id: headerGlass; objectName: "projectsHeaderGlass"; z: 1; width: parent.width; height: 100; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,0) }
     GlassBand { objectName: "projectsFooterGlass"; z: 1; y: parent.height-footer.height; width: parent.width; height: footer.height; model: page.model; backdropSource: projectSurface; origin: Qt.point(0,y) }
@@ -662,6 +661,7 @@ Item {
         id: footer
         z: 2
         anchors.bottom: parent.bottom; width: parent.width; model: page.model
+        transform: Translate { y: page.presentationMotion ? page.presentationMotion.footerOffsetY(page) : 0 }
         ActionButton {
             id: importProject
             objectName: "importButton"

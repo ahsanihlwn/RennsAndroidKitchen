@@ -13,7 +13,7 @@ import uuid
 
 from PySide6.QtCore import QObject,Property,Signal,Slot,QTimer,Qt,QUrl
 from core import agent_backends
-from core.agent_chat_store import ChatStore
+from core.agent_chat_store import ChatStore,get_probe_session,probe_folder,probe_log_path,set_probe_session
 from core import agent_chat_presentation
 from core.agent_process import AgentProcess
 from core.agent_protocols import PROTOCOLS
@@ -112,7 +112,8 @@ class WorkspaceAgentChat(QObject):
         self._catalog_cache={};self._catalog_pending=set();self._catalog_error='';self._catalog_log=''
         self._effort_options=[];self._metadata_pending=set();self._effort_cache={};self._limits={};self._limits_error='';self._limits_loading=False;self._limits_after_ready=False
         self._commands=[];self._open=False;self._closed=False;self._discovering=False;self._state='idle';self._error='';self._policy='';self._account=''
-        self._transport=None;self._protocol=None;self._generation=0;self._pending_prompt=None;self._turn_key=''
+        self._transport=None;self._protocol=None;self._generation=0;self._pending_prompt=None;self._turn_key='';self._probe_mode=False;self._switching_provider=False
+        self._queued_turns=[]
         self._backend_cwd=''
         self._claim=None;self._request_id='';self._agent_name='';self._stop_requested=False;self._force_stop_requested=False;self._requests=OrderedDict()
         self._usage={};self._log_path='';self._rows=RowsModel(parent=self);self._messages=OrderedDict();self._retired=[]
@@ -123,6 +124,7 @@ class WorkspaceAgentChat(QObject):
         except (OSError,ValueError) as error:
             self._persist_error='Chat history could not be loaded; the existing file was preserved. '+str(error)
             self._data={'version':1,'selected':'','draft':'','attachment':None,'chats':[]}
+        if self._data.get('attachment')=={}:self._data['attachment']=None
         for entry in self._data.get('chats',[]):self._sanitize_empty_chat(entry)
         curr_selected=self._data.get('selected','')
         pruned=[c for c in self._data.get('chats',[]) if self._has_conversation(c) or c.get('id')==curr_selected]
@@ -135,7 +137,14 @@ class WorkspaceAgentChat(QObject):
         self._sync_rows()
         self._flush=QTimer(self);self._flush.setSingleShot(True);self._flush.setInterval(50);self._flush.timeout.connect(self._sync_rows)
         self._save_timer=QTimer(self);self._save_timer.setSingleShot(True);self._save_timer.setInterval(400);self._save_timer.timeout.connect(self._save)
+        self._attachment_timer=QTimer(self);self._attachment_timer.setSingleShot(True);self._attachment_timer.setInterval(50);self._attachment_timer.timeout.connect(self._refresh_live_attachment)
         self.owner.ready.connect(self.refreshBackends)
+        for signal in (getattr(self.owner,'selectionChanged',None),getattr(self.owner,'tabsChanged',None)):
+            if signal is not None:signal.connect(self._schedule_live_attachment)
+        editor=getattr(self.owner,'editor',None)
+        bridge=getattr(editor,'bridge',None) if editor is not None else None
+        if bridge is not None and hasattr(bridge,'selectionChanged'):
+            bridge.selectionChanged.connect(lambda *_args:self._schedule_live_attachment())
         preferences=getattr(self.owner,'preferences',None)
         if preferences is not None:preferences.stringsChanged.connect(self._language_changed)
 
@@ -169,7 +178,20 @@ class WorkspaceAgentChat(QObject):
     @Property(bool,notify=openChanged)
     def opened(self):return self._open
     @Property(bool,notify=changed)
-    def busy(self):return self._state in ('connecting','working','permission','stopping')
+    def busy(self):
+        if self._probe_mode and not self.running and self._pending_prompt is None:
+            return False
+        return self._state in ('connecting','working','permission','stopping')
+    def _is_models_loading(self):
+        if self._closed or not self._switching_provider:return False
+        if self._provider=='agy':
+            provider=next((p for p in self._providers if p['id']=='agy'),None)
+            if provider is not None and tuple(provider['argv']) in self._catalog_pending:
+                return True
+            return self._state=='connecting'
+        return self._state=='connecting'
+    @Property(bool,notify=changed)
+    def modelsLoading(self):return self._is_models_loading()
     @Property(bool,notify=changed)
     def running(self):return bool(self._request_id) or self._state in ('working','permission','stopping')
     @Property(bool,notify=changed)
@@ -193,7 +215,8 @@ class WorkspaceAgentChat(QObject):
     def retryModels(self):
         provider=next((p for p in self._providers if p['id']==self._provider),None)
         if provider is None or provider['id']!='agy':return
-        self._catalog_cache.pop(tuple(provider['argv']),None);self._load_agy_models(provider)
+        self._catalog_cache.pop(tuple(provider['argv']),None);self._switching_provider=True;self._load_agy_models(provider)
+        if tuple(provider['argv']) not in self._catalog_pending:self._switching_provider=False;self.changed.emit()
     @Slot()
     def copyModelLog(self):self.owner.copyText(self._catalog_log)
     def _current_model(self):
@@ -288,7 +311,7 @@ class WorkspaceAgentChat(QObject):
         provider=next((p for p in self._providers if p['id']==self._provider),None)
         if not provider:return False
         argv_str=' '.join(str(a) for a in provider.get('argv',[]))
-        return 'agent_chat_fixture' in argv_str or 'fixture' in provider.get('label','').lower()
+        return 'agent_chat_fixture' in argv_str or argv_str.strip()=='fixture' or 'fixture' in provider.get('label','').lower()
     @Property(str,notify=changed)
     def stopLabel(self):return 'Stop agent process' if self._provider=='agy' else 'Stop'
     @Property(str,notify=changed)
@@ -308,12 +331,50 @@ class WorkspaceAgentChat(QObject):
             self.changed.emit()
         self._jobs.submit('agents-discover',lambda:(True,agent_backends.discover()),None,done)
 
+    def _can_auto_refresh_attachment(self):
+        attachment=self._data.get('attachment')
+        if attachment is not None and (attachment.get('manual') or attachment.get('cleared')):
+            return False
+        return True
+
+    def _attachment_is_empty_auto(self):
+        attachment=self._data.get('attachment')
+        return attachment is not None and not attachment.get('paths') and self._can_auto_refresh_attachment()
+
+    def _schedule_live_attachment(self):
+        if self._closed or not self._open or not self._can_auto_refresh_attachment():
+            return
+        if self.draft.strip() and not self._attachment_is_empty_auto():
+            return
+        self._attachment_timer.start()
+
+    def _refresh_live_attachment(self):
+        if self._closed or not self._open or not self._can_auto_refresh_attachment():
+            return
+        if self.draft.strip() and not self._attachment_is_empty_auto():
+            return
+        captured=self.inbox.capture()
+        if captured!=self._data.get('attachment'):
+            self._data['attachment']=captured
+            self.changed.emit()
+            self._schedule_save()
+
     def show(self,origin='',paths=()):
         if not self.available:self.refreshBackends();return
-        if origin or paths or self._data.get('attachment') is None:
+        self._attachment_timer.stop()
+        if origin or paths or self._data.get('attachment') is None or (not self.draft.strip() and self._can_auto_refresh_attachment()):
             self._data['attachment']=self.inbox.capture(origin,paths)
         self._open=True;self.inbox.setShowing(True);self.openChanged.emit();self.changed.emit();self._schedule_save()
-        if self._transport is None and not self.busy:self.connectBackend()
+        if self._transport is None and not self.busy:self._connect_for_preview()
+
+    @Slot()
+    def prepareModels(self):
+        if self._transport is None and not self.busy:self._connect_for_preview()
+
+    def _connect_for_preview(self):
+        if self._closed or self._transport is not None or self._state=='connecting':return
+        if self._is_fixture():self.connectBackend();return
+        self.connectBackend(probe=True)
 
     @Slot()
     def hide(self):self._open=False;self.inbox.setShowing(False);self.openChanged.emit()
@@ -330,15 +391,16 @@ class WorkspaceAgentChat(QObject):
                 self.changed.emit()
             self._schedule_save()
     @Slot()
-    def refreshAttachments(self):self._data['attachment']=self.inbox.capture();self.changed.emit();self._schedule_save()
+    def refreshAttachments(self):self._attachment_timer.stop();self._data['attachment']=self.inbox.capture();self.changed.emit();self._schedule_save()
     @Slot()
-    def clearAttachments(self):self._data['attachment']={};self.changed.emit();self._schedule_save()
+    def clearAttachments(self):self._attachment_timer.stop();self._data['attachment']={'paths':[],'documents':[],'cleared':True};self.changed.emit();self._schedule_save()
     @Slot('QVariantList',result=bool)
     def addAttachments(self,urls):
         return self._add_attachments(urls)
 
     def _add_attachments(self,urls,*,source='file'):
         try:
+            self._attachment_timer.stop()
             paths=[];references=[];internal=[]
             for value in urls:
                 path=agent_attachments.local_path(value,self.owner.project);external=False
@@ -361,15 +423,19 @@ class WorkspaceAgentChat(QObject):
             details={agent_attachments.path_key(r['path']):r for r in frozen.get('attachment_files',[])}
             for row in references:details.setdefault(agent_attachments.path_key(row['path']),row)
             frozen['attachment_files']=list(details.values())
+            frozen.pop('cleared',None);frozen['manual']=True
             self._data['attachment']=frozen;self._error='';self.changed.emit();self._schedule_save();return True
         except (ValueError,OSError) as error:
             _log.warning('Attaching files: %s',error);self._error=str(error);self.changed.emit();return False
 
     @Slot(str)
     def removeAttachment(self,path):
+        self._attachment_timer.stop()
         context=deepcopy(self._data.get('attachment') or {})
         for field in ('paths','documents','attachment_files'):
             context[field]=[row for row in context.get(field,[]) if (row if field=='paths' else row['path'])!=path]
+        context['manual']=True
+        if not context.get('paths'):context['cleared']=True
         self._data['attachment']=context;self.changed.emit();self._schedule_save()
 
     @Slot(result=bool)
@@ -400,10 +466,17 @@ class WorkspaceAgentChat(QObject):
         else:
             mime=QMimeData();mime.setUrls([QUrl.fromLocalFile(path)]);QGuiApplication.clipboard().setMimeData(mime)
 
+    def _reset_backend_state(self):
+        self._models=[];self._commands=[];self._modes=[];self._effort_options=[]
+        self._policy='';self._usage={};self._limits={};self._limits_error=''
+        self._limits_loading=False;self._limits_after_ready=False
+        self._error='';self._account='';self._log_path=''
+
     @Slot(str)
     def selectProvider(self,provider):
         if self.running or provider==self._provider:return
         if provider not in {p['id'] for p in self._providers}:return
+        self._data['draft']=''
         curr=self._chat()
         if curr and not self._has_conversation(curr):
             curr['provider']=provider
@@ -411,16 +484,17 @@ class WorkspaceAgentChat(QObject):
             curr['session']=''
             curr.pop('mode',None)
             self._mode=''
-            self._disconnect();self._provider=provider;self.changed.emit();self.connectBackend()
+            self._disconnect();self._reset_backend_state();self._provider=provider;self._switching_provider=True;self.changed.emit();self._schedule_save();self._connect_for_preview()
             return
         self._mode=''
-        self._save();self._disconnect();self._provider=provider;self._create_chat();self.changed.emit();self.connectBackend()
+        self._save();self._disconnect();self._provider=provider;self._create_chat();self._switching_provider=True;self.changed.emit();self._connect_for_preview()
 
     def _create_chat(self):
+        self._queued_turns.clear()
         self._data['chats']=[c for c in self._data.get('chats',[]) if self._has_conversation(c)]
         chat={'id':uuid.uuid4().hex,'title':'New conversation','provider':self._provider,'model':'','session':'','state':'idle','messages':[]}
         self._data['chats'].append(chat);self._data['chats']=self._data['chats'][-24:];self._data['selected']=chat['id']
-        self._messages=OrderedDict();self._state='idle';self._models=[];self._commands=[];self._modes=[];self._effort_options=[];self._policy='';self._usage={};self._limits={};self._limits_error='';self._limits_loading=False;self._limits_after_ready=False;self._error='';self._log_path='';self._sync_rows();self._schedule_save()
+        self._messages=OrderedDict();self._state='idle';self._reset_backend_state();self._sync_rows();self._schedule_save()
 
     @Slot()
     def newChat(self):
@@ -438,11 +512,12 @@ class WorkspaceAgentChat(QObject):
         curr=self._chat()
         if curr and curr['id']!=key and not self._has_conversation(curr):
             self._data['chats']=[c for c in self._data['chats'] if c['id']!=curr['id']]
+        prev_provider=self._provider
         self._save();self._disconnect();self._data['selected']=key;self._provider=chat['provider']
         self._sanitize_empty_chat(chat);self._messages=OrderedDict((r['key'],r) for r in chat['messages'])
         self._log_path=chat.get('log_path','')
         if chat.get('preview_archived'):self._notice('Older previews were archived. Full output remains in the agent logs; this native session can be resumed explicitly.')
-        self._state='interrupted' if chat['state']=='interrupted' else 'idle';self._mode=chat.get('mode','');self._models=[];self._commands=[];self._modes=[];self._effort_options=[];self._limits={};self._limits_error='';self._sync_rows();self.changed.emit();self._schedule_save();self.connectBackend()
+        self._state='interrupted' if chat['state']=='interrupted' else 'idle';self._mode=chat.get('mode','');self._models=[];self._commands=[];self._modes=[];self._effort_options=[];self._limits={};self._limits_error='';self._switching_provider=(chat['provider']!=prev_provider);self._sync_rows();self.changed.emit();self._schedule_save();self._connect_for_preview()
 
     @Slot(str)
     def deleteChat(self,key):
@@ -462,7 +537,7 @@ class WorkspaceAgentChat(QObject):
                 self._state='idle'
                 self._models=[];self._commands=[];self._modes=[];self._effort_options=[];self._limits={};self._limits_error=''
                 self._sync_rows()
-                self.connectBackend()
+                self._connect_for_preview()
             else:
                 self._create_chat()
         self.changed.emit()
@@ -470,7 +545,7 @@ class WorkspaceAgentChat(QObject):
 
     @Slot(str)
     def selectModel(self,model):
-        if self.busy:return
+        if self.busy or self.modelsLoading:return
         if model and model not in {m['id'] for m in self._models}:
             alt=next((m['id'] for m in self._models if m.get('label')==model or (self._provider=='opencode' and (m['id']==f'opencode/{model}' or m.get('label','').lower()==model.lower()))),None)
             if alt:model=alt
@@ -484,9 +559,10 @@ class WorkspaceAgentChat(QObject):
             stored_effort=self._chat().get('efforts',{}).get(model,'')
             if stored_effort and stored_effort not in supported:
                 self._chat().setdefault('efforts',{}).pop(model,None)
-        if self._protocol is not None and self._provider!='agy' and model:
+        if self._protocol is not None and not (self._probe_mode and self._state!='ready') and self._provider!='agy' and model:
             try:self._protocol.set_model(model)
             except ValueError as error:self._error=str(error)
+            self._chat()['model']=model
         else:
             self._disconnect();self._chat()['model']=model
         self.changed.emit();self._schedule_save()
@@ -494,14 +570,14 @@ class WorkspaceAgentChat(QObject):
 
     @Slot(str)
     def selectEffort(self,effort):
-        if self.busy:return
+        if self.busy or self.modelsLoading:return
         valid={e['id'] for e in self.efforts}
         if effort and effort not in valid:return
         self._error=''
         if self._chat() is None:self._create_chat()
         default_val='medium' if 'medium' in valid else (next(iter(valid)) if valid else '')
         target=effort if effort in valid else default_val
-        if self._protocol is not None and self._provider in ('codex','opencode'):
+        if self._protocol is not None and not (self._probe_mode and self._state!='ready') and self._provider in ('codex','opencode'):
             if not effort and self._provider=='opencode':
                 self._chat().setdefault('efforts',{}).pop(self.model,None)
                 self.changed.emit();self._schedule_save()
@@ -539,13 +615,45 @@ class WorkspaceAgentChat(QObject):
             except ValueError as error:self._error=str(error);self.changed.emit()
 
     @Slot()
-    def connectBackend(self):
+    def connectBackend(self,*,probe=False):
         if self._closed or self._transport is not None or self._state=='connecting':return
         provider=next((p for p in self._providers if p['id']==self._provider),None)
-        if provider is None:self._error='Selected agent CLI is not installed. Refresh the backend list.';self.changed.emit();return
+        if provider is None:self._switching_provider=False;self._error='Selected agent CLI is not installed. Refresh the backend list.';self.changed.emit();return
         if self._chat() is None:self._create_chat()
+        use_probe=bool(probe) and not self._is_fixture()
+        if use_probe:
+            self._probe_mode=True
+            if provider['id']=='agy':
+                self._backend_cwd=str(probe_folder())
+                self._policy='AGY unrestricted: tool permission requests are approved automatically for this connection. Stream turn interruption is unavailable.'
+                self._state='ready'
+                self._load_agy_models(provider)
+                if tuple(provider['argv']) not in self._catalog_pending:
+                    self._switching_provider=False
+                self.changed.emit();self._publish_state()
+                return
+            cwd=str(probe_folder())
+            probe_session=get_probe_session(provider['id']) if provider['id']=='opencode' else ''
+            self._state='connecting';self._error='';self._generation+=1;generation=self._generation
+            self._transport=AgentProcess(self);self._transport.event.connect(lambda packet:self._receive(generation,packet),Qt.QueuedConnection)
+            transport=self._transport
+            self._transport.event.connect(lambda packet:self._cleanup_transport(transport,packet),Qt.QueuedConnection)
+            self._protocol=PROTOCOLS[provider['protocol']](self._transport.send,self._protocol_event,cwd,'',probe_session,'',lazy_thread=(provider['protocol']=='codex'))
+            log_path=probe_log_path(provider['id'],'connect','.jsonl')
+            try:log_path.unlink(missing_ok=True)
+            except OSError:pass
+            self._log_path=str(log_path)
+            env=os.environ.copy();root=Path(__file__).resolve().parents[1]
+            env['PATH']=str(root)+os.pathsep+str(Path(sys.executable).parent)+os.pathsep+env.get('PATH','')
+            env['PYTHONIOENCODING']='utf-8'
+            argv=provider['argv']+agent_backends.launch_arguments(provider,'',probe_session,probe=True)
+            self._backend_cwd=cwd
+            self._transport.start(argv,cwd,env,self._log_path)
+            self.changed.emit();self._publish_state()
+            return
+        self._probe_mode=False
         try:workspace=self._prepare_workspace()
-        except ValueError as error:self._error=str(error);self._state='failed';self.changed.emit();return
+        except ValueError as error:self._switching_provider=False;self._error=str(error);self._state='failed';self.changed.emit();return
         cwd=workspace['working_directory']
         chat=self._chat()
         if not self._has_conversation(chat):chat['session']=''
@@ -624,26 +732,26 @@ class WorkspaceAgentChat(QObject):
                             migrated=True
                 if migrated:self._schedule_save()
             else:self._catalog_error=str(result);self._catalog_log=getattr(result,'log_path','')
+            if key not in self._catalog_pending:self._switching_provider=False
             self.changed.emit()
             if ok and not self._current_model().get('efforts'):self.refreshEfforts()
         if key in self._catalog_cache:apply(*self._catalog_cache[key]);return
         if key in self._catalog_pending:return
         self._catalog_pending.add(key);self._catalog_error='';self.changed.emit()
-        folder=self._store.folder if self._store else Path(__import__('core.app_paths',fromlist=['LOG_DIR']).LOG_DIR)/'agent_chat'
-        log_path=folder/'model_catalog'/(uuid.uuid4().hex+'.json')
+        log_path=probe_log_path('agy','models')
         def done(ok,result):
             self._catalog_pending.discard(key)
             if not ok:_log.warning('%s',result)
             if not self._closed:apply(ok,result)
-        cwd=self.agent.workspace_context()['working_directory']
+        cwd=str(probe_folder())
         self._jobs.submit('agy-models',lambda:load_agy_models(provider,cwd,log_path),None,done,report_operation_errors=False)
 
-    def _metadata_query(self,name,provider,args,callback):
+    def _metadata_query(self,name,provider,args,callback,*,cwd=None):
         key=(name,provider['id'],self.model)
         if key in self._metadata_pending:return
         self._metadata_pending.add(key)
-        folder=self._store.folder if self._store else Path(__import__('core.app_paths',fromlist=['LOG_DIR']).LOG_DIR)/'agent_chat'
-        log_path=folder/'metadata'/(uuid.uuid4().hex+'.json');project=self.agent.workspace_context()['working_directory']
+        log_path=probe_log_path(provider['id'],name)
+        project=cwd or str(probe_folder())
         def done(ok,result):
             self._metadata_pending.discard(key)
             if not ok:_log.warning('%s',result)
@@ -675,25 +783,74 @@ class WorkspaceAgentChat(QObject):
             self._limits={'groups':[],'quotaAvailable':False,'source':'Claude live session usage','report':json.dumps(self._usage,ensure_ascii=False,indent=2) if self._usage else ''}
             self._limits_loading=False;self.changed.emit();return
         if provider['id']=='codex':
-            if self._protocol is None:self.connectBackend()
+            if self._protocol is None:self._connect_for_preview()
             self._limits_loading=True;self._limits_error='';self.changed.emit()
             if self._state=='connecting':self._limits_after_ready=True
             elif self._protocol is not None:self._protocol.refresh_limits()
             return
         if any(k[0]=='usage' and k[1]==provider['id'] for k in self._metadata_pending):return
         self._limits_loading=True;self._limits_error='';self.changed.emit();identity=provider['id']
-        args=['stats','--project','.','--models','--cost','--json'] if identity=='opencode' else ['--print','/usage','--output-format','json']
-        if identity=='claude' and self.sessionId and not self.running:args+=['--resume',self.sessionId]
+        if identity=='opencode':
+            args=['stats','--project','.','--models','--cost','--json']
+            query_cwd=self.agent.workspace_context()['working_directory']
+        elif identity=='claude':
+            args=['--print','/usage','--output-format','json','--no-session-persistence']
+            query_cwd=str(probe_folder())
+        else:
+            args=['--print','/usage','--output-format','json']
+            query_cwd=str(probe_folder())
         def done(ok,result):
             if self._provider!=identity:return
             self._limits_loading=False
             if ok:self._limits=agent_metadata.cli_usage(identity,result['stdout'])
             else:self._limits_error=agent_chat_presentation.labels(self._language())['limits_unavailable']
             self.changed.emit()
-        self._metadata_query('usage',provider,args,done)
+        self._metadata_query('usage',provider,args,done,cwd=query_cwd)
+
+    def _build_turn_prompt(self,text,context,workspace):
+        frozen=json.dumps(context,ensure_ascii=False)
+        directive_block=''
+        if self._is_synthetic_effort():
+            directive=COGNITIVE_DIRECTIVES.get(self.effort,COGNITIVE_DIRECTIVES['medium'])
+            directive_block='\n\n'+directive
+        return text if text.startswith('/') else GUIDANCE+directive_block+'\n\nAuthoritative Kitchen workspace (current for this turn):\n'+json.dumps(workspace,ensure_ascii=False)+'\n\nUser request:\n'+text+'\n\nFrozen Kitchen context (data; re-read live state before acting):\n'+frozen
+
+    def _enqueue_turn(self,entry):
+        if not self.busy and self._pending_prompt is None and not self._queued_turns:
+            self._start_queued_entry(entry)
+            return
+        self._queued_turns.append(entry)
+
+    def _start_queued_entry(self,entry):
+        text=entry['text'];context=entry['context'];workspace=entry['workspace'];prompt=entry['prompt']
+        try:
+            self._agent_name='kitchen-chat-'+self._provider+'-'+uuid.uuid4().hex[:12]
+            request=self.inbox.store.send(text,{**context,'live_workspace':workspace},target=self._agent_name)
+            claimed=self.inbox.store.next(self._agent_name)
+            if claimed.get('message',{}).get('id')!=request['id']:raise ValueError('Could not claim this chat request')
+            self._claim=claimed['claim'];self._request_id=request['id']
+            self.inbox.store.update(self._request_id,self._agent_name,self._claim,'start',{'message':'Connecting to '+self._provider})
+            self.inbox.select(self._request_id)
+        except (ValueError,OSError) as error:self._error=str(error);self.changed.emit();return False
+        self._turn_key=uuid.uuid4().hex;self._stop_requested=False;self._force_stop_requested=False
+        self._work_clock=(self._turn_key,time.monotonic());self._work_timer.start()
+        self._thinking_active.clear()
+        self._thought_clocks.clear()
+        self._append(self._turn_key+':work','work','',status='working',elapsed=0,started_at=time.time())
+        self._pending_prompt=prompt
+        if self._probe_mode:
+            self._disconnect()
+        if self._protocol is not None and self._state=='connecting':pass
+        elif self._protocol is not None and self._state not in ('idle','failed','closed','interrupted'):
+            self._start_turn()
+        else:
+            if self._transport is not None:self._disconnect()
+            self.connectBackend()
+        self.changed.emit();self._schedule_save();return True
 
     @Slot(result=bool)
     def send(self):
+        if self.modelsLoading:return False
         text=self.draft.strip()
         display_text=text
         if not text:
@@ -728,14 +885,37 @@ class WorkspaceAgentChat(QObject):
                 self._data['draft']='';self.changed.emit();self._schedule_save();return True
             if name not in {c['name'] for c in self._commands}:
                 self._error='This backend has not advertised /'+name+'. Use /help to see supported commands.';self.changed.emit();return False
-        if self.busy and not (self._state=='connecting' and not self.running):return False
         if self._provider not in {p['id'] for p in self._providers}:
             self._error='Choose an installed agent backend before sending.';self.changed.emit();return False
         if self._chat() is None:self._create_chat()
         try:workspace=self._prepare_workspace()
         except ValueError as error:self._error=str(error);self.changed.emit();return False
+        if self._attachment_timer.isActive():
+            self._attachment_timer.stop()
+            self._refresh_live_attachment()
         context=deepcopy(self._data.get('attachment'))
-        if context is None:context=self.inbox.capture()
+        if context is None or (not context.get('paths') and not context.get('cleared') and not context.get('manual')):
+            context=self.inbox.capture()
+        else:
+            context.pop('manual',None);context.pop('cleared',None)
+        prompt=self._build_turn_prompt(text,context,workspace)
+        if self.busy and not (self._state=='connecting' and not self.running):
+            steer_key=uuid.uuid4().hex
+            self._append(steer_key+':user','user',display_text,attachments=self._attachment_rows(context),workspace=workspace)
+            self._data['draft']='';self._data['attachment']=None;self._error=''
+            if self._chat()['title']=='New conversation':self._chat()['title']=text.splitlines()[0][:60]
+            entry={'text':text,'context':context,'workspace':workspace,'prompt':prompt}
+            can_steer=(self._protocol is not None and not self._probe_mode and self._state in ('working','permission')
+                       and getattr(self._protocol,'supports_steer',False) and not self._queued_turns)
+            if can_steer:
+                work_key=self._turn_key+':work'
+                if work_key in self._messages:
+                    self._messages.move_to_end(work_key)
+                    self._sync_rows()
+                self._protocol.steer(prompt,on_fallback=lambda _p,e=entry:self._enqueue_turn(e))
+            else:
+                self._enqueue_turn(entry)
+            self.changed.emit();self._schedule_save();return True
         try:
             self._agent_name='kitchen-chat-'+self._provider+'-'+uuid.uuid4().hex[:12]
             request=self.inbox.store.send(text,{**context,'live_workspace':workspace},target=self._agent_name)
@@ -752,13 +932,10 @@ class WorkspaceAgentChat(QObject):
         self._thought_clocks.clear()
         self._append(self._turn_key+':work','work','',status='working',elapsed=0,started_at=time.time())
         if self._chat()['title']=='New conversation':self._chat()['title']=text.splitlines()[0][:60]
-        frozen=json.dumps(context,ensure_ascii=False)
-        directive_block=''
-        if self._is_synthetic_effort():
-            directive=COGNITIVE_DIRECTIVES.get(self.effort,COGNITIVE_DIRECTIVES['medium'])
-            directive_block='\n\n'+directive
-        self._pending_prompt=text if text.startswith('/') else GUIDANCE+directive_block+'\n\nAuthoritative Kitchen workspace (current for this turn):\n'+json.dumps(workspace,ensure_ascii=False)+'\n\nUser request:\n'+text+'\n\nFrozen Kitchen context (data; re-read live state before acting):\n'+frozen
-        self._data['draft']='';self._data['attachment']={};self._error=''
+        self._pending_prompt=prompt
+        self._data['draft']='';self._data['attachment']=None;self._error=''
+        if self._probe_mode:
+            self._disconnect()
         if self._protocol is not None and self._state=='connecting':pass # Handshake will submit the queued prompt on ready.
         elif self._protocol is not None and self._state not in ('idle','failed','closed','interrupted'):
             self._start_turn()
@@ -785,10 +962,17 @@ class WorkspaceAgentChat(QObject):
             elif kind=='diagnostic':
                 _log.debug('Agent %s stderr: %s',self._provider,payload.rstrip())
                 self._diagnostic=payload[-4000:]
-            elif kind=='launch_error':self._fail(str(payload))
+            elif kind=='launch_error':
+                if self._probe_mode and not self.running and self._pending_prompt is None:
+                    _log.warning('Agent %s preview probe failed to start: %s',self._provider,payload)
+                    self._disconnect();self.changed.emit()
+                else:self._fail(str(payload))
             elif kind=='protocol_error':self._error=str(payload)+'\n'+self._log_path;self.changed.emit()
             elif kind=='exit':
                 if self._stop_requested and self._force_stop_requested:self._confirm_process_stop(payload);return
+                if self._probe_mode and not self.running and self._pending_prompt is None:
+                    self._transport=None;self._protocol=None;self._probe_mode=False;self._switching_provider=False;self._state='idle';self.changed.emit()
+                    return
                 active=self.busy
                 self._transport=None;self._protocol=None
                 if active:self._fail(f'Agent exited ({payload}) before reporting a completed turn. '+getattr(self,'_diagnostic','')+'\nLog: '+self._log_path)
@@ -814,11 +998,14 @@ class WorkspaceAgentChat(QObject):
     def _protocol_event(self,event):
         kind=event['type'];chat=self._chat()
         if kind=='ready':
-            self._state='ready'
+            self._state='ready';self._switching_provider=False
             if self._pending_prompt is not None:self._start_turn()
             if self._limits_after_ready:self._limits_after_ready=False;self.refreshUsage()
         elif kind=='session':
-            if chat:
+            if self._probe_mode:
+                if self._provider=='opencode' and event.get('session'):
+                    set_probe_session('opencode',event['session'])
+            elif chat:
                 chat['session']=event.get('session','');model=event.get('model',chat['model'])
                 alias=next((m for m in self._models if m['id']==chat['model'] and m.get('resolved')==model),None)
                 if alias is None:chat['model']=model
@@ -850,7 +1037,7 @@ class WorkspaceAgentChat(QObject):
             self._mode=event['mode']
             if chat:chat['mode']=self._mode
         elif kind=='model':
-            if chat:chat['model']=event['model']
+            if chat and not self._probe_mode:chat['model']=event['model']
             if self._protocol is not None and self._provider=='codex':
                 self._protocol.effort=self.effort
         elif kind=='commands':self._commands=event['rows']
@@ -914,11 +1101,16 @@ class WorkspaceAgentChat(QObject):
         elif kind=='request_resolved':self._requests.pop(event['id'],None)
         elif kind=='notice':
             if event['text'].startswith('account/rateLimits/read:'):self._limits_loading=False;self._limits_error=agent_chat_presentation.labels(self._language())['limits_unavailable']
-            elif not (event.get('resume_fallback') and not self._has_conversation(chat)):self._notice(event['text'])
+            elif not (event.get('resume_fallback') and (self._probe_mode or not self._has_conversation(chat))):self._notice(event['text'])
         elif kind=='workspace_error':
             if self._transport:self._transport.terminate()
             self._fail(event['text'])
-        elif kind=='error':self._fail(event['text'])
+        elif kind=='error':
+            if self._probe_mode and not self.running and self._pending_prompt is None:
+                _log.warning('Agent %s preview probe error: %s',self._provider,event['text'])
+                self._disconnect();self.changed.emit()
+                return
+            self._fail(event['text'])
         elif kind=='done':self._finish(event)
         self.changed.emit();self._schedule_save()
 
@@ -934,6 +1126,7 @@ class WorkspaceAgentChat(QObject):
     @Slot()
     def stop(self):
         if not self.busy:return
+        self._queued_turns.clear()
         if self._stop_requested:self.forceStop();return
         self._stop_requested=True
         if self._request_id:self.inbox.store.cancel(self._request_id)
@@ -1002,6 +1195,11 @@ class WorkspaceAgentChat(QObject):
             self._append(turn_key+':problem','problem',event.get('error') or final,failure_kind=event.get('failure_kind') or 'operation_failed')
         elif status=='interrupted':self._notice(event.get('note') or 'Request stopped',status=self._state)
         self._sync_rows();self._publish_state();self._save();self.changed.emit()
+        if status=='completed' and self._queued_turns and not self._closed:
+            nxt=self._queued_turns.pop(0)
+            self._start_queued_entry(nxt)
+        elif status!='completed':
+            self._queued_turns.clear()
 
     def _fail(self,text):
         self._pending_prompt=None
@@ -1041,6 +1239,9 @@ class WorkspaceAgentChat(QObject):
 
     def _disconnect(self):
         self._generation+=1
+        self._probe_mode=False
+        self._switching_provider=False
+        self._queued_turns.clear()
         if self._transport:self._transport.close_input();self._retired.append(self._transport)
         self._transport=None;self._protocol=None;self._state='idle';self._requests.clear()
         self._limits_after_ready=False;self._limits_loading=False
@@ -1057,4 +1258,4 @@ class WorkspaceAgentChat(QObject):
         if self.busy:
             self.stop();self._state='interrupted'
         self._end_thinking();self._tick_work('interrupted');self._work_timer.stop();self._work_clock=None
-        self._save();self._closed=True;self._flush.stop();self._save_timer.stop();self._jobs.stop();self._disconnect()
+        self._save();self._closed=True;self._flush.stop();self._save_timer.stop();self._attachment_timer.stop();self._jobs.stop();self._disconnect()

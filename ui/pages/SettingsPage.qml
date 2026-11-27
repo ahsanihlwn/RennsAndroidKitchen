@@ -9,20 +9,18 @@ Item {
     readonly property var s: model.strings
     readonly property bool glassChrome: headerGlass.rendering
     property var presentationMotion: null
-    readonly property bool motionInBackdrop: true
-    readonly property real headingOpacity: presentationMotion ? presentationMotion.opacityAt(page,40) : 1
+    readonly property real headingOpacity: presentationMotion ? presentationMotion.headerOpacity(page) : 1
+    readonly property real headingOffsetY: presentationMotion ? presentationMotion.headerOffsetY(page) : 0
     property alias footer: footer
     readonly property var identityItem: null
     function identityEndpoint(host) {
         return null
     }
-    function revealBands() {
-        let bands=[]
-        for (let i=4;i>=0;--i) bands.push({top:Math.round(height*i/5),bottom:Math.round(height*(i+1)/5)})
-        return bands
-    }
     component Card: RakCard {
+        readonly property int visIdx: Math.max(0, Math.min(6, Math.floor(Math.max(0, y - scroll.contentY) / 85)))
         width: content.width; color: page.c.BG2; border.color: page.c.b08; radius: 10
+        opacity: page.presentationMotion ? page.presentationMotion.itemOpacity(page, visIdx) : 1
+        transform: Translate { y: page.presentationMotion ? page.presentationMotion.itemOffsetY(page, visIdx) : 0 }
     }
     component CardTitle: Item {
         property string text: ""
@@ -47,7 +45,12 @@ Item {
         implicitHeight: 28
         RakLabel { id: label; anchors.verticalCenter: parent.verticalCenter; width: parent.width; height: 20; text: parent.title; color: page.c.FG; font.pixelSize: 12; font.weight: Font.DemiBold }
     }
-    RakLabel { z: 2; opacity: page.headingOpacity; x: 16; y: 16; height: 32; text: page.s.hdr_settings; font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG }
+    RakLabel {
+        z: 2
+        opacity: page.headingOpacity
+        transform: Translate { y: page.headingOffsetY }
+        x: 16; y: 16; height: 32; text: page.s.hdr_settings; font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG
+    }
     SmoothRectangle {
         id: settingsSurface
         readonly property rect inputBounds: Qt.rect(0,headerGlass.height,width,Math.max(0,height-headerGlass.height-footer.height))
@@ -181,7 +184,6 @@ Item {
             }
         }
     }
-    PageRevealMask { anchors.fill: parent; motion: page.presentationMotion; page: page; topInset: headerGlass.height; bottomInset: 0 }
     }
     GlassBand { id: headerGlass; objectName: "settingsHeaderGlass"; z: 1; width: parent.width; height: 68; model: page.model; backdropSource: settingsSurface; origin: Qt.point(0,0) }
     PageFooter {

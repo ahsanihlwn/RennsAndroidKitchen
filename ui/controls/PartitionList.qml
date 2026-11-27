@@ -18,7 +18,13 @@ ListView {
         readonly property bool selected: list.document.selected.indexOf(modelData)>=0
         readonly property bool hovered: selection.containsMouse && Math.floor((selection.mouseY+list.contentY)/list.rowHeight)===index
         SmoothRectangle { anchors.fill: parent; color: row.selected?(list.superMode?list.colors.a35:row.hovered?list.colors.a25:list.colors.a18):row.hovered?(list.superMode?list.colors.b06:list.colors.b045):"transparent" }
-        Image { x: list.superMode?8:11; y: Math.round((parent.height-16)/2); width: 16; height: 16; source: "image://icons/drive"; sourceSize: Qt.size(16,16) }
+        WorkspaceNativeIcon {
+            x: list.superMode ? 8 : 11; y: Math.round((parent.height - 16) / 2); width: 16; height: 16; iconSize: 16
+            iconKey: "drive"
+            strokeColor: row.selected ? list.colors.FG_BRIGHT : (list.colors.FG_LABEL || list.colors.FG)
+            accentColor: list.colors.accent_hex || "#38bdf8"
+            isLight: !!(list.colors && list.colors.is_light)
+        }
         RakLabel { x: list.superMode?31:33; y: 1; width: parent.width-x-8; height: parent.height; text: row.modelData; font.pixelSize: 13; color: row.selected?list.colors.FG_BRIGHT:list.colors.FG_LABEL; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
     }
     MouseArea {

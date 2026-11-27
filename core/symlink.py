@@ -116,62 +116,220 @@ def read_symlink_target(file_path):
         return None
 
 
-def check_symlink(file_path, project_root, *, target_cache=None):
+def _build_target_candidates(file_path, norm_target, project_root):
+    clean = norm_target.lstrip("/")
+    base_dir = os.path.dirname(file_path)
+    candidates = []
+
+    if norm_target.startswith("/"):
+        # SAR handling: misal target /system/bin dan project_root adalah D:\...\target\system
+        if clean.startswith("system/"):
+            candidates.append(os.path.normpath(os.path.join(project_root, clean)))
+            sub = clean[7:]
+            if sub:
+                candidates.append(os.path.normpath(os.path.join(project_root, sub)))
+            candidates.append(os.path.normpath(os.path.join(project_root, "system", clean)))
+        else:
+            candidates.append(os.path.normpath(os.path.join(project_root, clean)))
+            candidates.append(os.path.normpath(os.path.join(project_root, "system", clean)))
+            parent = os.path.dirname(project_root)
+            if parent and parent != project_root:
+                candidates.append(os.path.normpath(os.path.join(parent, clean)))
+    else:
+        candidates.append(os.path.normpath(os.path.join(base_dir, norm_target)))
+        candidates.append(os.path.normpath(os.path.join(project_root, norm_target)))
+        candidates.append(os.path.normpath(os.path.join(project_root, "system", norm_target)))
+
+    return list(dict.fromkeys(candidates))
+
+
+def _inspect_node(path: str, cache=None):
+    """Return `(exists, is_dir, is_file, symlink_target_or_none)` without following `path`."""
+    norm = os.path.normpath(path)
+    store = _TARGET_STAT_CACHE if cache is None else cache
+    key = ("__node__", norm)
+    cached = store.get(key)
+    if cached is not None:
+        return cached
     try:
-        target = read_symlink_target(file_path)
+        st = os.lstat(norm)
+        mode = st.st_mode
+        if stat.S_ISLNK(mode):
+            try:
+                link_t = os.readlink(norm)
+            except OSError:
+                link_t = ""
+            res = (True, False, False, link_t or None)
+        elif stat.S_ISDIR(mode):
+            res = (True, True, False, None)
+        elif stat.S_ISREG(mode):
+            link_t = read_symlink_target(norm) if st.st_size <= MAX_SIZE else None
+            if link_t:
+                res = (True, False, False, link_t)
+            else:
+                res = (True, False, True, None)
+        else:
+            res = (True, False, False, None)
+    except OSError:
+        res = (False, False, False, None)
+    store[key] = res
+    return res
+
+
+def _walk_root_for(cand: str, project_root: str):
+    proj_abs = os.path.normpath(project_root)
+    parent_abs = os.path.dirname(proj_abs)
+    for root_cand in (proj_abs, parent_abs):
+        if not root_cand:
+            continue
+        try:
+            if os.path.normcase(os.path.commonpath([cand, root_cand])) == os.path.normcase(root_cand):
+                return root_cand
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_candidate_chain(
+    candidate: str,
+    project_root: str,
+    cache,
+    visited: frozenset,
+    depth: int,
+    hops_out: list | None = None,
+):
+    cand = os.path.normpath(candidate)
+    if depth > 24:
+        return (False, False, False, cand)
+
+    # Fast path: single lstat check resolves ordinary files/directories directly.
+    ex, is_d, is_f, link_t = _inspect_node(cand, cache)
+    if ex and link_t is None:
+        return (True, is_d, is_f, cand)
+
+    if ex and link_t is not None:
+        key = os.path.normcase(cand)
+        if key in visited:
+            return (False, False, False, cand)
+        if hops_out is not None:
+            hops_out.append(cand)
+        next_visited = visited | {key}
+        norm_lt = link_t.replace("\\", "/").strip()
+        best_missing = None
+        for nc in _build_target_candidates(cand, norm_lt, project_root):
+            if os.path.normcase(nc) == key:
+                continue
+            sub_ex, sub_d, sub_f, sub_res = _resolve_candidate_chain(
+                nc, project_root, cache, next_visited, depth + 1, hops_out
+            )
+            if sub_ex:
+                return (True, sub_d, sub_f, sub_res)
+            if best_missing is None:
+                best_missing = sub_res
+        if os.path.islink(cand):
+            try:
+                st = os.stat(cand)
+                return (
+                    True,
+                    stat.S_ISDIR(st.st_mode),
+                    stat.S_ISREG(st.st_mode),
+                    os.path.normpath(os.path.realpath(cand)),
+                )
+            except OSError:
+                pass
+        return (False, False, False, best_missing or cand)
+
+    # Intermediate-symlink component walk (only reached when `cand` does not exist directly).
+    walk_root = _walk_root_for(cand, project_root)
+    if not walk_root:
+        return (False, False, False, cand)
+    rel = os.path.relpath(cand, walk_root)
+    if rel in (".", "") or rel.startswith(".."):
+        return (False, False, False, cand)
+    parts = rel.split(os.sep)
+    cand_key = os.path.normcase(cand)
+    for i in range(len(parts) - 1):
+        cur = os.path.normpath(os.path.join(walk_root, *parts[: i + 1]))
+        c_ex, c_dir, _c_file, c_link = _inspect_node(cur, cache)
+        if not c_ex:
+            break
+        if c_dir and c_link is None:
+            continue
+        if c_link is None:
+            break
+        key = os.path.normcase(cur)
+        if key in visited:
+            return (False, False, False, cand)
+        if hops_out is not None:
+            hops_out.append(cur)
+        tail = parts[i + 1 :]
+        next_visited = visited | {key}
+        norm_lt = c_link.replace("\\", "/").strip()
+        best_missing = None
+        for next_base in _build_target_candidates(cur, norm_lt, project_root):
+            combined = os.path.normpath(os.path.join(next_base, *tail))
+            if os.path.normcase(combined) == cand_key:
+                continue
+            sub_ex, sub_d, sub_f, sub_res = _resolve_candidate_chain(
+                combined, project_root, cache, next_visited, depth + 1, hops_out
+            )
+            if sub_ex:
+                return (True, sub_d, sub_f, sub_res)
+            if best_missing is None:
+                best_missing = sub_res
+        return (False, False, False, best_missing or cand)
+
+    return (False, False, False, cand)
+
+
+def resolve_symlink_target(file_path, target, project_root, *, target_cache=None, collect_hops=False):
+    """Resolve an already-known Android symlink target against `project_root`."""
+    try:
         if not target:
             return None
 
         norm_target = target.replace("\\", "/").strip()
         clean = norm_target.lstrip("/")
-        base_dir = os.path.dirname(file_path)
-
-        candidates = []
-
-        if norm_target.startswith("/"):
-            # SAR handling: misal target /system/bin dan project_root adalah D:\...\target\system
-            # clean = "system/bin" -> project_root/clean = ".../system/system/bin"
-            if clean.startswith("system/"):
-                candidates.append(os.path.normpath(os.path.join(project_root, clean)))
-                sub = clean[7:]
-                if sub:
-                    candidates.append(os.path.normpath(os.path.join(project_root, sub)))
-                candidates.append(os.path.normpath(os.path.join(project_root, "system", clean)))
-            else:
-                candidates.append(os.path.normpath(os.path.join(project_root, clean)))
-                candidates.append(os.path.normpath(os.path.join(project_root, "system", clean)))
-                parent = os.path.dirname(project_root)
-                if parent and parent != project_root:
-                    candidates.append(os.path.normpath(os.path.join(parent, clean)))
-        else:
-            # relative path
-            candidates.append(os.path.normpath(os.path.join(base_dir, norm_target)))
-            candidates.append(os.path.normpath(os.path.join(project_root, norm_target)))
-            candidates.append(os.path.normpath(os.path.join(project_root, "system", norm_target)))
+        candidates = _build_target_candidates(file_path, norm_target, project_root)
 
         norm_file = os.path.normpath(file_path)
-        resolved = None
-        exists = False
+        norm_file_key = os.path.normcase(norm_file)
+        visited = frozenset({norm_file_key})
+        hops = [] if collect_hops else None
 
-        # 1. Cari kandidat yang eksis DAN bukan file symlink itu sendiri
+        resolved = None
+        fallback_resolved = None
+        exists = False
         is_dir = False
         is_file = False
+
+        # 1. Cari kandidat yang eksis (termasuk lewat intermediate / chained symlink)
         for c in candidates:
-            if c != norm_file:
-                ex, is_d, is_f = _fast_stat_candidate(c, target_cache)
-                if ex:
-                    resolved = c
-                    exists = True
-                    is_dir = is_d
-                    is_file = is_f
-                    break
+            if os.path.normcase(c) == norm_file_key:
+                continue
+            ex, is_d, is_f, final_path = _resolve_candidate_chain(
+                c, project_root, target_cache, visited, 0, hops
+            )
+            if ex:
+                resolved = final_path
+                exists = True
+                is_dir = is_d
+                is_file = is_f
+                break
+            if fallback_resolved is None:
+                fallback_resolved = final_path
+            elif fallback_resolved in candidates and final_path != c:
+                fallback_resolved = final_path
 
         # 2. Fallback jika tidak ada kandidat yang eksis
         if not resolved:
-            for c in candidates:
-                if c != norm_file:
-                    resolved = c
-                    break
+            if fallback_resolved:
+                resolved = fallback_resolved
+            else:
+                for c in candidates:
+                    if os.path.normcase(c) != norm_file_key:
+                        resolved = c
+                        break
             if not resolved:
                 resolved = candidates[0] if candidates else os.path.normpath(os.path.join(project_root, clean))
 
@@ -191,7 +349,7 @@ def check_symlink(file_path, project_root, *, target_cache=None):
             else:
                 is_dir = True
 
-        return {
+        result = {
             "file": file_path,
             "target": target,
             "resolved": resolved,
@@ -199,10 +357,26 @@ def check_symlink(file_path, project_root, *, target_cache=None):
             "is_dir": is_dir,
             "is_file": is_file,
         }
+        if collect_hops:
+            result["hops"] = list(dict.fromkeys(hops))
+        return result
 
     except Exception:
         pass
 
+    return None
+
+
+def check_symlink(file_path, project_root, *, target_cache=None):
+    try:
+        target = read_symlink_target(file_path)
+        if not target and os.path.islink(file_path):
+            target = os.readlink(file_path)
+        if not target:
+            return None
+        return resolve_symlink_target(file_path, target, project_root, target_cache=target_cache)
+    except Exception:
+        pass
     return None
 
 
@@ -227,7 +401,11 @@ def invalidate_symlink_cache(path=None):
     for k in to_del_root:
         _ROOT_CACHE.pop(k, None)
 
-    to_del_target = [k for k in _TARGET_STAT_CACHE if k == norm or k.startswith(norm + os.sep)]
+    to_del_target = [
+        k for k in _TARGET_STAT_CACHE
+        if (isinstance(k, str) and (k == norm or k.startswith(norm + os.sep)))
+        or (isinstance(k, tuple) and len(k) == 2 and (k[1] == norm or k[1].startswith(norm + os.sep)))
+    ]
     for k in to_del_target:
         _TARGET_STAT_CACHE.pop(k, None)
 

@@ -559,6 +559,19 @@ pub fn write_path_selinux(image_path: &Path, internal_path: &str, new_ctx: &str)
             new_bytes.len()
         )));
     }
+    let old_next = (vstart + old_val_size + 3) & !3;
+    let new_next = (vstart + new_bytes.len() + 3) & !3;
+    if new_next != old_next
+        && old_next + 4 <= area.len()
+        && (area[old_next] != 0
+            || area[old_next + 1] != 0
+            || read_u16_le(&area, old_next + 2) != 0)
+    {
+        return Err(ErofsError::Edit(
+            "cannot shrink inline security.selinux when another inline xattr follows (would misalign trailing xattrs); repack required"
+                .into(),
+        ));
+    }
 
     let mut padded = vec![0u8; old_val_size];
     padded[..new_bytes.len()].copy_from_slice(new_bytes);

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import sys
@@ -98,7 +99,16 @@ def _native_decompress(src: Path, dst: Path) -> str:
     """Decompress src → dst using the native backend. Returns format name."""
     if not _NATIVE:
         raise ToolError("rak_native not available; cannot decompress natively")
-    result = _nb.boot_decompress(str(src), str(dst))
+    try:
+        result = _nb.boot_decompress(str(src), str(dst))
+    except Exception as exc:
+        logging.exception("Native decompression failed for %s", src)
+        try:
+            if dst.exists():
+                dst.unlink()
+        except OSError:
+            pass
+        raise ToolError(f"failed to decompress {src.name}: {exc}") from exc
     return result.get("format", "unknown")
 
 

@@ -101,17 +101,21 @@ class PackagesModel(QObject):
                 if isinstance(registry,dict) and registry:
                     self._manager.registry = registry
             except (ValueError,UnicodeError):
-                logging.exception('Package registry response is invalid')
+                logging.warning('Package registry response is invalid; falling back to bundled registry', exc_info=True)
         else:
-            logging.error('Package registry request failed: %s', reply.errorString())
+            logging.warning('Package registry request failed: %s', reply.errorString())
+        if not self._manager.registry and hasattr(self._manager, 'load_bundled_registry'):
+            self._manager.registry = self._manager.load_bundled_registry()
         reply.deleteLater()
         self._load_rows(self._generation)
 
     def _fallback(self):
         reply, self._reply = self._reply, None
         if reply is not None:
-            logging.error('Package registry request timed out')
+            logging.warning('Package registry request timed out; falling back to bundled registry')
             reply.abort()
+        if not self._manager.registry and hasattr(self._manager, 'load_bundled_registry'):
+            self._manager.registry = self._manager.load_bundled_registry()
         self._load_rows(self._generation)
 
     def _job(self, operation, callback):

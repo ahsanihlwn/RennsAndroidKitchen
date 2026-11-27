@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import time
+import weakref
 
 from PySide6.QtCore import QObject, Property, Signal, Slot, QTimer, QUrl, Qt
 from PySide6.QtGui import QDesktopServices,QGuiApplication
@@ -39,6 +40,9 @@ class WorkspaceSession(QObject):
     terminalsChanged = Signal()
     settingsChanged = Signal()
     statusChanged = Signal()
+    locksChanged = Signal()
+    highlightsChanged = Signal()
+    unpackPreviewReady = Signal(str, str, str, object)
     ready = Signal()
     preparation_status = Signal(str)
     preparation_failed = Signal(str)
@@ -49,6 +53,7 @@ class WorkspaceSession(QObject):
     quitRequested = Signal()
     entryFinished = Signal()
     editCellRequested = Signal(int,str,int)
+    _externalFsSync = Signal(str, object)
 
     def __init__(self, project, p1, p2=None, *, preferences, settings_path=None,
                  terminal_factory=TerminalSession, profile_provider=None, enable_private_services=True, parent=None):
@@ -73,6 +78,9 @@ class WorkspaceSession(QObject):
         self._tabs = RowsModel(parent=self)
         self._tab_data = []
         self._active_tab = ""
+        self._fs_watchers = {}
+        self._terminal_sync_timers = {}
+        self._externalFsSync.connect(self._apply_external_fs_sync, Qt.QueuedConnection)
         self._terminal_factory = terminal_factory
         self._terminals = []
         self._terminal_rows = RowsModel(parent=self)
@@ -101,6 +109,12 @@ class WorkspaceSession(QObject):
         self._jobs = AsyncJobs(self, limit=2)
         self._status = ""
         self._status_state = "idle"
+        self._status_progress = -1
+        self._status_stage = ""
+        self._locked_paths = {}
+        self._path_highlights = {}
+        self._highlight_seq = 0
+        self.unpackPreviewReady.connect(self._on_unpack_preview_ready, Qt.QueuedConnection)
         self._history = []
         self._started = False
         self._closing = False
@@ -125,10 +139,14 @@ class WorkspaceSession(QObject):
         self._branches=WorkspaceBranches(self)
         from ui.android_tools import AndroidTools
         self._android_tools=AndroidTools(self,self)
+        from ui.boot_analyzer import BootAnalyzerController
+        self._boot_analyzer=BootAnalyzerController(self,self)
         from ui.toolkit import WorkspaceToolkit
         self._toolkit=WorkspaceToolkit(self)
         from ui.flashable import FlashableBuilder
         self._flashable=FlashableBuilder(self,self)
+        from ui.pack_super import PackSuperController
+        self._pack_super=PackSuperController(self,self)
         from ui.transfers import WorkspaceTransfers
         self._transfers=WorkspaceTransfers(self)
         from ui.partition_picker import PartitionPicker
@@ -145,6 +163,7 @@ class WorkspaceSession(QObject):
         bridge.editorReady.connect(self._check_ready)
         bridge.fileUnsaved.connect(self._refresh_tabs)
         bridge.fileSaved.connect(self._refresh_tabs)
+        bridge.fileSaved.connect(self._on_editor_file_saved)
         bridge.tabClosed.connect(self._tab_closed)
         for number, directory in enumerate(self.directories):
             directory.ready.connect(lambda number=number: self._tree_ready(number))
@@ -172,9 +191,13 @@ class WorkspaceSession(QObject):
     @Property(QObject,constant=True)
     def androidTools(self):return self._android_tools
     @Property(QObject,constant=True)
+    def bootAnalyzer(self):return self._boot_analyzer
+    @Property(QObject,constant=True)
     def toolkit(self):return self._toolkit
     @Property(QObject,constant=True)
     def flashableBuilder(self):return self._flashable
+    @Property(QObject,constant=True)
+    def packSuper(self):return self._pack_super
     @Property(QObject,constant=True)
     def transfers(self):return self._transfers
     @Property(QObject,constant=True)
@@ -254,9 +277,10 @@ class WorkspaceSession(QObject):
                 'text/uri-list':'\r\n'.join(urls)}
 
     @Slot(str,str,str,bool,str,int,int,result="QVariantMap")
-    def entryLayout(self,name,size,badge,symlink,branch,width,origin):
+    @Slot(str,str,str,bool,str,int,int,bool,result="QVariantMap")
+    def entryLayout(self,name,size,badge,symlink,branch,width,origin,gki=False):
         from ui.tree_entry_layout import entry_layout
-        return entry_layout(name,size,badge,symlink,branch,width,origin)
+        return entry_layout(name,size,badge,symlink,branch,width,origin,gki)
 
     @Slot(str,str,result=QUrl)
     def fileIconUrl(self,key,palette):
@@ -312,6 +336,10 @@ class WorkspaceSession(QObject):
     def status(self): return self._status
     @Property(str, notify=statusChanged)
     def statusState(self): return self._status_state
+    @Property(int, notify=statusChanged)
+    def statusProgress(self): return self._status_progress
+    @Property(str, notify=statusChanged)
+    def statusStage(self): return self._status_stage
     @Property("QVariantList", notify=statusChanged)
     def history(self): return list(self._history)
     @Property('QVariantList', notify=statusChanged)
@@ -328,7 +356,148 @@ class WorkspaceSession(QObject):
     def _task_state_changed(self):
         self._status=self._tasks.text
         self._status_state=self._tasks.state
+        self._status_progress=self._tasks.progress
+        self._status_stage=self._tasks.stage
         self.statusChanged.emit()
+
+    @staticmethod
+    def _norm_key(path):
+        if not path or str(path).startswith('mount://'):
+            return ''
+        return os.path.normcase(os.path.normpath(str(path)))
+
+    @Slot(str, result=bool)
+    def isPathLocked(self, path):
+        key = self._norm_key(path)
+        if not key or not self._locked_paths:
+            return False
+        for locked_key, count in tuple(self._locked_paths.items()):
+            if count <= 0:
+                continue
+            if key == locked_key or key.startswith(locked_key + os.sep):
+                return True
+        return False
+
+    def _is_source_read_only(self, path):
+        target = str(path or '')
+        if not target:
+            return False
+        if target.startswith('mount://'):
+            ref = self._mounts.reference(target, resolve=False)
+            return bool(ref and not self._mounts.writable(ref[0]))
+        if self._mounts.unpack_preview_reference(target, resolve=False):
+            return True
+        if self.isPathLocked(target):
+            return True
+        norm = os.path.normpath(target)
+        return os.path.isfile(norm) and not os.access(norm, os.W_OK)
+
+    @Slot(str, result=bool)
+    def isFileReadOnly(self, path):
+        target = str(path or '')
+        if not target:
+            return False
+        if self._is_source_read_only(target):
+            return True
+        norm = os.path.normpath(target)
+        bridge = self._editor.bridge
+        _, tab = bridge._find_tab(norm)
+        return bool(tab and tab.get('read_only'))
+
+    def lock_path(self, path):
+        key = self._norm_key(path)
+        if not key:
+            return
+        prev = self._locked_paths.get(key, 0)
+        self._locked_paths[key] = prev + 1
+        if prev == 0:
+            self._sync_open_tab_locks(key, True)
+            self.locksChanged.emit()
+
+    def unlock_path(self, path):
+        key = self._norm_key(path)
+        if not key:
+            return
+        cur = self._locked_paths.get(key, 0)
+        if cur <= 1:
+            self._locked_paths.pop(key, None)
+            self._sync_open_tab_locks(key, False)
+            self.locksChanged.emit()
+        else:
+            self._locked_paths[key] = cur - 1
+
+    def _sync_open_tab_locks(self, folder_key, locked):
+        bridge = self._editor.bridge
+        changed = False
+        for tab in list(self._tab_data):
+            doc_path = tab.get('documentPath') or tab.get('path') or ''
+            doc_key = self._norm_key(doc_path)
+            path_key = self._norm_key(tab.get('path') or '')
+            if not doc_key and not path_key:
+                continue
+            matches = any(
+                k and (k == folder_key or k.startswith(folder_key + os.sep))
+                for k in (doc_key, path_key)
+            )
+            if not matches:
+                continue
+            now_locked = bool(locked or self._is_source_read_only(tab.get('path') or '') or self._is_source_read_only(doc_path))
+            if bool(tab.get('readOnly')) != now_locked:
+                tab['readOnly'] = now_locked
+                changed = True
+            if doc_path in bridge._tabs:
+                if locked:
+                    bridge.set_read_only(doc_path, True)
+                else:
+                    bridge.promote_to_disk(doc_path, read_only=now_locked)
+        if changed:
+            self._refresh_tabs()
+
+    @Slot(str, result=str)
+    def pathHighlightState(self, path):
+        key = self._norm_key(path)
+        if not key:
+            return ''
+        entry = self._path_highlights.get(key)
+        return entry['state'] if entry else ''
+
+    @Slot(str, result=int)
+    def pathProgress(self, path):
+        key = self._norm_key(path)
+        if not key:
+            return -1
+        return self._tasks.loading.get_path_progress(key)
+
+    def set_path_highlight(self, path, state, *, fade_ms=2800):
+        key = self._norm_key(path)
+        if not key:
+            return
+        self._highlight_seq += 1
+        seq = self._highlight_seq
+        state_str = str(state or '').strip()
+        if not state_str or state_str == 'clear':
+            if key in self._path_highlights:
+                self._path_highlights.pop(key, None)
+                self.highlightsChanged.emit()
+            return
+        self._path_highlights[key] = {'state': state_str, 'seq': seq}
+        self.highlightsChanged.emit()
+        if state_str == 'done' and fade_ms > 0:
+            def clear_if_same():
+                if self._closing:
+                    return
+                current = self._path_highlights.get(key)
+                if current and current.get('seq') == seq and current.get('state') == 'done':
+                    self._path_highlights.pop(key, None)
+                    self.highlightsChanged.emit()
+            QTimer.singleShot(int(fade_ms), clear_if_same)
+
+    @Slot(str, str, str, object)
+    def _on_unpack_preview_ready(self, image, target_dir, base, payload):
+        if self._closing:
+            return
+        if payload is not None:
+            self._mounts.begin_unpack_preview(image, target_dir, base, preloaded=payload)
     @Property(bool, notify=changed)
     def prepared(self): return self._ready
 
@@ -347,8 +516,10 @@ class WorkspaceSession(QObject):
         if not ok:self._tree_failed(str(result));return
         self.preparation_status.emit('Loading project files...')
         bases=[resolve_tree_target(self.project,name) for name in (self.p1,self.p2) if name]
+        self._ensure_fs_watcher(bases[0])
         self.tree.load(bases[0])
         if self.p2:
+            self._ensure_fs_watcher(bases[1])
             self.tree2.load(bases[1])
             self.tree_mirror.load(bases[0])
 
@@ -435,6 +606,12 @@ class WorkspaceSession(QObject):
     @Slot(str)
     def openPath(self, path):
         if self._mounts.reference(path):self._mounts.open(path);return
+        if self._mounts.unpack_preview_reference(path):
+            from ui.viewers import viewer_kind
+            kind = viewer_kind(path)
+            if kind in ('editor', 'choose', 'txt'):
+                if self._mounts.open_preview(path):
+                    return
         from ui.viewers import viewer_kind
         kind=viewer_kind(path)
         if kind=='choose':
@@ -482,46 +659,97 @@ class WorkspaceSession(QObject):
                 return tab
         return None
 
+    def _resolve_physical_target(self, path, *, record_edit=False):
+        directory = next((d for d in self.directories if d.base and
+                          os.path.commonpath([os.path.abspath(path), d.base]) == d.base), None)
+        physical = path
+        branch_context = None
+        if directory:
+            from core.workspace_files import WorkspaceFiles
+            files = WorkspaceFiles(directory.base)
+            physical, _ = files.view.resolve(path)
+            if physical and record_edit:
+                _logical, _rel, root, branch = files.branch(path)
+                if branch:
+                    physical = files.view.manager.record_edit(root, branch, path)
+                if root in (directory.engine.root_map_ctx if directory.engine else {}):
+                    branch_context = (directory.base, root, path, branch)
+                elif root == 'config':
+                    from main_ext.class_NeoBranchManager import CONFIG_SUFFIXES
+                    store = os.path.join(directory.base, 'neobranch')
+                    for owner in os.listdir(store) if os.path.isdir(store) else ():
+                        if (files.view.manager.is_physical_checkout(owner) and
+                                os.path.basename(path) in {owner + suffix for suffix in CONFIG_SUFFIXES}):
+                            active = files.view.manager.get_active_branch(owner)
+                            branch_context = (directory.base, owner, path, active['name'] if active else None)
+                            break
+        return physical, branch_context
+
     @Slot(str, str)
     def openAs(self, path, kind):
         path = os.path.normpath(path)
         existing = self._find_tab(path)
         if existing is not None:
+            if kind and existing.get("kind") != kind and existing.get("markdown") and kind in ("editor", "markdown"):
+                self.setMarkdownEditMode(existing["path"], kind == "editor")
+                return
             self.selectTab(existing["path"])
             return
-        directory=next((directory for directory in self.directories if directory.base and
-                        os.path.commonpath([os.path.abspath(path),directory.base])==directory.base),None)
-        physical=path
-        branch_context=None
-        if directory:
-            from core.workspace_files import WorkspaceFiles
-            files=WorkspaceFiles(directory.base)
-            physical,_=files.view.resolve(path)
-            if physical and kind=="editor":
-                _logical,_rel,root,branch=files.branch(path)
-                if branch: physical=files.view.manager.record_edit(root,branch,path)
-                if root in (directory.engine.root_map_ctx if directory.engine else {}):
-                    branch_context=(directory.base,root,path,branch)
-                elif root=='config':
-                    from main_ext.class_NeoBranchManager import CONFIG_SUFFIXES
-                    store=os.path.join(directory.base,'neobranch')
-                    for owner in os.listdir(store) if os.path.isdir(store) else ():
-                        if (files.view.manager.is_physical_checkout(owner) and
-                                os.path.basename(path) in {owner+suffix for suffix in CONFIG_SUFFIXES}):
-                            active=files.view.manager.get_active_branch(owner)
-                            branch_context=(directory.base,owner,path,active['name'] if active else None)
-                            break
+        if kind == "editor" and self._mounts.unpack_preview_reference(path):
+            if self._mounts.open_preview(path):
+                return
+        physical, branch_context = self._resolve_physical_target(path, record_edit=(kind == "editor"))
         if not physical or not os.path.isfile(physical):
             self.message("File not found: " + path)
             return
-        if kind == "editor" and not self._editor.openFile(physical): return
+        from ui.viewers import is_markdown_path
+        locked = self.isFileReadOnly(path) or self.isFileReadOnly(physical)
+        if kind == "editor" and not self._editor.openFile(physical, read_only=locked): return
         if branch_context:self._editor.bridge.bind_neobranch_tab(physical,*branch_context)
         tab = {"key": path, "path": path, "title": os.path.basename(path), "kind": kind,
-               "documentPath":physical,"icon": file_icon(path), "unsaved": False, "url": QUrl.fromLocalFile(physical).toString()}
+               "documentPath": physical, "icon": file_icon(path), "unsaved": False,
+               "markdown": is_markdown_path(path), "readOnly": locked,
+               "url": QUrl.fromLocalFile(physical).toString()}
         self._tab_data.append(tab)
         self._active_tab = path
         self._refresh_tabs()
         self._reveal_right()
+
+    @Slot(str, bool)
+    def setMarkdownEditMode(self, path, editing):
+        tab = self._find_tab(path)
+        if tab is None:
+            return
+        target_kind = "editor" if editing else "markdown"
+        if tab.get("kind") == target_kind:
+            self.selectTab(tab["path"])
+            return
+        if editing:
+            physical, branch_context = self._resolve_physical_target(tab["path"], record_edit=True)
+            if not physical or not os.path.isfile(physical):
+                self.message("File not found: " + tab["path"])
+                return
+            tab["documentPath"] = physical
+            tab["url"] = QUrl.fromLocalFile(physical).toString()
+            locked = self.isFileReadOnly(tab["path"]) or self.isFileReadOnly(physical)
+            tab["readOnly"] = locked
+            if not self._editor.openFile(physical, read_only=locked):
+                return
+            if branch_context:
+                self._editor.bridge.bind_neobranch_tab(physical, *branch_context)
+        tab["kind"] = target_kind
+        tab["markdown"] = True
+        self._active_tab = tab["path"]
+        self._refresh_tabs()
+
+    @Slot(str, result=str)
+    def markdownSource(self, path):
+        tab = self._find_tab(path)
+        doc_path = tab.get("documentPath") if tab else path
+        _, bridge_tab = self._editor.bridge._find_tab(doc_path or "")
+        if bridge_tab is not None:
+            return bridge_tab.get("content", "")
+        return ""
 
     @Slot(str)
     def selectTab(self, path):
@@ -529,7 +757,9 @@ class WorkspaceSession(QObject):
         if not tab: return
         self._active_tab = tab["path"]
         if tab.get("kind") == "editor":
-            self._editor.openFile(tab["documentPath"])
+            locked = self.isFileReadOnly(tab["path"]) or self.isFileReadOnly(tab["documentPath"])
+            tab["readOnly"] = locked
+            self._editor.openFile(tab["documentPath"], read_only=locked)
         self.tabsChanged.emit()
 
     @Slot(str,str,'QStringList',bool)
@@ -570,6 +800,7 @@ class WorkspaceSession(QObject):
     def _refresh_tabs(self, *_):
         for tab in self._tab_data:
             tab["unsaved"] = self._editor.bridge.is_unsaved(tab["documentPath"]) or bool(tab.get('viewerDirty'))
+            tab["readOnly"] = self.isFileReadOnly(tab.get("path") or "") or self.isFileReadOnly(tab.get("documentPath") or "")
         self._tabs.replace(self._tab_data, animate=False)
         self.tabsChanged.emit()
 
@@ -582,6 +813,7 @@ class WorkspaceSession(QObject):
     @Slot()
     def saveCurrent(self):
         if self.activeKind=='editor':self._editor.saveCurrent()
+        elif self.activeKind=='markdown' and self.activeDetails.get('documentPath') in self._editor.bridge._tabs:self._editor.saveCurrent()
         else:self.presentationRequested.emit('saveViewer',{'path':self.activeTab})
 
     @Slot()
@@ -589,12 +821,13 @@ class WorkspaceSession(QObject):
         self.probeWsl()
         if self._terminal_open:
             self._terminal_open = False
+            self.terminalsChanged.emit()
+            self._restore_tree()
         else:
             if not self._ensure_terminal(): return
             self._terminal_open = True
             self._reveal_right()
-        self.terminalsChanged.emit()
-        self._restore_tree()
+            self.terminalsChanged.emit()
 
     @staticmethod
     def _alpha(number):
@@ -626,12 +859,20 @@ class WorkspaceSession(QObject):
         if not session.start(): session.deleteLater(); return None
         self._terminal_indices[root] += 1
         key = root + ":" + str(self._terminal_indices[root])
-        import random
         title=self._unique_terminal_title(title,root)
         row={"key": key, "root": root, "title": title,
-             "icon":icon_key or random.choice(["icon_sh","icon_zsh","icon_fish"]),"session": session}
+             "icon":icon_key or "terminal","session": session}
         self._terminals.append(row)
         session.firstCommandSubmitted.connect(lambda command,key=key:self._name_terminal(key,command))
+        if manager is not None and hasattr(manager, "signals") and hasattr(manager.signals, "process_exited"):
+            def _on_terminal_exit(_code=0, b=base):
+                try:
+                    self._schedule_terminal_fs_sync(b)
+                except Exception:
+                    pass
+            manager.signals.process_exited.connect(_on_terminal_exit)
+        elif hasattr(session, "commandActivitySettled"):
+            session.commandActivitySettled.connect(lambda b=base: self._schedule_terminal_fs_sync(b))
         if activate:
             self._terminal_active[root] = key
         self._sync_terminals()
@@ -647,9 +888,11 @@ class WorkspaceSession(QObject):
                                       manager=ProcessTerminalManager(self.project),activate=False)
             if row is None:return None
             self._process_terminal_key=row['key']
-        if self._terminal_open:
+        if self._terminal_open and (self._terminal_root!=row['root'] or self.activeTerminal!=row['key']):
+            root_changed=self._terminal_root!=row['root']
             self._terminal_root=row['root'];self._terminal_active[row['root']]=row['key']
-            self._sync_terminals()
+            if root_changed:self._sync_terminals()
+            else:self.terminalsChanged.emit()
         return row['session']._manager
 
     def runTerminalProcess(self,process,program,args):
@@ -812,7 +1055,8 @@ class WorkspaceSession(QObject):
         self.presentationRequested.emit('message',{'title':'Operation failed','text':escape(summary[:500]),
             'log':text,'width':440,'danger':True})
 
-    def message(self, text, title="", *, confirm=None, cancel=None, danger=False, accept="", cancel_label="", dismissed=None, error=False):
+    def message(self, text, title="", *, confirm=None, cancel=None, danger=False, accept="", cancel_label="", dismissed=None,
+                error=False, width=None):
         if (error or hasattr(text,'application_error')) and confirm is None:
             from core.error_reporting import report_fatal
             report_fatal((str(title)+'\n\n' if title else '')+str(text), owner=self,
@@ -823,7 +1067,8 @@ class WorkspaceSession(QObject):
         self._pending_message_dismiss = dismissed
         self.presentationRequested.emit("message", {"text": str(text), "title": title or ui_lang.t("lbl_error"),
                                          "confirm": confirm is not None, "danger": danger, "acceptLabel": accept,
-                                         "cancelLabel":cancel_label,"notifyDismiss": dismissed is not None})
+                                         "cancelLabel":cancel_label,"notifyDismiss": dismissed is not None,
+                                         **({"width": width} if width is not None else {})})
 
     @Slot(str,str)
     def showMessage(self,title,text):self.message(text,title)
@@ -861,10 +1106,14 @@ class WorkspaceSession(QObject):
                 logical=os.path.join(directory,name);physical=files.write_path(logical)
                 if make_symlink(physical,target,overwrite=True):
                     files._record(logical,physical)
-                    if not files.branch(logical)[3]:files.engine(logical).apply(os.path.relpath(logical,base).replace(os.sep,'/'))
+                    if not files.branch(logical)[3]:
+                        files.engine(logical).apply(os.path.relpath(logical,base).replace(os.sep,'/'))
+                    from core import filesystem_map
+                    filesystem_map.record_entry(base,logical,physical)
                     count+=1
             return count
-        operation(self,ui_lang.t('sym_title'),work,lambda count:self.presentationRequested.emit('symlinksCreated',{'count':count}))
+        operation(self,ui_lang.t('sym_title'),work,lambda count:self.presentationRequested.emit('symlinksCreated',{'count':count}),
+                  lane='light',targets=tuple(os.path.join(directory,name) for name,_ in selected))
 
     @Slot(bool)
     def answer(self, accepted):
@@ -882,7 +1131,9 @@ class WorkspaceSession(QObject):
         elif action in ('agentSend','agentShow'):
             if data.get('path') and data.get('selection'):
                 self.editor.bridge.update_selection(data['path'], data['selection'])
-            self._agent.chat.show(data.get('origin',''),data.get('paths') or ([data['path']] if data.get('path') else []))
+            paths=data.get('paths') or ([data['path']] if data.get('path') else [])
+            paths=[self._agent.logical(self._editor.bridge._find_tab(p)[0] or p) for p in paths]
+            self._agent.chat.show(data.get('origin',''),paths)
         elif action == 'agentAnswer':self._agent.answer(data['id'],bool(data.get('accepted')),data.get('values',{}))
         elif action == 'fatalDismissed':
             self._fatal_visible = False;self._fatal_active.clear();self._present_fatal('')
@@ -896,6 +1147,7 @@ class WorkspaceSession(QObject):
         elif action == "back": self.requestReturn()
         elif action == "quit": self.requestQuit()
         elif action == "settings": self.presentationRequested.emit("settings", {})
+        elif action == "bootAnalyzer": self.presentationRequested.emit("bootAnalyzer", data or {})
         elif action == "terminal": self.toggleTerminal()
         elif action == "layout": self.toggleLayout()
         elif action == "save": self.saveCurrent()
@@ -957,8 +1209,10 @@ class WorkspaceSession(QObject):
             if directory._draft and directory._draft.path==path:
                 parent=directory._draft.parent.path;folder=directory._draft.folder
                 directory.cancelDraft()
-                if value.strip():operation(self,"Create "+value,lambda:files.create(parent,value,folder=folder))
-            elif value!=os.path.basename(path):operation(self,"Rename "+os.path.basename(path),lambda:files.rename(path,value))
+                if value.strip():operation(self,"Create "+value,lambda:files.create(parent,value,folder=folder),
+                                           lane="light",targets=(os.path.join(parent,value),))
+            elif value!=os.path.basename(path):operation(self,"Rename "+os.path.basename(path),lambda:files.rename(path,value),
+                                                        lane="light",targets=(path,os.path.join(os.path.dirname(path),value)))
             return
         from ui.workspace_actions import edit_metadata
         edit_metadata(self, directory, path, column, value)
@@ -985,15 +1239,19 @@ class WorkspaceSession(QObject):
                 raise ValueError('Select a partition folder')
             if files.branch(logical)[3]:raise ValueError('Switch to Source before creating the filesystem')
         except (OSError,ValueError) as error:failed(error);return
+        self.lock_path(logical)
+        self.set_path_highlight(logical,'loading')
         def work():
             from core.make_filesystem import make_filesystem
             return make_filesystem(logical,kind,mount_point.strip() or '/'+relative)
         def settled(ok,result):
+            self.unlock_path(logical)
+            self.set_path_highlight(logical,'done' if ok else 'error')
             self.presentationRequested.emit('filesystemFinished',{'path':path,'ok':ok})
             if ok:
                 self.message(ui_lang.t('mf_done')+'\n'+str(result),ui_lang.t('mf_done'),
                              dismissed=lambda:self.presentationRequested.emit('filesystemDismiss',{'path':path}))
-        operation(self,'make_filesystem:'+path,work,settled=settled)
+        operation(self,'make_filesystem:'+path,work,settled=settled,lane='heavy',targets=(logical,logical+'.img'))
 
     def beginCreate(self,path,folder):
         directory=self.active_tree
@@ -1010,10 +1268,96 @@ class WorkspaceSession(QObject):
             directory.activate(path)
         else:create()
 
+    @Slot(str)
+    def _on_editor_file_saved(self, filepath):
+        if not filepath or str(filepath).startswith("mount://"):
+            return
+        try:
+            logical = self._agent.logical(filepath) if hasattr(self, "_agent") else filepath
+        except Exception:
+            logical = filepath
+        for directory in self.directories:
+            base = directory.base
+            if not base:
+                continue
+            try:
+                base_abs = os.path.abspath(base)
+                check = os.path.abspath(logical)
+                if os.path.commonpath([check, base_abs]) == base_abs:
+                    from core import filesystem_map
+                    filesystem_map.record_entry(base, logical, filepath)
+            except (OSError, ValueError):
+                continue
+
+    def _ensure_fs_watcher(self, base):
+        if self._closing or not base or not os.path.isdir(base):
+            return
+        norm = os.path.normcase(os.path.abspath(os.path.normpath(base)))
+        if norm in self._fs_watchers:
+            return
+        from core.fs_watcher import ProjectFsWatcher
+        watcher = ProjectFsWatcher(
+            base,
+            lambda events, overflowed, b=base: self._on_watcher_batch(b, events, overflowed),
+            is_locked_fn=self.isPathLocked,
+        )
+        if watcher.start():
+            self._fs_watchers[norm] = watcher
+            weakref.finalize(self, watcher.stop)
+
+    def _on_watcher_batch(self, base, events, overflowed):
+        if self._closing:
+            return
+        from core import filesystem_map
+        dirty_dirs = filesystem_map.sync_external_paths(
+            base, [p for p, _ in events], overflowed=overflowed
+        )
+        try:
+            self._externalFsSync.emit(base, dirty_dirs)
+        except RuntimeError:
+            pass
+
+    @Slot(str, object)
+    def _apply_external_fs_sync(self, base, dirty_dirs):
+        if self._closing or not base:
+            return
+        norm_base = os.path.normcase(os.path.abspath(os.path.normpath(base)))
+        for directory in self.directories:
+            if directory.base and os.path.normcase(os.path.abspath(os.path.normpath(directory.base))) == norm_base:
+                directory.notify_external_changes(dirty_dirs)
+
+    def _schedule_terminal_fs_sync(self, base):
+        if self._closing or not base:
+            return
+        norm = os.path.normcase(os.path.abspath(os.path.normpath(base)))
+        timer = self._terminal_sync_timers.get(norm)
+        if timer is None:
+            timer = QTimer(self)
+            timer.setSingleShot(True)
+            timer.setInterval(300)
+            timer.timeout.connect(lambda b=base: self._apply_external_fs_sync(b, None))
+            self._terminal_sync_timers[norm] = timer
+        timer.start()
+
+    def _stop_fs_watchers(self, *_):
+        for timer in tuple(self._terminal_sync_timers.values()):
+            try:
+                timer.stop()
+            except RuntimeError:
+                pass
+        self._terminal_sync_timers.clear()
+        for watcher in tuple(self._fs_watchers.values()):
+            try:
+                watcher.stop()
+            except Exception:
+                pass
+        self._fs_watchers.clear()
+
     @Slot()
     def stop(self):
         if self._closing: return
         self._closing = True
+        self._stop_fs_watchers()
         self._agent.close()
         self._source_recovery.close()
         self._jobs.stop()
@@ -1021,6 +1365,8 @@ class WorkspaceSession(QObject):
         self._android_tools.close()
         self._toolkit.close()
         self._flashable.close()
+        self._pack_super.close()
+        self._boot_analyzer.stop()
         self._transfers.close()
         self._partition_picker.close()
         self._import_picker.close()

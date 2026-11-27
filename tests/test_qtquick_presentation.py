@@ -311,6 +311,144 @@ class PresentationTests(unittest.TestCase):
         self.assertEqual(model.trashProjects[0]["_trash_id"], "restore-id")
         self.assertEqual(len(changes), 3)
 
+    def test_startup_skeleton_dissolve_and_page_transitions(self):
+        import os
+        import time
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtCore import QMetaObject, Q_ARG
+        from PySide6.QtQml import QQmlProperty
+        from PySide6.QtTest import QTest
+        from PySide6.QtWidgets import QApplication
+        from ui.runtime import create_launcher
+
+        app = QApplication.instance() or QApplication([])
+        model = LauncherModel(
+            projects=[
+                {"project_name": f"Proj {i}", "path": f"C:/Proj{i}", "port1": "system", "pinned": i == 0}
+                for i in range(4)
+            ],
+            drives=[{
+                "key": "C:", "name": "C:", "active": True,
+                "used": 50 * 1024 ** 3, "total": 100 * 1024 ** 3,
+                "fraction": 0.5, "percent": 50,
+                "fill": "#232323", "barColor": "#3ecf8e", "distro": "",
+            }],
+            settings={"animations": True, "effects": "low"},
+        )
+        model.setStartupActive(True)
+        revealed = []
+        model.command.connect(
+            lambda cmd, data: (revealed.append(cmd), model.setStartupActive(False)) if cmd == "startupRevealed" else None
+        )
+
+        engine, window = create_launcher(model, visible=True, defer_content=True)
+
+        def visual_item(name):
+            pending = [window.contentItem()]
+            while pending:
+                candidate = pending.pop()
+                if candidate.objectName() == name:
+                    return candidate
+                pending.extend(candidate.childItems())
+            return None
+
+        try:
+            skeleton = visual_item("launcherSkeleton")
+            loader = visual_item("launcherContentLoader")
+            splash = visual_item("startupSplash")
+            self.assertEqual(skeleton.property("opacity"), 1.0)
+            self.assertEqual(loader.property("opacity"), 0.0)
+            self.assertFalse(loader.property("enabled"))
+            self.assertTrue(splash.property("visible"))
+
+            QQmlProperty.write(window, "contentReady", True)
+            deadline = time.monotonic() + 3
+            while not window.property("contentLoaded") and time.monotonic() < deadline:
+                QTest.qWait(15)
+            self.assertTrue(window.property("contentLoaded"))
+            self.assertEqual(loader.property("opacity"), 1.0)
+            self.assertFalse(loader.property("enabled"))
+
+            model.presentationRequested.emit("startupReady", {})
+            motion = visual_item("pageMotion")
+            self.assertFalse(motion.property("active"))
+            # Wait for skeleton dissolve (starts immediately if splash already faded, or right after splash).
+            deadline = time.monotonic() + 2
+            while skeleton.property("opacity") == 1.0 and time.monotonic() < deadline:
+                QTest.qWait(20)
+            self.assertFalse(motion.property("active"))
+            self.assertTrue(QQmlProperty(skeleton, "layer.enabled").read())
+            self.assertGreater(skeleton.property("opacity"), 0.0)
+            self.assertLess(skeleton.property("opacity"), 1.0)
+
+            deadline = time.monotonic() + 3
+            while model.startupActive and time.monotonic() < deadline:
+                QTest.qWait(20)
+            self.assertFalse(model.startupActive)
+            self.assertTrue(loader.property("enabled"))
+            self.assertEqual(revealed, ["startupRevealed"])
+            self.assertEqual(skeleton.property("opacity"), 0.0)
+
+            clock = visual_item("pageMotionClock")
+            proj_page = visual_item("projectList").parentItem().parentItem()
+            settings_page = visual_item("settingsScroll").parentItem().parentItem()
+
+            # Projects -> Settings: outgoing Projects fades out while Settings cards enter without orphaned footer buttons.
+            model.navigate("settings")
+            self.assertTrue(motion.property("active"))
+            self.assertEqual(motion.property("direction"), 1)
+            self.assertEqual(len(motion.property("actions").toVariant()), 0)
+            QMetaObject.invokeMethod(clock, "seek", Q_ARG("QVariant", 70))
+            QTest.qWait(10)
+            self.assertGreater(proj_page.property("opacity"), 0.0)
+            self.assertLess(proj_page.property("opacity"), 1.0)
+            self.assertTrue(proj_page.property("visible"))
+            self.assertTrue(settings_page.property("visible"))
+            QMetaObject.invokeMethod(clock, "finish")
+            QTest.qWait(10)
+            self.assertFalse(motion.property("active"))
+            self.assertEqual(proj_page.property("opacity"), 1.0)
+            self.assertFalse(proj_page.property("visible"))
+            self.assertTrue(settings_page.property("visible"))
+
+            # Settings -> Projects: directional return (-1) with no orphaned actions.
+            model.navigate("projects")
+            self.assertTrue(motion.property("active"))
+            self.assertEqual(motion.property("direction"), -1)
+            self.assertEqual(len(motion.property("actions").toVariant()), 0)
+            QMetaObject.invokeMethod(clock, "seek", Q_ARG("QVariant", 70))
+            QTest.qWait(10)
+            self.assertGreater(settings_page.property("opacity"), 0.0)
+            self.assertLess(settings_page.property("opacity"), 1.0)
+            QMetaObject.invokeMethod(clock, "finish")
+            QTest.qWait(10)
+            self.assertFalse(motion.property("active"))
+            self.assertTrue(proj_page.property("visible"))
+            self.assertFalse(settings_page.property("visible"))
+
+            # Projects -> Create: both pages have visible footers, so footer morph runs.
+            model.navigate("create")
+            self.assertTrue(motion.property("active"))
+            self.assertGreater(len(motion.property("actions").toVariant()), 0)
+            QMetaObject.invokeMethod(clock, "finish")
+            QTest.qWait(10)
+            self.assertFalse(motion.property("active"))
+
+            # Disabling animations mid-transition cancels cleanly.
+            model.navigate("settings")
+            self.assertTrue(motion.property("active"))
+            model.chooseSetting("animations", False)
+            QTest.qWait(10)
+            self.assertFalse(motion.property("active"))
+            self.assertTrue(settings_page.property("visible"))
+            self.assertFalse(proj_page.property("visible"))
+            self.assertEqual(engine._diagnostics, [])
+        finally:
+            window.close()
+            window.deleteLater()
+            engine.deleteLater()
+            app.processEvents()
+
 
 if __name__ == "__main__":
     unittest.main()

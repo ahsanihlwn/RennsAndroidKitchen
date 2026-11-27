@@ -24,7 +24,7 @@ BIN_ROOT = BIN_DIR
 
 REMOTE_REGISTRY_URL = (
     "https://raw.githubusercontent.com/"
-    "ahsanihlwn/auth/refs/heads/main/packages.json"
+    "ahsanihlwn/RennsAndroidKitchen/refs/heads/main/package/package.json"
 )
 
 # Large Android toolchains are legitimate, but an unbounded download lets a
@@ -32,6 +32,7 @@ REMOTE_REGISTRY_URL = (
 MAX_ARCHIVE_DOWNLOAD_BYTES = 2 * 1024 * 1024 * 1024
 
 LOCAL_CACHE_JSON = os.path.join(BIN_ROOT, "package.json")
+BUNDLED_REGISTRY_JSON = os.path.join(PROJECT_ROOT, "package", "package.json")
 
 print("[DependencyManager] registry source: REMOTE")
 print("[DependencyManager] registry url:", REMOTE_REGISTRY_URL)
@@ -51,9 +52,13 @@ class DependencyManager:
 
         if allow_remote:
             try:
-                self.registry = self._load_remote_registry()
+                self.registry = self._load_remote_registry() or self.load_bundled_registry()
             except Exception:
-                self.registry = {}
+                self.registry = self.load_bundled_registry()
+
+    def load_bundled_registry(self):
+        data = self._load_json(BUNDLED_REGISTRY_JSON)
+        return data if isinstance(data, dict) else {}
 
 
     def _load_json(self, path):

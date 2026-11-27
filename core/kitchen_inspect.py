@@ -23,9 +23,9 @@ def unpack_workflow(path,kind):
         return {'result_kind':'raw_image','outputs':[path],'replaces_input':True,
                 'next_argv':['rak','inspect',path,'--json'],
                 'note':'The default unpack action unsparses this file in place. Inspect its raw type again: it may be a filesystem or SUPER image.'}
-    if kind in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT'):
+    if kind in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT','DTBO'):
         folder=os.path.splitext(path)[0]
-        return {'result_kind':'boot_directory' if kind in ('BOOT','VNDRBOOT') else 'filesystem_directory',
+        return {'result_kind':'dtbo_directory' if kind=='DTBO' else ('boot_directory' if kind in ('BOOT','VNDRBOOT') else 'filesystem_directory'),
                 'outputs':[folder],'metadata_directory':os.path.join(parent,'config'),
                 'next_argv':['rak','repack',folder],'repack_output':folder+'_new.img',
                 'note':'Preserve Kitchen metadata. Repack this extracted root to IMG; do not zip it to rebuild a partition.'}
@@ -83,11 +83,11 @@ def describe(cli,path,*,follow=False):
         root=os.path.splitext(path)[0]
         if not files.view.resolve(root)[0] and root.endswith(('_a','_b')):root=root[:-2]
         local,_=files.view.resolve(root)
-        if local and os.path.isdir(local) and cli.badge(root) in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT'):
+        if local and os.path.isdir(local) and cli.badge(root) in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT','DTBO'):
             add('repack',['repack',root],'Rebuild the active partition before operating on its Source image')
-    if not folder and (supported_archive or kind in ('APK','PAYLOAD','SUPER','SPARSE','EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT','DAT','DAT.BR','BR')) and not branch and not blocked and not output_branch:
+    if not folder and (supported_archive or kind in ('APK','PAYLOAD','SUPER','SPARSE','EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT','DTBO','DAT','DAT.BR','BR')) and not branch and not blocked and not output_branch:
         add('unpack',['unpack',path],'Extract/decompile using automatic format detection')
-    if (folder and kind in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT','apktool-directory')) or (decompiled and not branch):
+    if (folder and kind in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT','DTBO','apktool-directory')) or (decompiled and not branch):
         add('repack',['repack',path],'Rebuild using the existing format and metadata')
     can_mount=not folder and kind in ('EROFS','EXT2','EXT3','EXT4')
     if not folder and kind=='SPARSE':
@@ -118,7 +118,7 @@ def describe(cli,path,*,follow=False):
     return {'path':path,**identity,'symlinks':files.view.link_chain(path),
             'resolved_path':files.view.canonical(path),'kind':kind,'origin':origin,'branch':branch,'source_image_blocked_by_branch':blocked or None,
             'mountable':can_mount and not bool(blocked),'unpack_result':workflow,'unpack_output_blocked_by_branch':output_branch or None,
-            'default_repack_output':path+'_new.img' if folder and kind in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT') else None,
+            'default_repack_output':path+'_new.img' if folder and kind in ('EROFS','EXT2','EXT3','EXT4','BOOT','VNDRBOOT','DTBO') else None,
             'verification':{'stat_argv':['rak','stat',path,'--json'],**({'sha256sum_argv':['rak','sha256sum',path]} if not folder else {})},
             'operations':operations,'next':operations[0]['command'] if operations else None,
             'unsupported':('ISO/lzip extraction is not implemented' if lower.endswith(('.iso','.lz')) else None)}

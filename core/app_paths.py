@@ -26,6 +26,7 @@ LOG_DIR = os.path.join(APP_ROOT, "logs")
 CACHE_DIR = os.path.join(APP_ROOT, "cache")
 ASSET_CACHE_DIR = os.path.join(CACHE_DIR, "assets")
 PROJECT_CACHE_ROOT = os.path.join(CACHE_DIR, "projects")
+AGENT_PROBE_DIR = os.path.join(CACHE_DIR, "agent_probe")
 TERMINAL_RUNTIME_DIR = os.path.join(RUNTIME_DIR, "terminal")
 MOUNT_RUNTIME_DIR = os.path.join(RUNTIME_DIR, "mount")
 IPC_RUNTIME_DIR = os.path.join(RUNTIME_DIR, "ipc")
@@ -37,7 +38,7 @@ def ensure_app_layout() -> None:
     for path in (
         APP_ROOT, BIN_DIR, APP_DIR, DATA_DIR, PROJECT_DATA_DIR, NEOCAT_DATA_DIR,
         STATE_DIR, USER_STATE_DIR, RUNTIME_DIR, TEMP_DIR, LOG_DIR,
-        CACHE_DIR, ASSET_CACHE_DIR, PROJECT_CACHE_ROOT,
+        CACHE_DIR, ASSET_CACHE_DIR, PROJECT_CACHE_ROOT, AGENT_PROBE_DIR,
         TERMINAL_RUNTIME_DIR, MOUNT_RUNTIME_DIR, IPC_RUNTIME_DIR,
     ):
         os.makedirs(path, exist_ok=True)

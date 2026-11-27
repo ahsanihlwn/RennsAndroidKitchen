@@ -21,6 +21,8 @@ pub(crate) struct PathRow {
     pub size: Option<u64>,
     #[serde(skip)]
     pub mtime_ns: Option<i128>,
+    #[serde(skip)]
+    pub read_only: bool,
 }
 
 struct Snapshot {
@@ -53,13 +55,14 @@ impl Cursor {
             let is_link = kind.is_symlink() || is_reparse(&entry);
             let is_dir = kind.is_dir();
             if is_dir && !is_link { self.descendants.push(path.clone()); }
-            let (size, mtime_ns) = if is_dir {
-                (Some(0), Some(0))
+            let (size, mtime_ns, read_only) = if is_dir {
+                (Some(0), Some(0), false)
             } else {
                 let info = entry.metadata().ok();
-                (info.as_ref().map(fs::Metadata::len), info.as_ref().and_then(directory::entry_mtime_ns))
+                let ro = info.as_ref().map(|m| m.permissions().readonly()).unwrap_or(false);
+                (info.as_ref().map(fs::Metadata::len), info.as_ref().and_then(directory::entry_mtime_ns), ro)
             };
-            self.rows.push(PathRow { name: entry.file_name().to_string_lossy().into_owned(), path, is_dir, is_link, size, mtime_ns });
+            self.rows.push(PathRow { name: entry.file_name().to_string_lossy().into_owned(), path, is_dir, is_link, size, mtime_ns, read_only });
             if Instant::now() >= deadline { break; }
         }
         Ok(false)
@@ -246,6 +249,7 @@ impl PathIndex {
                     name: row.name.clone(),
                     size: row.size,
                     mtime_ns: row.mtime_ns,
+                    read_only: row.read_only,
                 }),
                 &root,
                 include_magic,

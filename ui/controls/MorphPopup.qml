@@ -7,11 +7,13 @@ C.Popup {
     id: popup
     property var sourceItem: null
     property Item backdropSource: null
-    property bool effectsEnabled: true
-    property bool animationsEnabled: true
+    property var preferences: typeof rakPreferences!=="undefined" ? rakPreferences : null
+    property bool effectsEnabled: !preferences || preferences.settings.effects!=="low"
+    property bool animationsEnabled: !preferences || preferences.settings.animations
     property bool springMotion: true
     property bool morphOnClose: false
     property bool trackReturnHover: false
+    property bool showOpenCaption: true
     property color panelColor: "#1a1a1a"
     property color tintBaseColor: panelColor
     property real tintAlpha: .5
@@ -45,8 +47,8 @@ C.Popup {
     readonly property real returnCaptionScale: springMotion ? (1+.25*expansion) : (1+.12*expansion)
     readonly property point returnCaptionCenter: captionStart!=null ? Qt.point(Motion.mix(captionStart.x,sourceRect.x+sourceRect.width/2,motion),Motion.mix(captionStart.y,sourceRect.y+sourceRect.height/2,motion)) : Qt.point(surfaceRect.x+surfaceRect.width/2,surfaceRect.y+surfaceRect.height/2)
     readonly property real eased: Motion.outCubic(progress)
-    readonly property real formAlpha: buttonReturning ? (springMotion ? closeAlpha*Motion.opacity(eased,1,0,[[.25,0]])*(1-returnBlend) : closeAlpha*(1-Motion.clamp(progress/.28))) : !springMotion ? Motion.clamp((choicePhase-.16)/.52) : opening ? Motion.opacity(progress,0,1,[[.65,0]]) : closeAlpha*Motion.opacity(eased,1,0,[[.25,0]])
-    readonly property real captionAlpha: buttonReturning ? 0 : !springMotion ? Motion.clamp(1-choicePhase/.28) : opening ? Motion.opacity(progress,1,0,[[.04,1],[.36,0]]) : Motion.opacity(progress,0,1,[[.12,0],[.55,1]])
+    readonly property real formAlpha: buttonReturning ? (springMotion ? closeAlpha*Motion.opacity(eased,1,0,[[.25,0]])*(1-returnBlend) : closeAlpha*(1-Motion.clamp(progress/.28))) : (!showOpenCaption && opening) ? 1 : !springMotion ? Motion.clamp((choicePhase-.16)/.52) : opening ? Motion.opacity(progress,0,1,[[.65,0]]) : closeAlpha*Motion.opacity(eased,1,0,[[.25,0]])
+    readonly property real captionAlpha: buttonReturning ? 0 : (!showOpenCaption && opening) ? 0 : !springMotion ? Motion.clamp(1-choicePhase/.28) : opening ? Motion.opacity(progress,1,0,[[.04,1],[.36,0]]) : Motion.opacity(progress,0,1,[[.12,0],[.55,1]])
     default property alias body: form.data
     popupType: C.Popup.Item
     padding: 0
@@ -113,6 +115,7 @@ C.Popup {
         LiveGlass {
             id: glass
             objectName: "popupGlass"
+            preferences: popup.preferences
             x: popup.surfaceRect.x; y: popup.surfaceRect.y; width: popup.surfaceRect.width; height: popup.surfaceRect.height
             cornerRadius: popup.buttonReturning ? (popup.springMotion ? 7+7*(1-Motion.clamp(popup.motion)) : Motion.mix(popup.panelRadius,popup.sourceRadius,popup.motion)) : popup.springMotion ? 7*popup.launchScale+(popup.panelRadius-7*popup.launchScale)*Motion.clamp(popup.opening?popup.motion:1-popup.motion) : popup.sourceRadius+(popup.panelRadius-popup.sourceRadius)*popup.choicePhase
             opacity: popup.buttonReturning ? (popup.springMotion ? Motion.opacity(popup.eased,0,0,[[.25,1],[.30,1],[.65,0]]) : (1-Motion.clamp((popup.progress-.46)/.38)))*popup.returnUnderlay : 1

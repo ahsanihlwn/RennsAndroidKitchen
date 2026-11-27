@@ -93,9 +93,39 @@ pub fn write_to_image_file(
     images: &BTreeMap<String, PathBuf>,
     sparsify: bool,
 ) -> Result<(), LpError> {
+    write_to_image_file_with_progress(path, metadata, block_size, images, sparsify, |_, _| {})
+}
+
+pub fn write_to_image_file_with_progress<F>(
+    path: &Path,
+    metadata: &LpMetadata,
+    block_size: u32,
+    images: &BTreeMap<String, PathBuf>,
+    sparsify: bool,
+    mut progress: F,
+) -> Result<(), LpError>
+where
+    F: FnMut(u8, &str),
+{
     let mut builder = ImageBuilder::new(metadata, block_size, images, sparsify)?;
-    builder.build()?;
-    builder.export(path)
+    let mut last_pct: u8 = 0;
+    progress(1, "Preparing super metadata");
+    builder.build_with_progress(|idx, total, name| {
+        let pct = 1 + ((idx * 24) / total.max(1)) as u8;
+        if pct != last_pct {
+            last_pct = pct;
+        }
+        progress(pct, &format!("Indexing {name}"));
+    })?;
+    builder.export_with_progress(path, |done, total| {
+        let pct = 25 + ((done * 75) / total.max(1)).min(75) as u8;
+        if pct > last_pct {
+            last_pct = pct;
+            progress(pct, if sparsify { "Writing sparse super.img" } else { "Writing super.img" });
+        }
+    })?;
+    progress(100, "Done");
+    Ok(())
 }
 
 pub fn write_split_image_files(
@@ -174,6 +204,13 @@ impl<'a> ImageBuilder<'a> {
     }
 
     pub fn build(&mut self) -> Result<(), LpError> {
+        self.build_with_progress(|_, _, _| {})
+    }
+
+    pub fn build_with_progress<F>(&mut self, mut on_part: F) -> Result<(), LpError>
+    where
+        F: FnMut(usize, usize, &str),
+    {
         if self.device_images.is_empty() {
             return Err(LpError::InvalidMetadata(
                 "Metadata specifies no block devices.".into(),
@@ -208,9 +245,13 @@ impl<'a> ImageBuilder<'a> {
 
         self.check_extent_ordering()?;
 
+        let total_images = self.images.len().max(1);
+        let mut idx = 0usize;
         for partition in &self.metadata.partitions {
             let name = partition.name();
             if let Some(image_path) = self.images.remove(&name) {
+                idx += 1;
+                on_part(idx, total_images, &name);
                 self.add_partition_image(partition, &image_path)?;
             }
         }
@@ -224,6 +265,13 @@ impl<'a> ImageBuilder<'a> {
     }
 
     pub fn export(&mut self, file_path: &Path) -> Result<(), LpError> {
+        self.export_with_progress(file_path, |_, _| {})
+    }
+
+    pub fn export_with_progress<F>(&mut self, file_path: &Path, on_bytes: F) -> Result<(), LpError>
+    where
+        F: FnMut(u64, u64),
+    {
         if self.device_images.len() > 1 {
             return Err(LpError::InvalidMetadata(
                 "Cannot export to a single image on multi-device builds.".into(),
@@ -235,7 +283,7 @@ impl<'a> ImageBuilder<'a> {
             .write(true)
             .truncate(true)
             .open(file_path)?;
-        self.device_images[0].write_to_file(&mut file, self.sparsify, false)?;
+        self.device_images[0].write_to_file_with_progress(&mut file, self.sparsify, false, on_bytes)?;
         Ok(())
     }
 

@@ -86,7 +86,7 @@ pub(crate) struct Link {
     is_file: bool,
 }
 
-type TargetCache = HashMap<PathBuf, (bool, bool, bool)>;
+type TargetCache = HashMap<PathBuf, (bool, bool, bool, PathBuf)>;
 
 const PLACEHOLDER_CACHE_LIMIT: usize = 65_536;
 // Match Git's racy-index guard: never serve a cached placeholder header for a
@@ -190,6 +190,205 @@ struct LiveResolveContext<'a> {
     missing_parents: &'a RwLock<HashSet<String>>,
 }
 
+fn build_target_candidates(file_path: &Path, norm_target: &str, root: &Path) -> Vec<PathBuf> {
+    let clean = norm_target.trim_start_matches('/');
+    let mut raw = Vec::with_capacity(4);
+    if norm_target.starts_with('/') {
+        raw.push(root.join(clean));
+        if let Some(sub) = clean.strip_prefix("system/") {
+            if !sub.is_empty() {
+                raw.push(root.join(sub));
+            }
+            raw.push(root.join("system").join(clean));
+        } else {
+            raw.push(root.join("system").join(clean));
+            if let Some(parent) = root.parent().filter(|parent| *parent != root) {
+                raw.push(parent.join(clean));
+            }
+        }
+    } else {
+        raw.push(file_path.parent().unwrap_or(Path::new(".")).join(norm_target));
+        raw.push(root.join(norm_target));
+        raw.push(root.join("system").join(norm_target));
+    }
+    let mut out = Vec::with_capacity(raw.len());
+    for item in raw {
+        let norm = normalized(&item);
+        if !out.contains(&norm) {
+            out.push(norm);
+        }
+    }
+    out
+}
+
+fn inspect_node_for_chain(
+    candidate: &Path,
+    ctx: Option<&LiveResolveContext<'_>>,
+) -> (bool, bool, bool, Option<String>) {
+    if let Some(ctx) = ctx {
+        if let Some(siblings) = ctx.siblings {
+            let key = cache_key(candidate);
+            if let Some(&(ex, is_dir, _is_file)) = siblings.get(&key) {
+                if ex && is_dir {
+                    return (true, true, false, None);
+                }
+            }
+        }
+    }
+    let Ok(meta) = fs::symlink_metadata(candidate) else {
+        return (false, false, false, None);
+    };
+    if meta.file_type().is_symlink() {
+        let link_target = fs::read_link(candidate)
+            .ok()
+            .map(|p| p.to_string_lossy().into_owned())
+            .filter(|s| !s.is_empty());
+        return (true, false, false, link_target);
+    }
+    if meta.is_dir() {
+        return (true, true, false, None);
+    }
+    if meta.is_file() {
+        if meta.len() <= 512 {
+            if let Some(target) = read_placeholder_target_uncached(candidate) {
+                return (true, false, false, Some(target));
+            }
+        }
+        return (true, false, true, None);
+    }
+    (true, false, false, None)
+}
+
+fn strip_walk_prefix(candidate: &Path, root: &Path) -> Option<(PathBuf, Vec<String>)> {
+    let mut bases = vec![normalized(root)];
+    if let Some(parent) = root.parent().filter(|p| *p != root) {
+        bases.push(normalized(parent));
+    }
+    for base in bases {
+        if let Ok(rel) = candidate.strip_prefix(&base) {
+            let parts: Vec<String> = rel
+                .components()
+                .filter_map(|c| match c {
+                    Component::Normal(s) => Some(s.to_string_lossy().into_owned()),
+                    _ => None,
+                })
+                .collect();
+            if parts.len() >= 2 {
+                return Some((base, parts));
+            }
+            return None;
+        }
+    }
+    None
+}
+
+fn resolve_candidate_chain(
+    candidate: &Path,
+    root: &Path,
+    ctx: Option<&LiveResolveContext<'_>>,
+    visited: &mut HashSet<String>,
+    depth: usize,
+) -> (bool, bool, bool, PathBuf) {
+    let cand = normalized(candidate);
+    if depth > 24 {
+        return (false, false, false, cand);
+    }
+
+    let (ex, is_d, is_f, link_t) = inspect_node_for_chain(&cand, ctx);
+    if ex && link_t.is_none() {
+        return (true, is_d, is_f, cand);
+    }
+
+    if let Some(target) = link_t {
+        let key = cache_key(&cand);
+        if !visited.insert(key.clone()) {
+            return (false, false, false, cand);
+        }
+        let norm_lt = target.replace('\\', "/");
+        let next_cands = build_target_candidates(&cand, norm_lt.trim(), root);
+        let mut best_missing: Option<PathBuf> = None;
+        for nc in next_cands {
+            if cache_key(&nc) == key {
+                continue;
+            }
+            let (sub_ex, sub_d, sub_f, sub_res) =
+                resolve_candidate_chain(&nc, root, ctx, visited, depth + 1);
+            if sub_ex {
+                visited.remove(&key);
+                return (true, sub_d, sub_f, sub_res);
+            }
+            if best_missing.is_none() {
+                best_missing = Some(sub_res);
+            }
+        }
+        visited.remove(&key);
+        if fs::symlink_metadata(&cand)
+            .map(|m| m.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            if let Ok(st) = fs::metadata(&cand) {
+                let real = fs::canonicalize(&cand).unwrap_or_else(|_| cand.clone());
+                return (true, st.is_dir(), st.is_file(), normalized(&real));
+            }
+        }
+        return (false, false, false, best_missing.unwrap_or(cand));
+    }
+
+    // Walk parent components when direct path doesn't exist (detects intermediate symlinks).
+    let Some((walk_root, parts)) = strip_walk_prefix(&cand, root) else {
+        return (false, false, false, cand);
+    };
+    let cand_key = cache_key(&cand);
+    for i in 0..parts.len().saturating_sub(1) {
+        let mut cur = walk_root.clone();
+        for seg in &parts[..=i] {
+            cur.push(seg);
+        }
+        let cur = normalized(&cur);
+        let (c_ex, c_dir, _c_file, c_link) = inspect_node_for_chain(&cur, ctx);
+        if !c_ex {
+            break;
+        }
+        if c_dir && c_link.is_none() {
+            continue;
+        }
+        let Some(link_target) = c_link else {
+            break;
+        };
+        let key = cache_key(&cur);
+        if !visited.insert(key.clone()) {
+            return (false, false, false, cand);
+        }
+        let norm_lt = link_target.replace('\\', "/");
+        let next_bases = build_target_candidates(&cur, norm_lt.trim(), root);
+        let tail = &parts[i + 1..];
+        let mut best_missing: Option<PathBuf> = None;
+        for nb in next_bases {
+            let mut combined = nb;
+            for seg in tail {
+                combined.push(seg);
+            }
+            let combined = normalized(&combined);
+            if cache_key(&combined) == cand_key {
+                continue;
+            }
+            let (sub_ex, sub_d, sub_f, sub_res) =
+                resolve_candidate_chain(&combined, root, ctx, visited, depth + 1);
+            if sub_ex {
+                visited.remove(&key);
+                return (true, sub_d, sub_f, sub_res);
+            }
+            if best_missing.is_none() {
+                best_missing = Some(sub_res);
+            }
+        }
+        visited.remove(&key);
+        return (false, false, false, best_missing.unwrap_or(cand));
+    }
+
+    (false, false, false, cand)
+}
+
 fn resolve_target_from_string(
     path: &Path,
     target: String,
@@ -199,53 +398,46 @@ fn resolve_target_from_string(
 ) -> Link {
     let norm_target = target.replace('\\', "/");
     let clean = norm_target.trim_start_matches('/');
-    let mut candidates = Vec::with_capacity(4);
-    if norm_target.starts_with('/') {
-        candidates.push(root.join(clean));
-        if let Some(sub) = clean.strip_prefix("system/") {
-            if !sub.is_empty() {
-                candidates.push(root.join(sub));
-            }
-            candidates.push(root.join("system").join(clean));
-        } else {
-            candidates.push(root.join("system").join(clean));
-            if let Some(parent) = root.parent().filter(|parent| *parent != root) {
-                candidates.push(parent.join(clean));
-            }
-        }
-    } else {
-        candidates.push(path.parent().unwrap_or(Path::new(".")).join(&norm_target));
-        candidates.push(root.join(&norm_target));
-        candidates.push(root.join("system").join(&norm_target));
-    }
-    let candidates: Vec<_> = candidates.iter().map(|path| normalized(path)).collect();
+    let candidates = build_target_candidates(path, norm_target.trim(), root);
     let norm_file = normalized(path);
+    let norm_file_key = cache_key(&norm_file);
+    let mut visited = HashSet::new();
+    visited.insert(norm_file_key);
+
     let mut resolved = None;
+    let mut fallback_resolved: Option<PathBuf> = None;
     let (mut exists, mut is_dir, mut is_file) = (false, false, false);
     for candidate in &candidates {
         if *candidate == norm_file {
             continue;
         }
         let info = if let Some(cached) = local_cache.get(candidate) {
-            *cached
+            cached.clone()
         } else {
-            let computed = lookup_target_metadata(candidate, ctx);
-            local_cache.insert(candidate.clone(), computed);
+            let computed = resolve_candidate_chain(candidate, root, ctx, &mut visited, 0);
+            local_cache.insert(candidate.clone(), computed.clone());
             computed
         };
         if info.0 {
-            resolved = Some(candidate.clone());
-            (exists, is_dir, is_file) = info;
+            resolved = Some(info.3);
+            (exists, is_dir, is_file) = (true, info.1, info.2);
             break;
+        }
+        if fallback_resolved.is_none() {
+            fallback_resolved = Some(info.3);
+        } else if info.3 != *candidate && fallback_resolved.as_ref().is_some_and(|prev| candidates.contains(prev)) {
+            fallback_resolved = Some(info.3);
         }
     }
     let resolved = resolved.unwrap_or_else(|| {
-        candidates
-            .iter()
-            .find(|path| **path != norm_file)
-            .or_else(|| candidates.first())
-            .cloned()
-            .unwrap_or_else(|| normalized(&root.join(clean)))
+        fallback_resolved.unwrap_or_else(|| {
+            candidates
+                .iter()
+                .find(|path| **path != norm_file)
+                .or_else(|| candidates.first())
+                .cloned()
+                .unwrap_or_else(|| normalized(&root.join(clean)))
+        })
     });
     if !exists {
         let lower = norm_target.to_lowercase();
@@ -274,6 +466,7 @@ fn resolve_target_from_string(
     }
 }
 
+#[allow(dead_code)]
 fn lookup_target_metadata(
     candidate: &Path,
     ctx: Option<&LiveResolveContext<'_>>,
@@ -450,6 +643,7 @@ pub(crate) struct Entry {
     mtime_ns: Option<i128>,
     symlink: Option<Link>,
     magic: String,
+    read_only: bool,
 }
 
 pub(crate) struct RawEntry {
@@ -459,6 +653,7 @@ pub(crate) struct RawEntry {
     pub name: String,
     pub size: Option<u64>,
     pub mtime_ns: Option<i128>,
+    pub read_only: bool,
 }
 
 pub(crate) fn entry_mtime_ns(info: &fs::Metadata) -> Option<i128> {
@@ -474,13 +669,14 @@ fn entries(path: &Path, root: &Path, include_magic: bool) -> io::Result<Vec<Entr
         let is_dir = kind.as_ref().map(fs::FileType::is_dir).unwrap_or(false);
         let is_native_link = kind.as_ref().map(fs::FileType::is_symlink).unwrap_or(false);
         let name = entry.file_name().to_string_lossy().into_owned();
-        let (size, stamp) = if is_dir {
-            (Some(0), Some(0))
+        let (size, stamp, read_only) = if is_dir {
+            (Some(0), Some(0), false)
         } else {
             // On Windows, DirEntry::metadata() reads directly from WIN32_FIND_DATAW
             // returned by FindFirstFileW/FindNextFileW with zero extra syscalls.
             let info = entry.metadata().ok();
-            (info.as_ref().map(fs::Metadata::len), info.as_ref().and_then(mtime_ns))
+            let ro = info.as_ref().map(|m| m.permissions().readonly()).unwrap_or(false);
+            (info.as_ref().map(fs::Metadata::len), info.as_ref().and_then(mtime_ns), ro)
         };
         raw.push(RawEntry {
             path: entry_path,
@@ -489,6 +685,7 @@ fn entries(path: &Path, root: &Path, include_magic: bool) -> io::Result<Vec<Entr
             name,
             size,
             mtime_ns: stamp,
+            read_only,
         });
     }
     enrich_raw(raw, root, include_magic)
@@ -511,6 +708,7 @@ pub(crate) fn enrich_raw(
             name,
             size,
             mtime_ns: stamp,
+            read_only,
         } = item;
         if !is_native_link {
             let norm_key = cache_key(&normalized(&entry_path));
@@ -554,6 +752,7 @@ pub(crate) fn enrich_raw(
             mtime_ns: if is_dir { Some(0) } else { stamp },
             symlink: None,
             magic,
+            read_only,
         });
     }
     let links = batch_resolve_candidates(&candidates, root, Some(&sibling_map), true);
@@ -571,6 +770,7 @@ pub(crate) fn enrich_paths(paths: impl IntoIterator<Item=(PathBuf, bool, String)
         let is_native_link = info.as_ref().map(|m| m.file_type().is_symlink()).unwrap_or(false);
         let size = if is_dir { Some(0) } else { info.as_ref().map(fs::Metadata::len) };
         let stamp = if is_dir { Some(0) } else { info.as_ref().and_then(mtime_ns) };
+        let read_only = if is_dir { false } else { info.as_ref().map(|m| m.permissions().readonly()).unwrap_or(false) };
         RawEntry {
             path: entry_path,
             is_dir,
@@ -578,6 +778,7 @@ pub(crate) fn enrich_paths(paths: impl IntoIterator<Item=(PathBuf, bool, String)
             name,
             size,
             mtime_ns: stamp,
+            read_only,
         }
     });
     enrich_raw(raw, root, include_magic)
@@ -854,6 +1055,67 @@ mod tests {
         let after_retarget = entries(&bin, &root, false).unwrap();
         let updated = after_retarget.iter().find(|e| e.name == "item_000").unwrap();
         assert_eq!(updated.symlink.as_ref().unwrap().target, "sub___");
+
+        let _ = fs::remove_dir_all(&test_dir);
+    }
+
+    #[test]
+    fn chained_and_intermediate_symlink_resolution_and_cycle_guard() {
+        let unique = format!(
+            "rak_chain_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let test_dir = std::env::temp_dir().join(unique);
+        let root = test_dir.join("root");
+        let sys_odm = root.join("system").join("odm");
+        let vendor_dir = root.join("vendor");
+        let real_odm_app = root.join("odm").join("app");
+        let real_odm_bin = root.join("odm").join("bin");
+        fs::create_dir_all(&sys_odm).unwrap();
+        fs::create_dir_all(&vendor_dir).unwrap();
+        fs::create_dir_all(&real_odm_app).unwrap();
+        fs::create_dir_all(&real_odm_bin).unwrap();
+        fs::write(real_odm_app.join("App.apk"), b"APK").unwrap();
+        let real_toybox = real_odm_bin.join("toybox");
+        fs::write(&real_toybox, vec![b'T'; 1024]).unwrap();
+
+        // vendor/odm -> /odm, system/odm/app -> /vendor/odm/app (intermediate symlink hop!)
+        fs::write(vendor_dir.join("odm"), b"!<symlink>/odm\0").unwrap();
+        let app_link = sys_odm.join("app");
+        fs::write(&app_link, b"!<symlink>/vendor/odm/app\0").unwrap();
+
+        // Direct symlink-to-symlink file chain:
+        // system/sh -> /vendor/bin_link, vendor/bin_link -> /odm/bin/toolbox, odm/bin/toolbox -> toybox
+        fs::write(vendor_dir.join("bin_link"), b"!<symlink>/odm/bin/toolbox\0").unwrap();
+        fs::write(real_odm_bin.join("toolbox"), b"!<symlink>toybox\0").unwrap();
+        let sh_link = root.join("system").join("sh");
+        fs::write(&sh_link, b"!<symlink>/vendor/bin_link\0").unwrap();
+
+        // Symlink cycle guard:
+        fs::write(root.join("system").join("loop_a"), b"!<symlink>/vendor/loop_b\0").unwrap();
+        fs::write(vendor_dir.join("loop_b"), b"!<symlink>/system/loop_a\0").unwrap();
+
+        let sys_odm_entries = entries(&sys_odm, &root, false).unwrap();
+        let app_entry = sys_odm_entries.iter().find(|e| e.name == "app").unwrap();
+        let app_sym = app_entry.symlink.as_ref().unwrap();
+        assert!(app_sym.exists);
+        assert!(app_sym.is_dir);
+        assert!(!app_sym.is_file);
+        assert_eq!(PathBuf::from(&app_sym.resolved), normalized(&real_odm_app));
+
+        let sys_entries = entries(&root.join("system"), &root, false).unwrap();
+        let sh_sym = sys_entries.iter().find(|e| e.name == "sh").unwrap().symlink.as_ref().unwrap();
+        assert!(sh_sym.exists);
+        assert!(sh_sym.is_file);
+        assert!(!sh_sym.is_dir);
+        assert_eq!(PathBuf::from(&sh_sym.resolved), normalized(&real_toybox));
+
+        let loop_sym = sys_entries.iter().find(|e| e.name == "loop_a").unwrap().symlink.as_ref().unwrap();
+        assert!(!loop_sym.exists);
 
         let _ = fs::remove_dir_all(&test_dir);
     }

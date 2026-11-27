@@ -8,17 +8,25 @@ Item {
     required property var preferences
     required property var details
     readonly property string kind: details.kind || ""
+    property string _loadedComponent: ""
     function componentPathForKind(k) {
         if (k === "hex") return "WorkspaceHexViewer.qml"
         if (k === "elf") return "WorkspaceSoViewer.qml"
         if (k === "image") return "WorkspaceImageViewer.qml"
+        if (k === "markdown") return "WorkspaceMarkdownViewer.qml"
         if (k === "audio" || k === "video") return "WorkspaceMediaViewer.qml"
         if (k === "payload" || k === "super" || k === "oem") return "WorkspacePartitionViewer.qml"
         return "WorkspaceArchiveViewer.qml"
     }
     function syncViewer() {
+        const comp = componentPathForKind(viewer.kind)
+        if (_loadedComponent === comp && contentLoader.status === Loader.Ready && contentLoader.item) {
+            contentLoader.item.details = viewer.details
+            return
+        }
+        _loadedComponent = comp
         contentLoader.setSource(
-            componentPathForKind(viewer.kind),
+            comp,
             {
                 workspace: viewer.workspace,
                 preferences: viewer.preferences,

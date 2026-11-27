@@ -6,7 +6,8 @@ import os
 
 from PySide6.QtCore import QObject,Property,Signal,Slot,QUrl
 from PySide6.QtGui import QImage
-from core import so_core,so_document,binary_core,binary_session
+from core import so_core,so_document,binary_core,binary_session,binary_xref,native_decompiler
+from core.command_context import failure_summary
 from core.ui_lang import t
 from services.async_jobs import AsyncJobs
 from ui.rows import RowsModel
@@ -20,6 +21,7 @@ class SoDocument(QObject):
     compareChanged=Signal()
     embeddedRequested=Signal()
     pathRequested=Signal(str)
+    pathXrefsChanged=Signal()
     nestedRequested=Signal(str)
     compareRequested=Signal()
     messageRequested=Signal(str,str)
@@ -27,6 +29,8 @@ class SoDocument(QObject):
     functionChanged=Signal()
     annotationChanged=Signal()
     annotationSaved=Signal(str,int)
+    reconstructProgress=Signal(int,int,str)
+    reconstructFinished=Signal(str)
 
     def __init__(self,parent=None):
         super().__init__(parent)
@@ -35,8 +39,9 @@ class SoDocument(QObject):
         self._symbol_query='';self._symbol_kind='';self._mangled=False;self._reloc_query='';self._string_query='';self._path_query=''
         self._models={name:RowsModel(parent=self) for name in ('symbols','sections','segments','relocations','paths')}
         self._path_nodes=[];self._expanded=set();self._visible_paths=[];self._embedded=None;self._embedded_info={};self._comparison={}
-        self._session=None;self._function_query='';self._functions=[];self._visible_functions=[]
-        self._function_detail={};self._annotations={'revision':0,'entries':{}};self._ghidra={}
+        self._path_xrefs={}
+        self._session=None;self._function_query='';self._functions=[];self._visible_functions=[];self._resident_mode=False
+        self._function_detail={};self._annotations={'revision':0,'entries':{}};self._ghidra={};self._rea={};self._native={}
         self._models['functions']=RowsModel(parent=self)
 
     @Property(QObject,constant=True)
@@ -51,6 +56,16 @@ class SoDocument(QObject):
                 'sections':len(r['sections']),'warnings':'\n'.join(r.get('warnings',[]))}
     @Property('QVariantMap',notify=changed)
     def ghidra(self):return self._ghidra
+    @Property('QVariantMap',notify=changed)
+    def rea(self):return self._rea
+    @Property('QVariantMap',notify=changed)
+    def nativeDecompiler(self):return self._native
+    @Property(bool,notify=changed)
+    def canDecompile(self):return bool(self._ghidra.get('available') or self._native.get('available'))
+    @Property(str,notify=changed)
+    def filePath(self):return self._path
+    @Property('QVariantMap',notify=pathXrefsChanged)
+    def pathXrefs(self):return self._path_xrefs
     @Property('QVariantMap',notify=functionChanged)
     def functionDetail(self):return self._function_detail
     @Property('QVariantMap',notify=annotationChanged)
@@ -110,10 +125,14 @@ class SoDocument(QObject):
             self._pending.discard(key)
             if ok:done(result)
             else:
-                if key=='analysis':self._status='Error: '+str(result)
-                self.messageRequested.emit(t('lbl_error'),t('so_parse_fail',err=str(result)) if key in ('analysis','compare','nested') else str(result))
+                reason=failure_summary(result) or str(result)
+                if key=='analysis':
+                    self._status='Error: '+reason
+                    self._overview=reason
+                else:
+                    self.messageRequested.emit(t('lbl_error'),reason)
             self.changed.emit()
-        self._jobs.submit(key,run,None,finished)
+        self._jobs.submit(key,run,None,finished,report_operation_errors=False)
 
     @Slot(str)
     def load(self,path):
@@ -125,7 +144,8 @@ class SoDocument(QObject):
         if self._closed:return
         self._generation+=1;self._jobs.reset();self._pending.clear()
         self._result=None;self._session=None;self._function_detail={};self._functions=[];self.filterFunctions(self._function_query)
-        self._overview='';self._strings='';self._disasm='';self._path_nodes=[];self._visible_paths=[]
+        self._overview='';self._strings='';self._disasm='';self._path_nodes=[];self._visible_paths=[];self._path_xrefs={}
+        self.pathXrefsChanged.emit()
         for model in self._models.values():model.replace([],animate=False)
         self.tablesChanged.emit()
         self.functionChanged.emit()
@@ -134,9 +154,9 @@ class SoDocument(QObject):
         def analyze():
             result=binary_core.analyze_file(path)
             session=binary_session.BinarySession(path,result['sha256'])
-            return result,session,session.annotations(),binary_session.ghidra_status()
+            return result,session,session.annotations(),binary_session.ghidra_status(),binary_session.rea_status(),native_decompiler.status()
         def loaded(payload):
-            result,self._session,self._annotations,self._ghidra=payload
+            result,self._session,self._annotations,self._ghidra,self._rea,self._native=payload
             self._result=result;self._status=so_document.status(result);self._overview=so_document.overview(result);self._disasm=''
             self._functions=[{'address':hex(f['addr']),'name':f['demangled'],'size':f['size'],'source':'symbol'} for f in result['functions']]
             self.filterFunctions(self._function_query);self.annotationChanged.emit()
@@ -159,33 +179,80 @@ class SoDocument(QObject):
 
     def _set_ghidra(self,status):self._ghidra=status
 
-    @Slot()
-    def analyzeGhidra(self):
+    def _run_ghidra_index(self, resident=False):
         if self._session is None:return
+        self._resident_mode=bool(resident)
         session=self._session;path=self._path
         def work():
             binary_session.BinarySession(path,session.sha256)
-            return session.analyze()
+            return session.analyze_resident() if resident else session.analyze()
         def loaded(result):
-            self._functions=[{**f,'source':'ghidra'} for f in result['functions']]
+            src='rea-ghidra' if resident else 'ghidra'
+            self._functions=[{**f,'source':src} for f in result['functions']]
             self._result['ghidra_analysis']=result
             self.filterFunctions(self._function_query)
-            self._status=f"Ghidra: {len(self._functions)} functions"+(' (truncated)' if result.get('functions_truncated') else '')
+            label='REA Bridge' if resident else 'Ghidra'
+            self._status=f"{label}: {len(self._functions)} functions"+(' (truncated)' if result.get('functions_truncated') else '')
         self._submit('ghidra-analysis',work,loaded)
+
+    @Slot()
+    def analyzeGhidra(self):
+        self._run_ghidra_index(resident=False)
+
+    @Slot()
+    def analyzeResidentGhidra(self):
+        self._run_ghidra_index(resident=True)
+
+    def _present_function_detail(self,result):
+        result=dict(result)
+        result['listing']='\n'.join(i['address']+'  '+i['text'] for i in result.get('instructions',[]))
+        def _ref_line(r):
+            line=r['from']+' → '+r['to']+'  '+r['type']
+            if r.get('to_name'):line+=f"  [{r['to_name']}]"
+            if r.get('string_value'):line+=f"  \"{r['string_value']}\""
+            return line
+        ref_lines=[_ref_line(r) for r in result.get('references',[])]
+        if result.get('referenced_strings'):
+            ref_lines.append('\n[Referenced Strings]')
+            for s in result['referenced_strings']:
+                ref_lines.append(f"  {s.get('address','')}  \"{s.get('value','')}\"")
+        if result.get('function',{}).get('locals'):
+            ref_lines.append('\n[Local Variables]')
+            for loc in result['function']['locals']:
+                ref_lines.append(f"  {loc.get('type','')} {loc.get('name','')}  ({loc.get('storage','')})")
+        result['referencesText']='\n'.join(ref_lines)
+        result['callsText']='Callers\n'+'\n'.join(f.get('address','')+'  '+f.get('name','') for f in result.get('callers',[]))+'\n\nCallees\n'+'\n'.join(f.get('address','')+'  '+f.get('name','') for f in result.get('callees',[]))
+        fn=result.get('function',{})
+        result['reaPrompt']=(
+            f"Analyze and reconstruct readable source/intent for `{fn.get('name','function')}` @ `{fn.get('address','')}` "
+            f"in `{os.path.basename(self._path)}`.\n"
+            f"Signature: `{fn.get('signature','')}`\n\n"
+            f"Pseudo-C (Ghidra):\n```c\n{result.get('pseudocode','')}\n```\n\n"
+            f"Calls:\n{result['callsText']}\n\n"
+            f"References (first 30):\n" + '\n'.join(result['referencesText'].splitlines()[:30])
+        )
+        return result
 
     @Slot(int)
     def inspectFunction(self,index):
         if self._session is None or not 0<=index<len(self._visible_functions):return
-        function=self._visible_functions[index];session=self._session;path=self._path
+        function=self._visible_functions[index]
+        self.inspectFunctionAtAddress(function['address'])
+
+    @Slot(str)
+    def inspectFunctionAtAddress(self,address):
+        if self._session is None or not address:return
+        session=self._session;path=self._path;resident=self._resident_mode;result=self._result
+        has_ghidra_index=bool(result and 'ghidra_analysis' in result)
+        use_native=not resident and not has_ghidra_index and bool(self._native.get('available'))
+        if not use_native and not resident and not has_ghidra_index and not self._ghidra.get('available'):
+            self.messageRequested.emit('Info',self._native.get('message') or 'No decompiler available');return
         def work():
             binary_session.BinarySession(path,session.sha256)
-            return session.analyze(function['address'])
-        def loaded(result):
-            result=dict(result)
-            result['listing']='\n'.join(i['address']+'  '+i['text'] for i in result.get('instructions',[]))
-            result['referencesText']='\n'.join(r['from']+' → '+r['to']+'  '+r['type'] for r in result.get('references',[]))
-            result['callsText']='Callers\n'+'\n'.join(f['address']+'  '+f['name'] for f in result.get('callers',[]))+'\n\nCallees\n'+'\n'.join(f['address']+'  '+f['name'] for f in result.get('callees',[]))
-            self._function_detail=result;self.functionChanged.emit()
+            if use_native:return session.native_function(result,address)
+            return session.analyze_resident(address) if resident else session.analyze(address)
+        def loaded(data):
+            self._function_detail=self._present_function_detail(data);self.functionChanged.emit()
         self._submit('ghidra-function',work,loaded)
 
     @Slot(str,str,str,int)
@@ -280,7 +347,22 @@ class SoDocument(QObject):
         row=self._visible_paths[index]
         if row['folder']:self.togglePath(index)
         elif 'embedded' in row:self._open_embedded(row['embedded'])
-        else:self.pathRequested.emit(row['path'])
+        else:
+            self.pathRequested.emit(row['path'])
+            self.inspectPathXrefs(row['path'])
+
+    @Slot(str)
+    def inspectPathXrefs(self,path_query):
+        if not self._result or not path_query:return
+        self._path_xrefs={'query':path_query,'loading':True,'summary_text':'Scanning binary sections for string locations & cross-references…','xrefs':[],'locations':[],'function_addresses':[],'agent_prompt':''}
+        self.pathXrefsChanged.emit()
+        path=self._path;result=self._result;session=self._session
+        def work():
+            if session is not None:return session.find_xrefs(result,path_query)
+            return binary_xref.reconstruct_path_context(path,result,path_query)
+        def loaded(payload):
+            self._path_xrefs={**payload,'loading':False};self.pathXrefsChanged.emit()
+        self._submit('path-xrefs',work,loaded)
 
     def _open_embedded(self,ef):
         self._embedded=ef;image=''
@@ -353,6 +435,36 @@ class SoDocument(QObject):
 
     @Slot(str)
     def copyText(self,text):self.copyRequested.emit(text)
+
+    @Slot()
+    def reconstructTree(self):
+        self.reconstructSourceTree('')
+
+    @Slot(str)
+    def reconstructSourceTree(self,destination=''):
+        if not self._result or not self._path:
+            self.messageRequested.emit('Info',t('so_not_ready'));return
+        dest=self._destination(destination) if destination else ''
+        if not dest:
+            dest=self._path+'_src'
+        path=self._path;result=self._result;session=self._session
+        def on_progress(c, t, f):
+            self._status = f"Reconstructing sources: {c}/{t} ({os.path.basename(f)})"
+            self.changed.emit()
+            self.reconstructProgress.emit(c, t, f)
+        def work():
+            sess=session or binary_session.BinarySession(path,result.get('sha256'))
+            return sess.reconstruct_tree(result,output_dir=dest,progress_callback=on_progress)
+        def loaded(payload):
+            out=payload.get('output_dir',dest)
+            self._status = f"Reconstructed {payload.get('total_files',0)} files in {os.path.basename(out)}"
+            self.changed.emit()
+            self.reconstructFinished.emit(out)
+            summary = f"Reconstructed {payload.get('total_files',0)} files & {payload.get('total_functions',0)} functions in:\n{out}"
+            if payload.get('kernel_detected'):
+                summary += "\nSee the exported README.md for kernel build requirements."
+            self.messageRequested.emit('OK', summary)
+        self._submit('reconstruct',work,loaded)
 
     @Slot()
     def close(self):

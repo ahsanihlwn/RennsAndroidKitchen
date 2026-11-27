@@ -75,7 +75,7 @@ Item {
             SmoothRectangle {
                 id: overviewCard; x: 12; y: 96; width: parent.width-24; height: Math.max(360,content.height-108); radius: 8; color: viewer.c.BG2; border.width: 1; border.color: viewer.c.b08
                 RakLabel { x: 13; y: 11; text: viewer.s.so_tab_overview; font.pixelSize: 12; font.weight: Font.DemiBold; color: viewer.c.FG_BRIGHT }
-                ViewerTextArea { objectName: "soOverview"; x: 13; y: 34; width: parent.width-26; height: parent.height-48; colors: viewer.c; text: document.overview+"\n\nSHA-256  "+(document.summary.sha256 || "")+(document.summary.warnings?"\n\n"+document.summary.warnings:""); wrapText: true }
+                ViewerTextArea { objectName: "soOverview"; x: 13; y: 34; width: parent.width-26; height: parent.height-48; colors: viewer.c; text: document.ready ? (document.overview+"\n\nSHA-256  "+(document.summary.sha256 || "")+(document.summary.warnings?"\n\n"+document.summary.warnings:"")) : document.overview; wrapText: true }
             }
         }
         Item {
@@ -114,35 +114,55 @@ Item {
         Item {
             anchors.fill: parent; visible: viewer.currentTab===2
             Row {
-                id: pathTools; x: 10; y: 10; width: parent.width-20; height: 30; spacing: 6
+                id: pathTools; x: 10; y: 10; width: parent.width-20; height: 30; spacing: 8
                 RakLabel { id: pathCaption; text: viewer.s.so_search; width: Math.ceil(implicitWidth); height: 30; color: viewer.c.FG2; font.pixelSize: 11; verticalAlignment: Text.AlignVCenter }
-                ViewerField { objectName: "soPathFilter"; colors: viewer.c; width: pathTools.width-pathCaption.width-6; placeholderText: viewer.s.so_filter_path; onTextChanged: document.filterPaths(text) }
+                ViewerField { id: pathFilter; objectName: "soPathFilter"; colors: viewer.c; width: Math.max(120, pathTools.width - pathCaption.width - 220); placeholderText: viewer.s.so_filter_path; onTextChanged: document.filterPaths(text) }
+                ViewerToolButton {
+                    objectName: "soReconstructTree"
+                    colors: viewer.c
+                    primary: true
+                    text: document.busy ? "Reconstructing…" : "Reconstruct Source Tree"
+                    enabled: document.ready && !document.busy
+                    onClicked: reconstructFolderDialog.open()
+                }
             }
             SmoothRectangle {
-                id: pathBox; x: 10; y: 46; width: parent.width-20; height: Math.max(1,parent.height-56); radius: 4; color: viewer.c.BG; border.width: 1; border.color: viewer.c.b06
-                readonly property real firstWidth: Math.floor((width-124)/2)
-                Row {
-                    x: 3; y: 3; height: 34
-                    Repeater {
-                        model: [{title:viewer.s.so_tab_paths,width:pathBox.firstWidth},{title:viewer.s.so_col_kind,width:118},{title:viewer.s.so_col_size,width:pathBox.firstWidth}]
-                        delegate: SmoothRectangle { required property var modelData; width: modelData.width; height: 34; color: viewer.c.BG2; RakLabel { x: 8; height: parent.height; text: parent.modelData.title; font.pixelSize: 11; font.bold: true; color: viewer.c.FG_LABEL; verticalAlignment: Text.AlignVCenter } SmoothRectangle { anchors.right: parent.right; width: 1; height: parent.height; color: viewer.c.b12 } SmoothRectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: viewer.c.b12 } }
+                id: pathBox; x: 10; y: 46; width: parent.width-20; height: Math.max(1,parent.height-56); radius: 10; color: viewer.c.BG3; border.width: 1; border.color: viewer.c.b13; clip: true
+                readonly property real kindWidth: 126
+                readonly property real sizeWidth: 84
+                readonly property real firstWidth: Math.max(160,width-6-kindWidth-sizeWidth)
+                readonly property color accentColor: viewer.c.accent_hex
+                readonly property color selectedColor: Qt.rgba(accentColor.r,accentColor.g,accentColor.b,41/255)
+                Item {
+                    id: pathHeader; x: 1; y: 1; width: parent.width-2; height: 40; clip: true
+                    Row {
+                        anchors.fill: parent
+                        Repeater {
+                            model: [{title:viewer.s.so_tab_paths,width:pathBox.firstWidth},{title:viewer.s.so_col_kind,width:pathBox.kindWidth},{title:viewer.s.so_col_size,width:pathBox.sizeWidth}]
+                            delegate: Item {
+                                required property var modelData
+                                width: modelData.width; height: 40; clip: true
+                                RakLabel { x: 8; width: parent.width-14; height: parent.height; text: modelData.title; font.pixelSize: 11; font.weight: Font.DemiBold; color: viewer.c.FG2; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                            }
+                        }
                     }
+                    SmoothRectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: viewer.c.b08 }
                 }
                 ListView {
-                    id: paths; objectName: "soPathTree"; x: 3; y: 37; width: parent.width-6; height: parent.height-40; model: document.paths; clip: true
+                    id: paths; objectName: "soPathTree"; x: 3; y: 42; width: parent.width-6; height: Math.max(1,parent.height-48); model: document.paths; clip: true
                     currentIndex: -1; keyNavigationEnabled: true; boundsBehavior: Flickable.StopAtBounds
                     C.ScrollBar.vertical: RakScrollBar { width: 5; handleColor: viewer.c.b30; hoverColor: viewer.c.b50 }
                     delegate: Item {
-                        id: pathRow; required property int index; required property var modelData; width: paths.width; height: 26
-                        SmoothRectangle { anchors.fill: parent; radius: 4; color: paths.currentIndex===pathRow.index?viewer.c.a20:pathMouse.containsMouse?viewer.c.b05:"transparent" }
-                        Image { visible: pathRow.modelData.folder; x: 4+pathRow.modelData.depth*18; y: 9; width: 9; height: 9; rotation: pathRow.modelData.expanded?90:0; source: "image://icons/arrow_right?color="+encodeURIComponent(viewer.c.FG2); sourceSize: Qt.size(9,9) }
-                        Image { x: 25+pathRow.modelData.depth*18; y: 5; width: 16; height: 16; source: "image://icons/"+pathRow.modelData.icon; sourceSize: Qt.size(16,16) }
-                        RakLabel { x: 47+pathRow.modelData.depth*18; y: 1; height: 26; width: Math.max(1,pathBox.firstWidth-x-4); text: pathRow.modelData.name; font.pixelSize: 12; font.bold: !!pathRow.modelData.isEmbedded; color: viewer.c.FG; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
-                        RakLabel { x: pathBox.firstWidth+7; y: 1; height: 26; width: 104; text: pathRow.modelData.kind; font.pixelSize: 12; color: viewer.c.FG; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
-                        RakLabel { x: pathBox.firstWidth+125; y: 1; height: 26; width: pathBox.firstWidth-10; text: pathRow.modelData.size; font.pixelSize: 12; color: viewer.c.FG; verticalAlignment: Text.AlignVCenter }
+                        id: pathRow; required property int index; required property var modelData; width: paths.width; height: 28
+                        SmoothRectangle { anchors.fill: parent; radius: 6; color: paths.currentIndex===pathRow.index?pathBox.selectedColor:pathMouse.containsMouse?viewer.c.b07:"transparent" }
+                        Image { visible: pathRow.modelData.folder; x: 4+pathRow.modelData.depth*20; y: 8; width: 12; height: 12; rotation: pathRow.modelData.expanded?90:0; opacity: 0.8; source: "image://icons/arrow_right?color="+encodeURIComponent(viewer.c.treeArrow); sourceSize: Qt.size(24,24); smooth: true }
+                        Image { x: 20+pathRow.modelData.depth*20; y: 6; width: 16; height: 16; source: "image://icons/"+pathRow.modelData.icon; sourceSize: Qt.size(16,16); smooth: true }
+                        RakLabel { x: 42+pathRow.modelData.depth*20; y: 0; height: 28; width: Math.max(1,pathBox.firstWidth-x-6); text: pathRow.modelData.name; font.pixelSize: 13; font.bold: !!pathRow.modelData.isEmbedded; color: pathRow.modelData.isEmbedded?viewer.c.FG_BRIGHT:viewer.c.FG; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                        RakLabel { x: pathBox.firstWidth+6; y: 0; height: 28; width: pathBox.kindWidth-12; text: pathRow.modelData.kind; font.pixelSize: 12; color: pathRow.modelData.isEmbedded?viewer.c.FG2:viewer.c.FG_MUTED; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
+                        RakLabel { x: pathBox.firstWidth+pathBox.kindWidth+6; y: 0; height: 28; width: pathBox.sizeWidth-12; text: pathRow.modelData.size; font.pixelSize: 12; color: viewer.c.FG2; verticalAlignment: Text.AlignVCenter; elide: Text.ElideRight }
                         MouseArea {
                             id: pathMouse; anchors.fill: parent; hoverEnabled: true
-                            onClicked: mouse=>{paths.currentIndex=pathRow.index;paths.forceActiveFocus();if(pathRow.modelData.folder && mouse.x<20+pathRow.modelData.depth*18)document.togglePath(pathRow.index)}
+                            onClicked: mouse=>{paths.currentIndex=pathRow.index;paths.forceActiveFocus();if(pathRow.modelData.folder && mouse.x<22+pathRow.modelData.depth*20)document.togglePath(pathRow.index)}
                             onDoubleClicked: document.openPath(pathRow.index)
                             HoverTip { hovering: pathMouse.containsMouse && !pathRow.modelData.folder; label: pathRow.modelData.path || pathRow.modelData.name+" ("+pathRow.modelData.kind+", "+pathRow.modelData.size+")" }
                         }
@@ -210,7 +230,7 @@ Item {
             }
             ViewerTextArea { objectName: "soDisasmOutput"; x: 10; y: 44; width: parent.width-20; height: Math.max(1,parent.height-54); colors: viewer.c; text: document.disassembly; font.family: "Consolas" }
         }
-        BinaryFunctionsPane { anchors.fill: parent; visible: viewer.currentTab===9; colors: viewer.c; document: document }
+        BinaryFunctionsPane { anchors.fill: parent; visible: viewer.currentTab===9; colors: viewer.c; document: document; workspace: viewer.workspace }
         Item {
             anchors.fill: parent; visible: viewer.currentTab===8
             Row {
@@ -235,6 +255,7 @@ Item {
     }
     D.FileDialog { id: exportDialog; objectName: "soExportDialog"; title: viewer.s.so_btn_export; fileMode: D.FileDialog.SaveFile; nameFilters: ["JSON (*.json)"]; currentFile: document.exportUrl; onAccepted: document.exportJson(selectedFile.toString()) }
     D.FileDialog { id: compareFile; objectName: "soCompareFileDialog"; title: viewer.s.so_btn_compare; fileMode: D.FileDialog.OpenFile; currentFolder: document.folderUrl; nameFilters: ["Binaries (*.so *.so.* *.elf *.exe *.dll *.dylib *.o)","All Files (*)"]; onAccepted: document.compare(selectedFile.toString()) }
+    D.FolderDialog { id: reconstructFolderDialog; title: "Select Destination Folder for Reconstructed Source Tree"; currentFolder: document.folderUrl; onAccepted: document.reconstructSourceTree(selectedFolder.toString()) }
     ViewerDialog {
         id: embedded; objectName: "soEmbeddedDialog"; colors: viewer.c; ownerWindow: viewer.Window.window
         width: 720; height: 500; title: document.embeddedInfo.title || ""
@@ -259,20 +280,55 @@ Item {
     }
     ViewerDialog {
         id: pathDialog; objectName: "soPathDialog"; colors: viewer.c; ownerWindow: viewer.Window.window
-        width: 540; height: 220; title: viewer.s.so_path_str_title
+        width: 760; height: 520; title: viewer.s.so_path_str_title
         property string fullPath: ""
         property bool copied: false
         onVisibleChanged: if(visible){copied=false;copyTimer.stop()}
         SmoothRectangle {
-            x: 14; y: 14; width: parent.width-28; height: parent.height-66; radius: 6; color: viewer.c.BG2; border.width: 1; border.color: viewer.c.b08
-            RakLabel { x: 13; y: 11; height: 36; text: viewer.s.so_path_str_title; font.pixelSize: 13; font.weight: Font.DemiBold; color: viewer.c.FG_BRIGHT; verticalAlignment: Text.AlignVCenter }
-            ViewerField { objectName: "soPathText"; x: 13; y: 55; width: parent.width-26; colors: viewer.c; text: pathDialog.fullPath; readOnly: true; selectByMouse: true }
-            RakLabel { x: 13; y: 93; width: parent.width-26; text: viewer.s.so_path_str_info; color: viewer.c.FG2; font.pixelSize: 11; wrapMode: Text.WordWrap }
+            x: 14; y: 14; width: parent.width-28; height: 118; radius: 6; color: viewer.c.BG2; border.width: 1; border.color: viewer.c.b08
+            RakLabel { x: 13; y: 8; height: 28; text: viewer.s.so_path_str_title; font.pixelSize: 13; font.weight: Font.DemiBold; color: viewer.c.FG_BRIGHT; verticalAlignment: Text.AlignVCenter }
+            ViewerField { objectName: "soPathText"; x: 13; y: 38; width: parent.width-26; colors: viewer.c; text: pathDialog.fullPath; readOnly: true; selectByMouse: true }
+            RakLabel { x: 13; y: 74; width: parent.width-26; text: viewer.s.so_path_str_info; color: viewer.c.FG2; font.pixelSize: 11; wrapMode: Text.WordWrap; maximumLineCount: 2; elide: Text.ElideRight }
+        }
+        ViewerTextArea {
+            objectName: "soPathXrefOutput"
+            x: 14; y: 142; width: parent.width-28; height: Math.max(1,parent.height-194)
+            colors: viewer.c; font.family: "Consolas"; font.pixelSize: 11
+            text: document.pathXrefs && document.pathXrefs.summary_text ? document.pathXrefs.summary_text : "Scanning string locations & cross-references…"
         }
         Row {
             x: 14; y: parent.height-42; spacing: 8
             ViewerToolButton { objectName: "soCopyPath"; colors: viewer.c; primary: true; text: pathDialog.copied?viewer.s.so_copied_toast:viewer.s.so_btn_copy_path; onClicked: {document.copyText(pathDialog.fullPath);pathDialog.copied=true;copyTimer.restart()} }
             ViewerToolButton { objectName: "soPathRawStrings"; y: 2; colors: viewer.c; text: viewer.s.so_btn_view_raw_strings; onClicked: {pathDialog.close();viewer.currentTab=8;stringFilter.text=pathDialog.fullPath} }
+            ViewerToolButton {
+                objectName: "soPathOpenFunction"; y: 2; colors: viewer.c; text: "Inspect Xref Function"
+                enabled: !!(document.pathXrefs && document.pathXrefs.function_addresses && document.pathXrefs.function_addresses.length && document.canDecompile)
+                onClicked: {
+                    const addrs = document.pathXrefs.function_addresses
+                    if (addrs && addrs.length) { pathDialog.close(); viewer.currentTab=9; document.inspectFunctionAtAddress(addrs[0]) }
+                }
+            }
+            ViewerToolButton {
+                objectName: "soPathAskAgent"; y: 2; colors: viewer.c; text: "Ask Agent (REA)"
+                enabled: !!(document.pathXrefs && document.pathXrefs.agent_prompt)
+                onClicked: {
+                    const promptText = document.pathXrefs.agent_prompt
+                    const chat = viewer.workspace && viewer.workspace.agentChat
+                    pathDialog.close()
+                    if (chat && chat.available) {
+                        if (!chat.opened) chat.toggle()
+                        chat.setDraft(promptText)
+                    } else {
+                        document.copyText(promptText)
+                        if (viewer.workspace && viewer.workspace.showMessage) viewer.workspace.showMessage("REA Context Copied", "Xref & disassembly context copied to clipboard.")
+                    }
+                }
+            }
+            ViewerToolButton {
+                objectName: "soPathExportTree"; y: 2; colors: viewer.c; text: "Export All Sources"
+                enabled: document.ready && !document.busy
+                onClicked: { pathDialog.close(); reconstructFolderDialog.open() }
+            }
         }
         Timer { id: copyTimer; interval: 1500; onTriggered: pathDialog.copied=false }
         ViewerToolButton { objectName: "soPathClose"; x: parent.width-width-14; y: parent.height-40; colors: viewer.c; text: viewer.s.so_btn_close; onClicked: pathDialog.close() }

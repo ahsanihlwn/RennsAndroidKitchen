@@ -185,7 +185,7 @@ class FlashableBuilder(QObject):
                 self.workspace.message(ui_lang.t('fl_done')+'\n'+str(result),ui_lang.t('fl_done'),dismissed=self.dismissRequested.emit,error=False)
             elif result!='Cancelled':self.workspace.message(str(result),ui_lang.t('fl_failed'))
             else:self._status='';self.changed.emit()
-        self.workspace._tasks.enqueue('flashable:'+path,worker,done)
+        self.workspace._tasks.enqueue('flashable:'+path,worker,done,lane='heavy',targets=(path,))
 
     @Slot(int,str,str)
     def _progress_ready(self,pct,text,_):

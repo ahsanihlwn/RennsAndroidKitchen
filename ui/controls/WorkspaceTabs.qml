@@ -57,8 +57,8 @@ SmoothRectangle {
                     }
                     ParallelAnimation {
                         id: entry
-                        NumberAnimation { target: tab; property: "opacity"; from: 0; to: 1; duration: 170; easing.type: Easing.OutQuint }
-                        NumberAnimation { target: tab; property: "scale"; from: .96; to: 1; duration: 170; easing.type: Easing.OutQuint }
+                        NumberAnimation { target: tab; property: "opacity"; from: 0; to: 1; duration: bar.preferences.settings.animations?170:0; easing.type: Easing.OutQuint }
+                        NumberAnimation { target: tab; property: "scale"; from: .96; to: 1; duration: bar.preferences.settings.animations?170:0; easing.type: Easing.OutQuint }
                     }
                     Connections {
                         target: bar.preferences
@@ -108,7 +108,51 @@ SmoothRectangle {
                         }
                     }
                     SmoothRectangle { anchors.right: parent.right; height: parent.height; width: 1; color: c.b04 }
-                    Image { x: 12; y: bar.terminal?11:10; width: bar.terminal?14:16; height: width; source: "image://icons/"+(tab.modelData.icon || "file"); sourceSize: Qt.size(width,width); smooth: true }
+                    readonly property bool nativeTabIcon: tab.modelData.icon === "terminal" || tab.modelData.icon === "start"
+                    property int lockRevision: 0
+                    Connections {
+                        target: bar.workspace || null
+                        function onLocksChanged() { tab.lockRevision++ }
+                    }
+                    readonly property bool tabLocked: {
+                        tab.lockRevision
+                        if (bar.terminal) return false
+                        if (!!tab.modelData.readOnly) return true
+                        return !!(bar.workspace && typeof bar.workspace.isFileReadOnly === "function" && bar.workspace.isFileReadOnly(tab.modelData.path || ""))
+                    }
+                    Image {
+                        visible: !tab.nativeTabIcon
+                        x: 12; y: bar.terminal?11:10; width: bar.terminal?14:16; height: width
+                        source: visible ? ("image://icons/"+(tab.modelData.icon || "file")) : ""
+                        sourceSize: Qt.size(width,width); smooth: true
+                    }
+                    WorkspaceNativeIcon {
+                        visible: tab.nativeTabIcon
+                        x: 12; y: bar.terminal?11:10; width: bar.terminal?14:16; height: width; iconSize: width
+                        iconKey: tab.nativeTabIcon ? tab.modelData.icon : ""
+                        strokeColor: tab.active ? c.FG_BRIGHT : (hover.hovered ? c.FG2 : c.GRAY_MID2)
+                        accentColor: c.accent_hex || "#38bdf8"
+                        isLight: !!(c && c.is_light)
+                    }
+                    Item {
+                        objectName: "tabEntryLockBadge"
+                        visible: tab.tabLocked
+                        x: 20; y: 18; width: 10; height: 10; z: 2
+                        SmoothRectangle {
+                            anchors.fill: parent
+                            radius: 3
+                            color: tab.active ? c.BG3 : c.BG_DARK
+                            border.width: 1
+                            border.color: c.b18
+                        }
+                        WorkspaceNativeIcon {
+                            anchors.centerIn: parent
+                            iconKey: "lock"
+                            iconSize: 7
+                            strokeColor: tab.active ? c.FG_BRIGHT : c.FG2
+                            isLight: !!(c && c.is_light)
+                        }
+                    }
                     SmoothRectangle { visible: !!tab.modelData.unsaved; x: 12; y: 20; width: 8; height: 8; radius: 4; color: c.accent_hex }
                     RakLabel {
                         id: title; x: bar.terminal?32:34; height: parent.height; width: parent.width-x-28

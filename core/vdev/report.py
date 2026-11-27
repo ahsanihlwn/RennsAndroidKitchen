@@ -69,6 +69,10 @@ class Report:
     # {"ready": bool, "met": int, "total": int} dari stage impact — dipakai
     # panel shell untuk menentukan apakah prompt interaktif boleh dibuka.
     readiness: dict = field(default_factory=dict)
+    boot_simulation: dict = field(default_factory=dict)
+    boot_trace: list = field(default_factory=list)
+    root_causes: list = field(default_factory=list)
+    autofix: list = field(default_factory=list)
 
     # ── agregat ──
     @property
@@ -118,6 +122,11 @@ class Report:
             "mounts": self.mounts,
             "options": self.options,
             "error": self.error,
+            "readiness": self.readiness,
+            "boot_simulation": self.boot_simulation,
+            "boot_trace": self.boot_trace,
+            "root_causes": self.root_causes,
+            "autofix": self.autofix,
             "summary": {
                 "blocker": self.blockers,
                 "warn": self.warns,

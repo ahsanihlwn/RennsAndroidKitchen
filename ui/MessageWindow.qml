@@ -28,7 +28,7 @@ DialogWindow {
     Row {
         anchors.right: parent.right; anchors.rightMargin: 20
         y: bodyText.y+bodyText.height+14; spacing: 8
-        DialogButton { objectName: "fatalSeeLog"; visible: !!dialog.details.log; colors: dialog.c; primary: true; text: dialog.s.dlg_btn_see_log; onClicked: dialog.commandTarget.dispatch("errorLog",{text:dialog.details.log}) }
+        DialogButton { objectName: "fatalSeeLog"; visible: !!dialog.details.log; colors: dialog.c; primary: true; text: dialog.s.dlg_btn_see_log; onClicked: dialog.commandTarget.dispatch("errorLog",{text:dialog.details.log,fatal:!!dialog.details.fatal}) }
         DialogButton {
             objectName: "launcherMessageCancel"
             visible: !!dialog.details.confirm; colors: dialog.c

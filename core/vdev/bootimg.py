@@ -7,6 +7,9 @@ import io
 import lzma
 import struct
 
+from core.lz4_legacy import MAGIC as _LZ4_LEGACY_MAGIC
+from core.lz4_legacy import decompress as _lz4_legacy
+
 print("[CORE STAGE] VDEV BOOTIMG")
 
 BOOT_MAGIC = b"ANDROID!"
@@ -14,39 +17,6 @@ VENDOR_BOOT_MAGIC = b"VNDRBOOT"
 CPIO_MAGIC = b"070701"
 
 _MAX_RAMDISK = 256 << 20        # 256 MB; ramdisk nyata jauh di bawah ini
-
-
-_LZ4_LEGACY_MAGIC = b"\x02\x21\x4c\x18"
-_LZ4_LEGACY_BLOCK = 8 << 20      # blok legacy maksimum 8 MB
-
-
-def _lz4_legacy(data):
-
-    try:
-        import lz4.block
-    except Exception:                                  # noqa: BLE001
-        return None
-    out = bytearray()
-    pos, end = 0, len(data)
-    while pos + 4 <= end:
-        if data[pos:pos + 4] != _LZ4_LEGACY_MAGIC:
-            break
-        pos += 4
-        while pos + 4 <= end:
-            if data[pos:pos + 4] == _LZ4_LEGACY_MAGIC:
-                break                                  # frame berikutnya
-            size = struct.unpack_from("<I", data, pos)[0]
-            pos += 4
-            if size == 0 or pos + size > end:
-                pos = end
-                break
-            try:
-                out += lz4.block.decompress(
-                    data[pos:pos + size], uncompressed_size=_LZ4_LEGACY_BLOCK)
-            except Exception:                          # noqa: BLE001
-                return bytes(out) or None
-            pos += size
-    return bytes(out) or None
 
 
 # dekompresi

@@ -44,6 +44,15 @@ class TerminalGeometryTests(unittest.TestCase):
         self.assertTrue(bridge.is_ready)
         manager.pty.set_size.assert_called_once_with(39, 7)
 
+    def test_process_exited_handles_windows_ntstatus_overflow_codes(self):
+        signals = PtySignals()
+        received = []
+        signals.process_exited.connect(received.append)
+        # Windows NTSTATUS exit codes exceed signed 32-bit int limit (0x7FFFFFFF)
+        signals.process_exited.emit(0xC0000005)
+        signals.process_exited.emit(0xC000013A)
+        self.assertEqual(received, [0xC0000005, 0xC000013A])
+
 
 if __name__ == "__main__":
     unittest.main()

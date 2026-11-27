@@ -219,7 +219,7 @@ RakButton {
         interval: 1000
         repeat: false
         onTriggered: {
-            if (control.chat && !control.chat.busy && !control.loading) {
+            if (control.chat && control.chat.opened && !control.chat.busy && !control.loading) {
                 control.chat.refreshUsage()
             }
         }
@@ -246,27 +246,14 @@ RakButton {
         }
     }
 
-    // Delayed initial refresh (NEVER run synchronously on Component.onCompleted)
+    // Delayed initial refresh only when chat panel is opened and limits not yet fetched
     Timer {
         id: initialRefreshTimer
         interval: 800
         repeat: false
-        running: true
+        running: !!(control.chat && control.chat.opened)
         onTriggered: {
-            if (control.chat && !control.chat.busy && !control.loading) {
-                control.chat.refreshUsage()
-            }
-        }
-    }
-
-    // Periodic poll timer (every 60s when visible)
-    Timer {
-        id: pollTimer
-        interval: 60000
-        repeat: true
-        running: control.visible && !!control.chat && !control.chat.busy
-        onTriggered: {
-            if (!control.chat.busy && !control.loading) {
+            if (control.chat && control.chat.opened && !control.chat.busy && !control.loading && !(control.limits && control.limits.source)) {
                 control.chat.refreshUsage()
             }
         }
@@ -517,7 +504,7 @@ RakButton {
                                     width: Math.max(control.fiveHourRemaining > 0 ? 5 : 0, parent.width * Math.min(1.0, control.fiveHourRemaining / 100))
                                     height: parent.height; radius: 2.5
                                     color: control.colorFor5h(control.fiveHourRemaining)
-                                    Behavior on width { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
+                                    Behavior on width { enabled: !!(control.preferences && control.preferences.settings && control.preferences.settings.animations); NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
                                 }
                             }
 
@@ -559,7 +546,7 @@ RakButton {
                                     width: Math.max(control.weeklyRemaining > 0 ? 5 : 0, parent.width * Math.min(1.0, control.weeklyRemaining / 100))
                                     height: parent.height; radius: 2.5
                                     color: control.colorForWeekly(control.weeklyRemaining)
-                                    Behavior on width { NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
+                                    Behavior on width { enabled: !!(control.preferences && control.preferences.settings && control.preferences.settings.animations); NumberAnimation { duration: 250; easing.type: Easing.OutCubic } }
                                 }
                             }
 

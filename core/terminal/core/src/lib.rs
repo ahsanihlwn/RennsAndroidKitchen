@@ -159,15 +159,22 @@ struct Inner {
     parser: Processor,
 }
 
+struct PtySyncState {
+    muted: bool,
+    row_bias: i32,
+    pending_esc: Vec<u8>,
+}
+
 pub struct Core {
     inner: Arc<Mutex<Inner>>,
     writer: Writer,
-    master: Mutex<Box<dyn MasterPty + Send>>,
-    killer: Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>,
+    master: Option<Mutex<Box<dyn MasterPty + Send>>>,
+    killer: Option<Mutex<Box<dyn portable_pty::ChildKiller + Send + Sync>>>,
     theme: Arc<Mutex<Theme>>,
     shared: Arc<Shared>,
     size: Arc<Mutex<(u16, u16)>>,
     stop: Arc<AtomicBool>,
+    pty_sync: Arc<Mutex<PtySyncState>>,
 }
 
 pub struct SpawnOptions<'a> {
@@ -180,6 +187,36 @@ pub struct SpawnOptions<'a> {
 }
 
 impl Core {
+    fn new(o: &SpawnOptions, cb: Option<(Callback, usize)>, writer: Writer, alive: bool) -> Self {
+        let shared = Arc::new(Shared {
+            cb: Mutex::new(cb),
+            title: Mutex::new(String::new()),
+            clipboard: Mutex::new(None),
+            cell_w: AtomicU16::new(0),
+            cell_h: AtomicU16::new(0),
+            alive: AtomicBool::new(alive),
+            exit_code: Mutex::new(0),
+        });
+        let theme = Arc::new(Mutex::new(Theme::default()));
+        let size = Arc::new(Mutex::new((o.cols, o.rows)));
+        let proxy = Proxy { shared: shared.clone(), writer: writer.clone(), theme: theme.clone(), size: size.clone() };
+        let config = Config {
+            scrolling_history: o.scrollback,
+            kitty_keyboard: true,
+            osc52: Osc52::OnlyCopy,
+            ..Config::default()
+        };
+        let term = Term::new(config, &Dims { cols: o.cols as usize, lines: o.rows as usize }, proxy);
+        let inner = Arc::new(Mutex::new(Inner { term, parser: Processor::default() }));
+        let stop = Arc::new(AtomicBool::new(false));
+        let pty_sync = Arc::new(Mutex::new(PtySyncState {
+            muted: false,
+            row_bias: 0,
+            pending_esc: Vec::new(),
+        }));
+        Self { inner, writer, master: None, killer: None, theme, shared, size, stop, pty_sync }
+    }
+
     pub fn spawn(o: SpawnOptions, cb: Option<(Callback, usize)>) -> Result<Core, String> {
         let pair = native_pty_system()
             .openpty(PtySize { rows: o.rows, cols: o.cols, pixel_width: 0, pixel_height: 0 })
@@ -203,45 +240,47 @@ impl Core {
         let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
         let writer: Writer = Arc::new(Mutex::new(pair.master.take_writer().map_err(|e| e.to_string())?));
 
-        let shared = Arc::new(Shared {
-            cb: Mutex::new(cb),
-            title: Mutex::new(String::new()),
-            clipboard: Mutex::new(None),
-            cell_w: AtomicU16::new(0),
-            cell_h: AtomicU16::new(0),
-            alive: AtomicBool::new(true),
-            exit_code: Mutex::new(0),
-        });
-        let theme = Arc::new(Mutex::new(Theme::default()));
-        let size = Arc::new(Mutex::new((o.cols, o.rows)));
-        let proxy = Proxy { shared: shared.clone(), writer: writer.clone(), theme: theme.clone(), size: size.clone() };
-
-        let config = Config {
-            scrolling_history: o.scrollback,
-            kitty_keyboard: true,
-            osc52: Osc52::OnlyCopy,
-            ..Config::default()
-        };
-        let term = Term::new(config, &Dims { cols: o.cols as usize, lines: o.rows as usize }, proxy);
-        let inner = Arc::new(Mutex::new(Inner { term, parser: Processor::default() }));
-        let stop = Arc::new(AtomicBool::new(false));
+        let mut core = Self::new(&o, cb, writer, true);
+        core.master = Some(Mutex::new(pair.master));
+        core.killer = Some(Mutex::new(killer));
 
         // PTY reader
         {
-            let inner = inner.clone();
-            let shared = shared.clone();
+            let inner = core.inner.clone();
+            let shared = core.shared.clone();
+            let pty_sync = core.pty_sync.clone();
             std::thread::spawn(move || {
                 let mut buf = vec![0u8; 65536];
                 loop {
                     match reader.read(&mut buf) {
                         Ok(0) | Err(_) => break,
                         Ok(n) => {
-                            {
-                                let mut g = inner.lock().unwrap();
-                                let Inner { term, parser } = &mut *g;
-                                parser.advance(term, &buf[..n]);
+                            let mut sync = pty_sync.lock().unwrap();
+                            if sync.muted {
+                                continue;
                             }
-                            shared.notify(EV_WAKEUP);
+                            if sync.row_bias == 0 && sync.pending_esc.is_empty() {
+                                drop(sync);
+                                {
+                                    let mut g = inner.lock().unwrap();
+                                    let Inner { term, parser } = &mut *g;
+                                    parser.advance(term, &buf[..n]);
+                                }
+                                shared.notify(EV_WAKEUP);
+                            } else {
+                                let mut combined = Vec::with_capacity(sync.pending_esc.len() + n);
+                                combined.extend_from_slice(&sync.pending_esc);
+                                combined.extend_from_slice(&buf[..n]);
+                                sync.pending_esc.clear();
+
+                                {
+                                    let mut g = inner.lock().unwrap();
+                                    let Inner { term, parser } = &mut *g;
+                                    advance_with_row_bias(term, parser, &combined, &mut sync);
+                                }
+                                drop(sync);
+                                shared.notify(EV_WAKEUP);
+                            }
                         }
                     }
                 }
@@ -253,9 +292,9 @@ impl Core {
         }
         // Synchronized-output (mode 2026) timeout flusher
         {
-            let inner = inner.clone();
-            let shared = shared.clone();
-            let stop = stop.clone();
+            let inner = core.inner.clone();
+            let shared = core.shared.clone();
+            let stop = core.stop.clone();
             std::thread::spawn(move || {
                 while !stop.load(Ordering::Relaxed) {
                     std::thread::sleep(Duration::from_millis(25));
@@ -277,7 +316,7 @@ impl Core {
             });
         }
 
-        Ok(Core { inner, writer, master: Mutex::new(pair.master), killer: Mutex::new(killer), theme, shared, size, stop })
+        Ok(core)
     }
 
     fn write_bytes(&self, b: &[u8]) {
@@ -299,12 +338,14 @@ impl Core {
             *s = (cols, rows);
         }
         self.inner.lock().unwrap().term.resize(Dims { cols: cols as usize, lines: rows as usize });
-        let _ = self.master.lock().unwrap().resize(PtySize {
-            rows,
-            cols,
-            pixel_width: cols.saturating_mul(cw),
-            pixel_height: rows.saturating_mul(ch),
-        });
+        if let Some(master) = &self.master {
+            let _ = master.lock().unwrap().resize(PtySize {
+                rows,
+                cols,
+                pixel_width: cols.saturating_mul(cw),
+                pixel_height: rows.saturating_mul(ch),
+            });
+        }
     }
 
     fn user_input(&self) {
@@ -414,7 +455,9 @@ fn url_regex() -> &'static Regex {
 impl Drop for Core {
     fn drop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
-        let _ = self.killer.lock().unwrap().kill();
+        if let Some(killer) = &self.killer {
+            let _ = killer.lock().unwrap().kill();
+        }
         *self.shared.cb.lock().unwrap() = None;
     }
 }
@@ -506,6 +549,26 @@ pub extern "C" fn term_new(
             std::ptr::null_mut()
         }
     }
+}
+
+#[no_mangle]
+pub extern "C" fn term_new_log(
+    cols: i32,
+    rows: i32,
+    scrollback: i32,
+    cb: Option<Callback>,
+    user: *mut c_void,
+) -> *mut Core {
+    let opts = SpawnOptions {
+        program: None,
+        args: Vec::new(),
+        cwd: None,
+        cols: cols.clamp(2, 1000) as u16,
+        rows: rows.clamp(1, 1000) as u16,
+        scrollback: scrollback.max(0) as usize,
+    };
+    let writer: Writer = Arc::new(Mutex::new(Box::new(std::io::sink())));
+    Box::into_raw(Box::new(Core::new(&opts, cb.map(|f| (f, user as usize)), writer, false)))
 }
 
 #[no_mangle]
@@ -680,6 +743,124 @@ pub extern "C" fn term_write(h: *mut Core, data: *const u8, len: usize) {
     c.write_bytes(unsafe { std::slice::from_raw_parts(data, len) });
 }
 
+fn advance_with_row_bias(
+    term: &mut Term<Proxy>,
+    parser: &mut Processor,
+    data: &[u8],
+    sync: &mut PtySyncState,
+) {
+    let mut i = 0;
+    while i < data.len() {
+        if sync.row_bias == 0 {
+            parser.advance(term, &data[i..]);
+            break;
+        }
+        if data[i] == 0x1b {
+            if i + 1 >= data.len() {
+                sync.pending_esc.extend_from_slice(&data[i..]);
+                break;
+            }
+            if data[i + 1] == b'[' {
+                // Scan CSI sequence: ESC [ <params> <final 0x40..=0x7E>
+                let mut j = i + 2;
+                while j < data.len() && !(0x40..=0x7e).contains(&data[j]) {
+                    j += 1;
+                }
+                if j >= data.len() {
+                    if data.len() - i <= 64 {
+                        sync.pending_esc.extend_from_slice(&data[i..]);
+                    } else {
+                        parser.advance(term, &data[i..]);
+                    }
+                    break;
+                }
+                let final_byte = data[j];
+                let params = &data[i + 2..j];
+                if final_byte == b'H' || final_byte == b'f' {
+                    if let Ok(param_str) = std::str::from_utf8(params) {
+                        if !param_str.starts_with(['?', '>', '<', '=']) {
+                            let mut parts = param_str.split(';');
+                            let r_raw = parts.next().unwrap_or("");
+                            let c_raw = parts.next().unwrap_or("");
+                            let row: i32 = if r_raw.is_empty() { 1 } else { r_raw.parse().unwrap_or(1) };
+                            let col: i32 = if c_raw.is_empty() { 1 } else { c_raw.parse().unwrap_or(1) };
+                            let screen_rows = term.screen_lines() as i32;
+                            let target_row = row + sync.row_bias;
+                            if target_row <= screen_rows {
+                                let seq = format!("\x1b[{};{}{}", target_row.max(1), col.max(1), final_byte as char);
+                                parser.advance(term, seq.as_bytes());
+                            } else {
+                                let scroll = target_row - screen_rows;
+                                sync.row_bias = (sync.row_bias - scroll).max(0);
+                                let move_bot = format!("\x1b[{screen_rows};1H");
+                                parser.advance(term, move_bot.as_bytes());
+                                for _ in 0..scroll {
+                                    parser.advance(term, b"\n");
+                                }
+                                let move_col = format!("\x1b[{screen_rows};{}{}", col.max(1), final_byte as char);
+                                parser.advance(term, move_col.as_bytes());
+                            }
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+                } else if final_byte == b'd' {
+                    if let Ok(param_str) = std::str::from_utf8(params) {
+                        if let Ok(row) = if param_str.is_empty() { Ok(1) } else { param_str.parse::<i32>() } {
+                            let screen_rows = term.screen_lines() as i32;
+                            let target_row = row + sync.row_bias;
+                            if target_row <= screen_rows {
+                                let seq = format!("\x1b[{}d", target_row.max(1));
+                                parser.advance(term, seq.as_bytes());
+                            } else {
+                                let scroll = target_row - screen_rows;
+                                sync.row_bias = (sync.row_bias - scroll).max(0);
+                                let cur_col = term.grid().cursor.point.column.0 + 1;
+                                let move_bot = format!("\x1b[{screen_rows};1H");
+                                parser.advance(term, move_bot.as_bytes());
+                                for _ in 0..scroll {
+                                    parser.advance(term, b"\n");
+                                }
+                                let restore_col = format!("\x1b[{screen_rows};{cur_col}H");
+                                parser.advance(term, restore_col.as_bytes());
+                            }
+                            i = j + 1;
+                            continue;
+                        }
+                    }
+                } else if (final_byte == b'J' && (params == b"2" || params == b"3"))
+                    || (final_byte == b'h' && (params == b"?1049" || params == b"?47" || params == b"?1047"))
+                {
+                    sync.row_bias = 0;
+                }
+                parser.advance(term, &data[i..=j]);
+                i = j + 1;
+                continue;
+            }
+            parser.advance(term, &data[i..i + 1]);
+            i += 1;
+            continue;
+        }
+
+        // Plain bytes up to next ESC or LF
+        let start = i;
+        while i < data.len() && data[i] != 0x1b && data[i] != b'\n' {
+            i += 1;
+        }
+        if i > start {
+            parser.advance(term, &data[start..i]);
+        }
+        if i < data.len() && data[i] == b'\n' {
+            let bottom = term.screen_lines() as i32 - 1;
+            if term.grid().cursor.point.line.0 >= bottom && sync.row_bias > 0 {
+                sync.row_bias -= 1;
+            }
+            parser.advance(term, b"\n");
+            i += 1;
+        }
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn term_feed(h: *mut Core, data: *const u8, len: usize) {
     if h.is_null() || data.is_null() || len == 0 {
@@ -687,12 +868,33 @@ pub extern "C" fn term_feed(h: *mut Core, data: *const u8, len: usize) {
     }
     let c = unsafe { &*h };
     let slice = unsafe { std::slice::from_raw_parts(data, len) };
-    {
+    let delta = {
         let mut g = c.inner.lock().unwrap();
         let Inner { term, parser } = &mut *g;
+        let alt_before = term.mode().contains(TermMode::ALT_SCREEN);
+        let row_before = term.grid().cursor.point.line.0;
         parser.advance(term, slice);
+        let alt_after = term.mode().contains(TermMode::ALT_SCREEN);
+        let row_after = term.grid().cursor.point.line.0;
+        if !alt_before && !alt_after && c.shared.alive.load(Ordering::SeqCst) {
+            (row_after - row_before).max(0)
+        } else {
+            0
+        }
+    };
+    if delta > 0 {
+        c.pty_sync.lock().unwrap().row_bias += delta;
     }
     c.shared.notify(EV_WAKEUP);
+}
+
+#[no_mangle]
+pub extern "C" fn term_set_pty_mute(h: *mut Core, muted: i32, _marker: *const c_char) {
+    if h.is_null() {
+        return;
+    }
+    let c = unsafe { &*h };
+    c.pty_sync.lock().unwrap().muted = muted != 0;
 }
 
 #[no_mangle]

@@ -9,10 +9,12 @@ from core import ui_lang
 from core.workspace_files import WorkspaceFiles, validate_name
 
 
-def operation(session, label, worker, done=None, *, settled=None, batch=None):
+def operation(session, label, worker, done=None, *, settled=None, batch=None, lane=None, targets=None,
+              weight=1.0, member_label=None, highlight_path=''):
     if session._closing:return
     session._operation_serial+=1
     def finished(ok,result):
+        if settled:settled(ok,result)
         session._history.append({"label":label,"ok":ok,"text":str(result or "")})
         session.statusChanged.emit()
         for directory in session.directories:
@@ -20,8 +22,8 @@ def operation(session, label, worker, done=None, *, settled=None, batch=None):
         if not ok:
             if not str(result).startswith('Queue halted:'):session.message(result,label)
         elif done:done(result)
-        if settled:settled(ok,result)
-    try:return session._tasks.enqueue(label,worker,finished,batch=batch)
+    try:return session._tasks.enqueue(label,worker,finished,batch=batch,lane=lane,targets=targets,
+                                      weight=weight,member_label=member_label,highlight_path=highlight_path)
     except RuntimeError as error:
         session.message(str(error),label)
         if settled:settled(False,str(error))
@@ -68,6 +70,46 @@ def clipboard(session):
     return dict(value,paths=paths,phys=physical_paths)
 
 
+def _is_super_repack_eligible(session, paths):
+    from core.binary_handler import is_available
+    from core.super_logic import REQUIRED_SUPER_PARTITIONS, strip_image_partition_name
+    if len(paths) < len(REQUIRED_SUPER_PARTITIONS) or not is_available('lpmake.exe'):
+        return False
+    base_names = set()
+    for target in paths:
+        node = session.active_tree._nodes.get(target)
+        badge = (node.data(0, 257) if node else "") or ""
+        physical = (node.data(0, 276) if node else None) or target
+        folder = not os.path.isfile(physical) and bool(node and node.folder)
+        if folder or not os.path.isfile(physical):
+            return False
+        if badge in ('EROFS', 'EXT2', 'EXT3', 'EXT4'):
+            pass
+        elif badge == 'SPARSE':
+            try:
+                from core import imgfs
+                if imgfs.detect_fs(physical) not in ('EROFS', 'EXT'):
+                    return False
+            except Exception:
+                return False
+        elif not badge and physical.lower().endswith('.img'):
+            try:
+                from core.fsdetect import detect_fs_type
+                from core import imgfs
+                fs = detect_fs_type(physical)
+                if fs not in ('EROFS', 'EXT2', 'EXT3', 'EXT4') and imgfs.detect_fs(physical) not in ('EROFS', 'EXT'):
+                    return False
+            except Exception:
+                return False
+        else:
+            return False
+        base, _slot = strip_image_partition_name(physical)
+        if not base:
+            return False
+        base_names.add(base.lower())
+    return set(REQUIRED_SUPER_PARTITIONS).issubset(base_names)
+
+
 def context_actions(session,path,paths):
     ref=session.mounts.reference(path,resolve=False)
     if ref and ref[1]:
@@ -77,14 +119,21 @@ def context_actions(session,path,paths):
         return [{'key':'mountOpen','label':'Expand' if folder else 'Open (Text)','enabled':folder or is_text_filename(internal)},
                 {'key':'mountExtract','label':'Extract to...'},
                 {'key':'mountDelete','label':ui_lang.t('rc_delete'),'danger':True,'enabled':session.mounts.writable(image)}]
+    preview_fn=getattr(session.mounts,'unpack_preview_reference',None)
+    preview_ref=preview_fn(path,resolve=False) if preview_fn else None
+    if preview_ref and preview_ref[1]:
+        from core.imgfs import is_text_filename
+        node=session.active_tree._nodes.get(path);folder=bool(node and node.folder)
+        return [{'key':'openText','label':'Open (Text, Read-Only)','enabled':not folder and is_text_filename(path)}]
     tr=ui_lang.t
-    can_paste=bool(clipboard(session))
+    is_locked=any(session.isPathLocked(p) for p in (paths or [path])) if hasattr(session,'isPathLocked') else False
+    can_paste=bool(clipboard(session)) and not is_locked
     multiple=len(paths)>1
     if multiple:
         count=len(paths)
         items=[{'header':True,'label':tr('rc_batch_header',n=count)},{'separator':True},
-               {'key':'delete','label':tr('rc_delete'),'danger':True},{'separator':True},
-               {'key':'copy','label':tr('rc_batch_copy',n=count)},{'key':'cut','label':tr('rc_batch_cut',n=count)},
+               {'key':'delete','label':tr('rc_delete'),'danger':True,'enabled':not is_locked},{'separator':True},
+               {'key':'copy','label':tr('rc_batch_copy',n=count)},{'key':'cut','label':tr('rc_batch_cut',n=count),'enabled':not is_locked},
                {'key':'paste','label':tr('rc_paste'),'enabled':can_paste}]
         groups={}
         for target in paths:
@@ -100,25 +149,30 @@ def context_actions(session,path,paths):
             if members:
                 items.extend([{'separator':True},{'key':'batchTool','tool':action,'paths':[path for path,_ in members],
                     'label':tr('rc_batch_'+action,n=len(members),fs='/'.join(sorted({badge for _,badge in members})))}])
+        if not is_locked and _is_super_repack_eligible(session, paths):
+            items.extend([{'separator':True},{'key':'repack_super','tool':'repack_super','paths':list(paths),'label':tr('rc_repack_super')}])
         return items
-    items=[{"key":"rename","label":tr("rc_rename"),"enabled":not multiple},
-           {"key":"delete","label":tr("rc_delete"),"danger":True},
+    items=[{"key":"rename","label":tr("rc_rename"),"enabled":not multiple and not is_locked},
+           {"key":"delete","label":tr("rc_delete"),"danger":True,"enabled":not is_locked},
            {"separator":True},
-           {"key":"copy","label":tr("rc_copy")},{"key":"cut","label":tr("rc_cut")},
+           {"key":"copy","label":tr("rc_copy")},{"key":"cut","label":tr("rc_cut"),"enabled":not is_locked},
            {"key":"paste","label":tr("rc_paste"),"enabled":can_paste},
            {"separator":True},
-           {"key":"newFile","label":tr("rc_new_file")},{"key":"newFolder","label":tr("rc_new_folder")},
-           {"key":"symlink","label":tr("rc_create_symlink")},
+           {"key":"newFile","label":tr("rc_new_file"),"enabled":not is_locked},{"key":"newFolder","label":tr("rc_new_folder"),"enabled":not is_locked},
+           {"key":"symlink","label":tr("rc_create_symlink"),"enabled":not is_locked},
            {"separator":True},{"key":"explorer","label":tr("rc_open_explorer")}]
-    if not multiple:
+    if not multiple and not is_locked:
         from ui.workspace_tools import context_tools
         items.extend(context_tools(session,path))
     return items
 
 
 def edit_metadata(session,directory,path,column,value):
+    if hasattr(session,'isPathLocked') and session.isPathLocked(path):
+        session.message('This path is read-only while an unpack/repack operation is in progress.','Locked')
+        return
     files=WorkspaceFiles(directory.base)
-    operation(session,"SELinux" if column==1 else "Permissions",lambda:files.edit_metadata(path,column,value))
+    operation(session,"SELinux" if column==1 else "Permissions",lambda:files.edit_metadata(path,column,value),lane="light",targets=(path,))
 
 
 def dispatch(session,action,data):
@@ -140,6 +194,12 @@ def dispatch(session,action,data):
         return
     base=session.active_tree.base
     files=WorkspaceFiles(base)
+    if action in ("newFile","newFolder","rename","delete","cut","paste","duplicate","editContext","editPermission","applyPermission","symlink"):
+        check_target=_directory(session,data.get("path") or path) if action in ("newFile","newFolder","paste","symlink") else path
+        check_list=paths if action in ("delete","cut") and paths else [check_target]
+        if hasattr(session,'isPathLocked') and any(session.isPathLocked(p) for p in check_list if p):
+            session.message('This folder is read-only while an unpack/repack operation is in progress.','Locked')
+            return
     if action=="submitForm":
         callback=getattr(session,"_forms",{}).pop(data.get("token"),None)
         if callback:
@@ -177,7 +237,7 @@ def dispatch(session,action,data):
             def worker():
                 for target in paths:files.delete(target)
                 return ""
-            operation(session,ui_lang.t("rc_delete"),worker)
+            operation(session,ui_lang.t("rc_delete"),worker,lane="light",targets=tuple(paths))
         session.message("\n".join(os.path.basename(target) for target in paths),ui_lang.t("rc_delete"),confirm=remove,danger=True,
                         accept=ui_lang.t("rc_delete"))
     elif action in ("copy","cut"):
@@ -205,7 +265,7 @@ def dispatch(session,action,data):
             sources=[source for source in sources if os.path.normcase(os.path.dirname(source))!=os.path.normcase(destination) or os.path.normcase(value['base'])!=os.path.normcase(base)]
         if sources:session.transfers.start(base,[(value['base'],source) for source in sources],destination,
                                          move=value['move'],duplicate_in_place=not value['move'])
-    elif action=="duplicate":operation(session,"Duplicate",lambda:files.duplicate(path))
+    elif action=="duplicate":operation(session,"Duplicate",lambda:files.duplicate(path),lane="light",targets=(path,os.path.dirname(path)))
     elif action=="openText":session.openAs(path,"editor")
     elif action=="openHex":session.openAs(path,"hex")
     elif action=="editContext":

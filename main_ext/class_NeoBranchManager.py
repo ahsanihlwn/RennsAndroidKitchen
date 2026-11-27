@@ -1010,6 +1010,11 @@ class NeoBranchManager:
         if os.path.isdir(branch_dir):
             _remove_path(branch_dir)
         remove_neocat_branch_cache(self.tree_base, fs_root, branch_name)
+        try:
+            from core import filesystem_map
+            filesystem_map.remove_branch_map(self.tree_base, fs_root, branch_name)
+        except Exception:
+            pass
         state = self._read_state(fs_root)
         if state.get("active_branch") == branch_name:
             state["active_branch"] = None

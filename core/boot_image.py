@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import stat
+import tempfile
 from pathlib import Path
 
 from core.binary_handler import resolve_binary
@@ -26,6 +27,15 @@ DTB_META = "dtb_meta.json"  # lives in .rak_boot; records layout + source hashes
 
 
 HEADER_FILE = "header"
+
+VISIBLE_COMPONENTS = (
+    "kernel",
+    "kernel_dtb",
+    "bootconfig",
+    "second",
+    "extra",
+    "recovery_dtbo",
+)
 
 # Untouched copy of the decoded ramdisk cpio, taken at unpack. Repack always
 # patches a fresh copy of this so repeated repacks stay deterministic.
@@ -50,12 +60,32 @@ def _boot_kind_from_magic(img_path):
     return "boot"
 
 
-def _write_bootconf(base_dir, name, kind):
+def read_bootconf(path):
+    try:
+        with open(path, encoding="utf-8") as stream:
+            lines = stream.read(1024).splitlines()
+    except (OSError, UnicodeError):
+        return "", ""
+    if not lines:
+        return "", ""
+    return lines[0].strip().lower(), next((row[4:] for row in lines[1:] if row.startswith("GKI=")), "")
+
+
+def _write_bootconf(base_dir, name, kind, *, gki=""):
     config_dir = os.path.join(base_dir, "config")
     os.makedirs(config_dir, exist_ok=True)
     conf_path = os.path.join(config_dir, f"{name}_bootconf")
-    with open(conf_path, "w", encoding="utf-8", newline="\n") as f:
-        f.write(kind + "\n")
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=config_dir, mode="w", encoding="utf-8", newline="\n", delete=False) as f:
+            temporary = Path(f.name)
+            f.write(kind + "\n")
+            if gki:
+                f.write(f"GKI={gki}\n")
+        temporary.replace(conf_path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
     return conf_path
 
 
@@ -68,9 +98,12 @@ def write_boot_fs_config(base_dir: str | Path, name: str, meta_dir: Path) -> Pat
     entries = []
     # Always include top-level container folders
     entries.append(f"{name} 0 0 0755")
-    entries.append(f"{name}/ramdisk 0 0 0755")
+    seen_paths = {f"{name}"}
 
-    seen_paths = {f"{name}", f"{name}/ramdisk"}
+    out_dir = meta_dir.parent
+    if (out_dir / mbt.RAMDISK_DIR).is_dir() or (meta_dir / mbt.RAMDISK_DIR).is_dir():
+        entries.append(f"{name}/ramdisk 0 0 0755")
+        seen_paths.add(f"{name}/ramdisk")
 
     # Source 1: meta_dir/cpio (written by magiskboot cpio extract: <path> <mode> <uid> <gid>)
     cpio_cfg = meta_dir / mbt.CPIO_CONFIG
@@ -112,10 +145,13 @@ def write_boot_fs_config(base_dir: str | Path, name: str, meta_dir: Path) -> Pat
                     seen_paths.add(full_rel)
                     entries.append(f"{full_rel} 0 0 {mode_str}")
 
-    # Also add visible header if present
-    header_path = f"{name}/header"
-    if header_path not in seen_paths:
-        entries.append(f"{header_path} 0 0 0644")
+    # Also add visible header and raw boot components if present
+    for comp in (HEADER_FILE, *VISIBLE_COMPONENTS):
+        if (out_dir / comp).is_file() or (meta_dir / comp).is_file():
+            comp_path = f"{name}/{comp}"
+            if comp_path not in seen_paths:
+                seen_paths.add(comp_path)
+                entries.append(f"{comp_path} 0 0 0644")
 
     entries.sort()
     fs_cfg_path.write_text("\n".join(entries) + "\n", encoding="utf-8", newline="\n")
@@ -355,11 +391,15 @@ def unpack_boot_image(img_path):
     meta_dir.mkdir(parents=True, exist_ok=True)
     mbt.set_hidden(meta_dir)
 
+    from core.threader_control import report_progress
+    report_progress(5, "Preparing boot unpack")
     magiskboot = mbt.find_magiskboot(None)
     try:
         # All magiskboot work happens inside the hidden meta dir.
         shutil.copy2(img_path, meta_dir / mbt.SOURCE_IMAGE)
+        report_progress(20, "Unpacking boot components")
         mbt.run([magiskboot, "unpack", "-h", mbt.SOURCE_IMAGE], meta_dir)
+        report_progress(45, "Decoding ramdisk")
         compression, has_ramdisk = mbt.decode_ramdisk(meta_dir, magiskboot, False)
     except mbt.ToolError as exc:
         return False, str(exc)
@@ -368,6 +408,7 @@ def unpack_boot_image(img_path):
 
 
     if has_ramdisk and (meta_dir / mbt.RAMDISK_DIR).is_dir():
+        report_progress(65, "Snapshotting ramdisk manifest")
         try:
             manifest = cpio_patch.build_manifest(
                 meta_dir / mbt.RAMDISK_DIR, meta_dir / mbt.CPIO_CONFIG
@@ -384,12 +425,24 @@ def unpack_boot_image(img_path):
 
     # Best-effort: decompile the device tree into editable .dts next to
     # ramdisk/. Failure here must not fail the unpack.
+    report_progress(80, "Decompiling device tree")
     dtb_meta = _decompile_dtb(meta_dir, out_dir)
 
     # Lift the editable boot header (cmdline/name) out next to ramdisk/.
     has_header = (meta_dir / HEADER_FILE).is_file()
     if has_header:
-        shutil.move(str(meta_dir / HEADER_FILE), str(out_dir / HEADER_FILE))
+        shutil.copy2(str(meta_dir / HEADER_FILE), str(out_dir / HEADER_FILE))
+
+    # Expose unpacked binary components (kernel, bootconfig, etc.) in out_dir
+    # while keeping copies in meta_dir so internal callers (e.g. dtgen) keep working.
+    visible_comps = []
+    for comp in VISIBLE_COMPONENTS:
+        src_comp = meta_dir / comp
+        if src_comp.is_file() and src_comp.stat().st_size > 0:
+            shutil.copy2(str(src_comp), str(out_dir / comp))
+            visible_comps.append(comp)
+
+    report_progress(92, "Writing boot metadata")
 
     mbt.write_meta(meta_dir, {
         "tool": "magiskboot_tree.py",
@@ -406,11 +459,13 @@ def unpack_boot_image(img_path):
         "dtb_kind": (dtb_meta or {}).get("kind"),
         "dtb_entries": len((dtb_meta or {}).get("entries", [])),
         "has_header": has_header,
+        "visible_components": visible_comps,
     })
     mbt.set_hidden(meta_dir)  # re-assert (writing files can clear it)
 
     _write_bootconf(base_dir, name, kind)
     write_boot_fs_config(base_dir, name, meta_dir)
+    report_progress(100, "Done")
 
     return True, str(out_dir)
 
@@ -460,20 +515,33 @@ def repack_boot_image(folder_path):
     moved = False
     header_moved = False
 
+    from core.threader_control import report_progress
+    report_progress(5, "Preparing boot repack")
+
     try:
-        # Bring the (possibly edited) header back into .rak_boot so magiskboot
-        # repack picks up the cmdline/name from the cwd.
+        # Bring the (possibly edited) header and binary components back into .rak_boot
+        # so magiskboot repack picks up edits from the visible folder.
         if visible_header.is_file():
             shutil.copyfile(str(visible_header), str(inner_header))
         elif inner_header.is_file():
             shutil.copyfile(str(inner_header), str(visible_header))
 
+        for comp in VISIBLE_COMPONENTS:
+            vis_comp = out_dir / comp
+            in_comp = meta_dir / comp
+            if vis_comp.is_file():
+                shutil.copy2(str(vis_comp), str(in_comp))
+            elif in_comp.is_file():
+                shutil.copy2(str(in_comp), str(vis_comp))
+
         # Recompile the device tree (if edited) before packing.
+        report_progress(20, "Recompiling device tree")
         _recompile_dtb(meta_dir, out_dir)
 
         desired_modes = load_boot_desired_modes(base_dir, name)
 
         if has_ramdisk:
+            report_progress(45, "Packing ramdisk")
             if use_patch:
 
 
@@ -498,6 +566,7 @@ def repack_boot_image(folder_path):
 
         if os.path.exists(staged_img):
             os.unlink(staged_img)
+        report_progress(75, "Repacking boot image")
         mbt.run([magiskboot, "repack", mbt.SOURCE_IMAGE, staged_img], meta_dir)
         if not os.path.isfile(staged_img):
             return False, f"magiskboot repack produced no output: {staged_img}"
@@ -508,6 +577,7 @@ def repack_boot_image(folder_path):
             if size_error:
                 return False, size_error
         os.replace(staged_img, out_img)
+        report_progress(100, "Done")
     except mbt.ToolError as exc:
         return False, str(exc)
     except cpio_patch.CpioPatchError as exc:

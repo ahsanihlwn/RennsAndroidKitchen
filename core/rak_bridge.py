@@ -77,6 +77,11 @@ _ACTION_META = {
                           "desc": "Unpack boot/vendor_boot image (magiskboot) -> folder."},
     "repack_boot":       {"kind": "dir",
                           "desc": "Repack folder boot/vendor_boot -> image (magiskboot)."},
+    # dtbo
+    "unpack_dtbo":       {"kind": "file",
+                          "desc": "Unpack DTBO image -> folder (.dtb + .dts + dtbo_manifest.json)."},
+    "repack_dtbo":       {"kind": "dir",
+                          "desc": "Repack folder DTBO -> image (<name>_new.img)."},
     # erofs / ext
     "unpack_erofs":      {"kind": "file",
                           "desc": "Unpack EROFS image -> folder (+ config)."},
@@ -382,6 +387,9 @@ def inspect(path):
                              "duplicate", "copy", "cut", "paste", "delete", "rename")
             if b in ("BOOT", "VNDRBOOT"):
                 return a in ("unpack_boot", "repack_boot", "duplicate",
+                             "copy", "cut", "paste", "delete", "rename")
+            if b == "DTBO":
+                return a in ("unpack_dtbo", "repack_dtbo", "duplicate",
                              "copy", "cut", "paste", "delete", "rename")
             if b == "BR":
                 return a.startswith("unpack_br") or a in ("delete", "rename", "duplicate",

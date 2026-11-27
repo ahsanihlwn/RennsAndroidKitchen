@@ -16,9 +16,11 @@ PRINTABLE_RE = re.compile(rb"[\x20-\x7e]{4,}")
 
 PATH_LIKE_RE = re.compile(
     r"""^(?:
-        (?:[A-Za-z]:)?[/\\][\w\-.]+(?:[/\\][\w\-.]+)+
+        [A-Za-z]:\\[^\r\n\t*?<>|"]+
         |
-        [\w\-]+(?:/[\w\-]+)+\.\w{1,6}
+        /(?:[\w\-.]+/)*[\w\-.]+(?:/[\w\-.]+)+
+        |
+        [\w\-]+(?:/[\w\-]+)+\.[A-Za-z][\w]{0,5}
     )$""",
     re.VERBOSE,
 )
@@ -26,7 +28,9 @@ PATH_LIKE_RE = re.compile(
 KNOWN_EXTS = {
     ".so", ".dll", ".dylib", ".txt", ".json", ".xml", ".ttf", ".otf", ".png",
     ".jpg", ".jpeg", ".webp", ".bin", ".dat", ".cfg", ".ini", ".yaml", ".yml",
-    ".proto", ".wasm", ".jar", ".apk", ".c", ".cpp", ".h", ".hpp", ".py",
+    ".proto", ".wasm", ".jar", ".apk", ".c", ".cc", ".cpp", ".cxx", ".h", ".hpp",
+    ".s", ".asm", ".rs", ".py", ".go", ".java", ".kt", ".ko", ".dts", ".dtsi",
+    ".dtbo", ".ld", ".lds", ".mk", ".bp", ".rc", ".conf", ".service",
 }
 
 
@@ -65,9 +69,16 @@ def extract_raw_strings(data: bytes, min_len: int = 4):
 
 
 def is_path_like(s: str) -> bool:
+    if not s or any(ch.isspace() for ch in s):
+        if not (len(s) > 3 and s[1:3] == ":\\" and s[0].isalpha()):
+            return False
     if PATH_LIKE_RE.match(s):
+        if not s.startswith(("/", "\\")) and ":" not in s[:3]:
+            parts = [p for p in s.split("/") if p]
+            if all(len(p.split(".")[0]) <= 1 for p in parts):
+                return False
         return True
-    if "/" in s:
+    if "/" in s and not any(ch.isspace() for ch in s):
         _, ext = os.path.splitext(s)
         if ext.lower() in KNOWN_EXTS:
             return True

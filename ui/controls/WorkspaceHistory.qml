@@ -53,12 +53,51 @@ MorphPopup {
                     model: popup.workspace.taskActivity
                     delegate: Item {
                         required property var modelData
-                        width: body.width; height: 52
+                        readonly property var subs: modelData.subtasks || []
+                        readonly property bool showSubs: subs.length > 1
+                        width: body.width
+                        height: 52 + (showSubs ? subs.length * 24 + 4 : 0)
                         SmoothRectangle { anchors.fill: parent; radius: 5; color: popup.c.b05; border.width: 1; border.color: popup.c.b08 }
                         RakLabel { x: 9; y: 5; width: parent.width-18; text: modelData.label; font.pixelSize: 11; font.weight: Font.DemiBold; color: popup.c.FG; elide: Text.ElideRight }
                         RakLabel { x: 9; y: 23; width: parent.width-18; text: (modelData.active?"Running":"Queued")+"  ·  "+(modelData.progress>=0?modelData.progress+"%":modelData.done+" / "+modelData.total+" completed")+"  ·  "+(modelData.stage || Math.floor(modelData.elapsed)+"s"); font.pixelSize: 10; color: popup.c.FG2; elide: Text.ElideRight }
                         SmoothRectangle { x: 9; y: 42; width: parent.width-18; height: 3; radius: 1; color: popup.c.b10 }
-                        SmoothRectangle { x: 9; y: 42; width: (parent.width-18)*(modelData.progress>=0?modelData.progress/100:modelData.total?modelData.done/modelData.total:0); height: 3; radius: 1; color: popup.c.accent_hex }
+                        SmoothRectangle {
+                            x: 9; y: 42
+                            width: (parent.width-18)*(modelData.progress>=0?modelData.progress/100:modelData.total?modelData.done/modelData.total:0)
+                            height: 3; radius: 1; color: popup.c.accent_hex
+                            Behavior on width { NumberAnimation { duration: 150 } }
+                        }
+                        Column {
+                            visible: parent.showSubs
+                            x: 12; y: 51; width: parent.width - 24; spacing: 3
+                            Repeater {
+                                model: parent.parent.subs
+                                delegate: Item {
+                                    required property var modelData
+                                    width: parent.width; height: 21
+                                    RakLabel {
+                                        x: 0; y: 0; width: parent.width - 42; height: 14
+                                        text: modelData.label + (modelData.stage ? " · " + modelData.stage : "")
+                                        font.pixelSize: 9
+                                        color: modelData.state === "error" ? popup.c.RED_STATUS : modelData.state === "done" ? popup.c.GREEN_STATUS : popup.c.FG2
+                                        elide: Text.ElideRight
+                                    }
+                                    RakLabel {
+                                        anchors.right: parent.right; y: 0; width: 38; height: 14
+                                        horizontalAlignment: Text.AlignRight
+                                        text: modelData.progress + "%"
+                                        font.pixelSize: 9; font.weight: Font.DemiBold
+                                        color: modelData.state === "done" ? popup.c.GREEN_STATUS : modelData.state === "error" ? popup.c.RED_STATUS : popup.c.FG
+                                    }
+                                    SmoothRectangle { x: 0; y: 16; width: parent.width; height: 2; radius: 1; color: popup.c.b08 }
+                                    SmoothRectangle {
+                                        x: 0; y: 16; height: 2; radius: 1
+                                        width: parent.width * Math.max(0, Math.min(100, modelData.progress)) / 100
+                                        color: modelData.state === "error" ? popup.c.RED_STATUS : modelData.state === "done" ? popup.c.GREEN_STATUS : popup.c.accent_hex
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 Repeater {
@@ -87,8 +126,8 @@ MorphPopup {
             objectName: "workspaceHistoryClear"
             x: 14; y: parent.height-36; width: parent.width-28; height: 26; visible: popup.hasHistory
             text: "Clear history"; font.pixelSize: 11; font.weight: Font.DemiBold; cornerRadius: 6
-            fillColor: popup.c.b06; hoverFillColor: popup.c.b10; downFillColor: popup.c.b16
-            edgeWidth: 1; edgeColor: popup.c.b14; labelColor: popup.c.FG
+            fillColor: popup.c.b05; hoverFillColor: popup.c.b09; downFillColor: popup.c.b14
+            edgeWidth: 1; edgeColor: popup.c.b10; labelColor: popup.c.FG
             onClicked: {popup.workspace.dispatch("clearHistory",{});popup.close()}
         }
     }

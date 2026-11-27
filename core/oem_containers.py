@@ -8,7 +8,7 @@ import uuid
 
 from core import kitchen_process as subprocess
 from core.app_paths import BIN_DIR
-from core.binary_handler import resolve_binary
+from core.binary_handler import resolve_external_binary
 from core.command_context import OperationError
 from core.native_backend import oem_detect_magic, oem_extract, oem_inspect
 from core.proc_util import CREATE_NO_WINDOW
@@ -79,7 +79,7 @@ def extract_container(path: str, out_dir: str | None = None, selected: list[str]
 def unpack_f2fs(img_path: str, out_dir: str | None = None) -> str:
     if not os.path.isfile(img_path):
         raise FileNotFoundError(img_path)
-    tool = resolve_binary(BIN_DIR, "extract.f2fs.exe") or resolve_binary(BIN_DIR, "imgkit.exe")
+    tool = resolve_external_binary(BIN_DIR, "extract.f2fs.exe") or resolve_external_binary(BIN_DIR, "imgkit.exe")
     if not tool:
         raise OperationError(
             "F2FS extraction tool (extract.f2fs.exe / imgkit.exe) is not installed in bin/."
@@ -125,8 +125,8 @@ def repack_f2fs(
 ) -> str:
     if not os.path.isdir(folder):
         raise FileNotFoundError(folder)
-    mkfs = resolve_binary(BIN_DIR, "mkfs.f2fs.exe")
-    sload = resolve_binary(BIN_DIR, "sload.f2fs.exe")
+    mkfs = resolve_external_binary(BIN_DIR, "mkfs.f2fs.exe")
+    sload = resolve_external_binary(BIN_DIR, "sload.f2fs.exe")
     if not mkfs or not sload:
         raise OperationError("F2FS repack requires mkfs.f2fs.exe and sload.f2fs.exe in bin/.")
 

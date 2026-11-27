@@ -171,19 +171,33 @@ fn write_zeros_with_crc(
 
 impl SparseFile {
     pub fn write_to_file(&mut self, file: File, gz: bool, sparse: bool, crc: bool) -> io::Result<()> {
+        self.write_to_file_with_progress(file, gz, sparse, crc, |_| {})
+    }
+
+    pub fn write_to_file_with_progress<F>(
+        &mut self,
+        file: File,
+        gz: bool,
+        sparse: bool,
+        crc: bool,
+        mut on_progress: F,
+    ) -> io::Result<()>
+    where
+        F: FnMut(u8),
+    {
         if gz {
             let buf = BufWriter::with_capacity(IO_BUF_SIZE, file);
             let mut gz_writer = GzEncoder::new(buf, Compression::best());
             {
                 let mut sink = StreamSink::new(&mut gz_writer);
-                self.write_to_sink(&mut sink, sparse, crc)?;
+                self.write_to_sink_with_progress(&mut sink, sparse, crc, &mut on_progress)?;
             }
             let mut inner = gz_writer.finish()?;
             inner.flush()?;
             Ok(())
         } else {
             let mut sink = SeekFileSink::new(file);
-            self.write_to_sink(&mut sink, sparse, crc)?;
+            self.write_to_sink_with_progress(&mut sink, sparse, crc, &mut on_progress)?;
             sink.flush()
         }
     }
@@ -214,7 +228,18 @@ impl SparseFile {
     }
 
     fn write_to_sink(&mut self, sink: &mut dyn RawSink, sparse: bool, crc: bool) -> io::Result<()> {
+        self.write_to_sink_with_progress(sink, sparse, crc, &mut |_| {})
+    }
+
+    fn write_to_sink_with_progress(
+        &mut self,
+        sink: &mut dyn RawSink,
+        sparse: bool,
+        crc: bool,
+        on_progress: &mut dyn FnMut(u8),
+    ) -> io::Result<()> {
         self.finalize();
+        on_progress(0);
 
         let bs = self.block_size;
         let total_len = self.len as u64;
@@ -245,8 +270,10 @@ impl SparseFile {
         let zero_buf = vec![0u8; ZERO_BUF_SIZE];
         let mut fill_buf: Vec<u8> = Vec::new();
         let mut cached_src = CachedSourceFile::new();
+        let total_backed = self.blocks.len().max(1);
+        let mut last_write_pct: u8 = 0;
 
-        for bb in &self.blocks {
+        for (bb_idx, bb) in self.blocks.iter().enumerate() {
             if bb.block > last_block {
                 let skip_blocks = bb.block - last_block;
                 let skip_bytes = skip_blocks as u64 * bs as u64;
@@ -388,6 +415,11 @@ impl SparseFile {
             }
 
             last_block = bb.block + (bb.len + bs - 1) / bs;
+            let pct = (((bb_idx + 1) * 100) / total_backed).min(100) as u8;
+            if pct > last_write_pct {
+                last_write_pct = pct;
+                on_progress(pct);
+            }
         }
 
         let tail_bytes = total_len.saturating_sub(last_block as u64 * bs as u64);
@@ -404,6 +436,7 @@ impl SparseFile {
         } else {
             sink.finish_len(total_len)?;
         }
+        on_progress(100);
 
         Ok(())
     }

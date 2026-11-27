@@ -33,19 +33,84 @@ class MountIndex:
         return self.metadata
 
     @staticmethod
-    def _lookup_in_mount_index(index, subpath):
+    def _lookup_entry_in_mount_index(index, subpath):
         sub = subpath.strip('/').replace('\\', '/')
         if not sub:
-            return (True, True, '')
-        if sub in index:
-            return (True, True, sub)
+            return (True, True, '', None)
         parent = sub.rsplit('/', 1)[0] if '/' in sub else ''
         name = sub.rsplit('/', 1)[-1]
         for c in index.get(parent, []):
             if c['name'].lower() == name.lower():
                 actual_sub = (parent + '/' + c['name']).strip('/') if parent else c['name']
-                return (True, c['is_dir'], actual_sub)
-        return (False, False, '')
+                return (True, bool(c['is_dir']), actual_sub, c)
+        if sub in index:
+            return (True, True, sub, None)
+        return (False, False, '', None)
+
+    @staticmethod
+    def _lookup_in_mount_index(index, subpath):
+        found, is_d, actual, _entry = MountIndex._lookup_entry_in_mount_index(index, subpath)
+        return (found, is_d, actual)
+
+    def _walk_mount_index(self, img_key, index, subpath, *, _visited=frozenset(), _depth=0):
+        sub = subpath.strip('/').replace('\\', '/')
+        if not sub:
+            return ((img_key, ''), None, True, True), False
+        if _depth >= 20:
+            return (None, None, False, False), False
+        parts = [p for p in sub.split('/') if p]
+        actual_accum = ''
+        last_is_dir = False
+        for i in range(len(parts)):
+            cur_sub = '/'.join(parts[:i + 1])
+            found, is_d, actual, entry = self._lookup_entry_in_mount_index(index, cur_sub)
+            if not found:
+                return (None, None, False, False), False
+            actual_accum = actual
+            last_is_dir = is_d
+            if entry and entry.get('is_link') and entry.get('target'):
+                visit_key = (os.path.normcase(os.path.normpath(img_key)), actual.strip('/').lower())
+                if visit_key in _visited:
+                    return (None, None, False, False), False
+                next_visited = _visited | {visit_key}
+                tail_parts = parts[i + 1:]
+                v_res, p_res, r_dir, r_ex = self._resolve_symlink_target_for_mount(
+                    img_key, actual, entry['target'], _visited=next_visited, _depth=_depth + 1
+                )
+                if not tail_parts:
+                    return (v_res, p_res, r_dir, r_ex), False
+                if v_res:
+                    next_img, next_sub = v_res
+                    norm_next_img = os.path.normpath(next_img)
+                    all_mounts = self._ensure_mounts()
+                    next_idx = all_mounts.get(norm_next_img) or all_mounts.get(next_img) or {}
+                    combined_sub = (next_sub.strip('/') + '/' + '/'.join(tail_parts)).strip('/')
+                    return self._walk_mount_index(
+                        next_img, next_idx, combined_sub, _visited=next_visited, _depth=_depth + 1
+                    )
+                if p_res:
+                    combined_disk = os.path.normpath(os.path.join(p_res, *tail_parts))
+                    base = getattr(self, 'base', None)
+                    if base:
+                        from core.symlink import _resolve_candidate_chain
+                        sym_ex, sym_d, _sym_f, sym_res = _resolve_candidate_chain(
+                            combined_disk, base, {}, frozenset(), 0
+                        )
+                        if sym_ex:
+                            return (None, sym_res, sym_d, True), False
+                        try:
+                            rel_res = os.path.relpath(sym_res, base).replace('\\', '/').strip('/')
+                        except ValueError:
+                            rel_res = ''
+                        if rel_res and not rel_res.startswith('..'):
+                            return self._resolve_symlink_target_for_mount(
+                                img_key, actual, '/' + rel_res, _visited=next_visited, _depth=_depth + 1
+                            ), False
+                    elif os.path.exists(combined_disk):
+                        return (None, combined_disk, os.path.isdir(combined_disk), True), False
+                return (None, None, False, False), False
+        is_stub = bool(last_is_dir and not index.get(actual_accum.strip('/')))
+        return ((img_key, actual_accum), None, last_is_dir, True), is_stub
 
     @staticmethod
     def _match_mount_partition(img_key, partition_name):
@@ -97,8 +162,12 @@ class MountIndex:
                 best, best_score = (m_key, score)
         return best if best_score >= 0 else None
 
-    def _resolve_symlink_target_for_mount(self, img_path, internal, target):
+    def _resolve_symlink_target_for_mount(self, img_path, internal, target, *, _visited=frozenset(), _depth=0):
         key = os.path.normpath(img_path)
+        visit_key = (os.path.normcase(key), internal.strip('/').lower())
+        if _depth >= 20 or visit_key in _visited:
+            return (None, target, False, False)
+        next_visited = _visited | {visit_key}
         norm_target = target.replace('\\', '/').strip()
         if norm_target.startswith('/'):
             clean = norm_target.lstrip('/')
@@ -125,14 +194,16 @@ class MountIndex:
         for cand in current_cand_subs:
             if cand == internal.strip('/'):
                 continue
-            found, is_d, actual = self._lookup_in_mount_index(curr_index, cand)
-            if not found:
+            (v_res, p_res, is_d, ex), is_stub = self._walk_mount_index(
+                key, curr_index, cand, _visited=next_visited, _depth=_depth + 1
+            )
+            if not (ex or v_res or p_res):
                 continue
-            if is_d and (not curr_index.get(actual.strip('/'))):
+            if is_stub and v_res:
                 if stub_hit is None:
-                    stub_hit = (actual, is_d)
+                    stub_hit = (v_res[1], is_d)
                 continue
-            return ((key, actual), None, is_d, True)
+            return (v_res, p_res, is_d, ex)
         KNOWN_PARTITIONS = ['system_ext', 'system_dlkm', 'vendor_dlkm', 'odm_dlkm', 'my_product', 'my_stock', 'my_heytap', 'my_carrier', 'my_region', 'my_engineering', 'my_preload', 'mi_ext', 'system', 'product', 'vendor', 'odm', 'oem', 'cust', 'preload', 'apex', 'data']
         split_candidates = []
         if clean_norm.startswith('system/'):
@@ -172,16 +243,22 @@ class MountIndex:
         for target_partition, subpath_cands in split_candidates:
             ranked = sorted(all_mounts.items(), key=lambda kv: self._match_score(kv[0], target_partition), reverse=True)
             for m_key, m_index in ranked:
-                if m_key == key and target_partition != 'system':
+                if os.path.normpath(m_key) == key and target_partition != 'system':
                     continue
                 if self._match_score(m_key, target_partition) < 0:
                     continue
                 for sub in subpath_cands:
                     if not sub:
                         return ((m_key, ''), None, True, True)
-                    found, is_d, actual = self._lookup_in_mount_index(m_index, sub)
-                    if found:
-                        return ((m_key, actual), None, is_d, True)
+                    (v_res, p_res, is_d, ex), is_stub = self._walk_mount_index(
+                        m_key, m_index, sub, _visited=next_visited, _depth=_depth + 1
+                    )
+                    if ex or v_res or p_res:
+                        if is_stub and v_res:
+                            if stub_hit is None:
+                                stub_hit = (v_res[1], is_d)
+                            continue
+                        return (v_res, p_res, is_d, ex)
                 if '' in subpath_cands or not subpath_cands[0]:
                     return ((m_key, ''), None, True, True)
         if stub_hit is not None:
@@ -189,30 +266,23 @@ class MountIndex:
             return ((key, actual), None, is_d, True)
         base = getattr(self, 'base', None)
         if base:
-            project_root = base
-            base_dir = os.path.dirname(os.path.join(base, internal))
-            disk_candidates = []
-            if norm_target.startswith('/'):
-                if clean_norm.startswith('system/'):
-                    disk_candidates.append(os.path.normpath(os.path.join(project_root, clean_norm)))
-                    sub = clean_norm[7:]
-                    if sub:
-                        disk_candidates.append(os.path.normpath(os.path.join(project_root, sub)))
-                    disk_candidates.append(os.path.normpath(os.path.join(project_root, 'system', clean_norm)))
-                else:
-                    disk_candidates.append(os.path.normpath(os.path.join(project_root, clean_norm)))
-                    disk_candidates.append(os.path.normpath(os.path.join(project_root, 'system', clean_norm)))
-                    parent = os.path.dirname(project_root)
-                    if parent and parent != project_root:
-                        disk_candidates.append(os.path.normpath(os.path.join(parent, clean_norm)))
-            else:
-                disk_candidates.append(os.path.normpath(os.path.join(base_dir, norm_target)))
-                disk_candidates.append(os.path.normpath(os.path.join(project_root, norm_target)))
-                disk_candidates.append(os.path.normpath(os.path.join(project_root, 'system', norm_target)))
-            for c in disk_candidates:
-                if os.path.exists(c):
-                    return (None, c, os.path.isdir(c), True)
-            fallback = disk_candidates[0] if disk_candidates else os.path.normpath(os.path.join(project_root, clean_norm))
+            from core.symlink import resolve_symlink_target
+            anchor_file = os.path.join(base, internal.replace('/', os.sep)) if internal else base
+            sym = resolve_symlink_target(anchor_file, norm_target, base, target_cache={})
+            if sym and sym['exists']:
+                return (None, sym['resolved'], bool(sym['is_dir']), True)
+            fallback = sym['resolved'] if sym and sym.get('resolved') else os.path.normpath(os.path.join(base, clean_norm))
+            if sym and sym.get('resolved'):
+                try:
+                    rel_res = os.path.relpath(sym['resolved'], base).replace('\\', '/').strip('/')
+                except ValueError:
+                    rel_res = ''
+                if rel_res and not rel_res.startswith('..') and rel_res.lower() != clean_norm.lower():
+                    v2, p2, d2, ex2 = self._resolve_symlink_target_for_mount(
+                        img_path, internal, '/' + rel_res, _visited=next_visited, _depth=_depth + 1
+                    )
+                    if ex2:
+                        return (v2, p2, d2, ex2)
         else:
             fallback = clean_norm
         clean_t = norm_target.rstrip('/')

@@ -129,7 +129,7 @@ DialogWindow {
                     x: 52; y: 52; width: 26; height: 26; cornerRadius: 13
                     leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
                     edgeWidth: 1
-                    fillColor: dialog.c.BG2; hoverFillColor: dialog.c.BG_SELECTED; downFillColor: dialog.c.b18
+                    fillColor: dialog.c.b08; hoverFillColor: dialog.c.b14; downFillColor: dialog.c.b18
                     edgeColor: dialog.c.b18; hoverEdgeColor: dialog.c.accent_hex
                     toolTip: "Change avatar"
                     onClicked: dialog.avatarPage = true

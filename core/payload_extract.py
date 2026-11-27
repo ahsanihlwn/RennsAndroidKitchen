@@ -155,8 +155,6 @@ def init_payload_info(reader: IO[bytes]) -> update_metadata_pb2.DeltaArchiveMani
         print(f"Warning: payload version is {hdr.version} != 2 may be unsupported")
     if hdr.manifest_len == 0:
         raise BadPayload("manifest length is zero")
-    if hdr.manifest_sig_len == 0:
-        raise BadPayload("manifest signature length is zero")
 
     try:
         data=reader.read(hdr.manifest_len)
@@ -166,7 +164,8 @@ def init_payload_info(reader: IO[bytes]) -> update_metadata_pb2.DeltaArchiveMani
     if manifest.minor_version not in [0, 8]:
         print(f"[!] Delta payload detected (minor_version={manifest.minor_version})")
 
-    reader.seek(hdr.manifest_sig_len, SEEK_CUR)
+    if hdr.manifest_sig_len > 0:
+        reader.seek(hdr.manifest_sig_len, SEEK_CUR)
 
     return manifest
 
@@ -246,8 +245,17 @@ def _extract_partition_from_payload(
     out_path: str,
     total_size: int,
     executor: ThreadPoolExecutor,
+    progress_range: tuple[int, int] = (0, 100),
 ):
+    from core.threader_control import report_progress
+
     op_count = len(partition.operations)
+    p_start, p_end = progress_range
+    p_span = max(0, p_end - p_start)
+    last_pct = -1
+    part_label = f"Extracting {partition.partition_name}"
+    report_progress(p_start, part_label)
+
     print(
         f"[PAYLOAD_DBG][CORE] PART_START part={partition.partition_name!r} "
         f"ops={op_count} out={out_path!r} total_size={total_size}",
@@ -304,6 +312,12 @@ def _extract_partition_from_payload(
                     futures.pop(0).result()
             del data
 
+            if op_count > 0 and p_span > 0:
+                pct = p_start + int((op_index * p_span) / op_count)
+                if pct > last_pct:
+                    last_pct = pct
+                    report_progress(pct, part_label)
+
         print(
             f"[PAYLOAD_DBG][CORE] WAIT_FUTURES part={partition.partition_name!r} "
             f"count={len(futures)}",
@@ -312,6 +326,7 @@ def _extract_partition_from_payload(
         for future in futures:
             future.result()
         futures.clear()
+        report_progress(p_end, part_label)
 
         print(
             f"[PAYLOAD_DBG][CORE] FUTURES_DONE part={partition.partition_name!r}",
@@ -371,6 +386,9 @@ def extract_partitions_from_payload(
 
     block_size = manifest.block_size
     executor = ThreadPoolExecutor(max_workers=max_workers)
+    from core.threader_control import report_progress
+    total_ops = sum(max(1, len(p.operations)) for p in all_parts) or 1
+    done_ops = 0
     try:
         for p in all_parts:
             reader.seek(baseoff, SEEK_SET)
@@ -384,6 +402,11 @@ def extract_partitions_from_payload(
                         max_block = end_b
             total_length = max_block * block_size
 
+            part_ops = max(1, len(p.operations))
+            p_start = min(99, int((done_ops * 100) / total_ops))
+            p_end = min(100, int(((done_ops + part_ops) * 100) / total_ops))
+            done_ops += part_ops
+
             print(f"Extracting {p.partition_name} ...")
             _extract_partition_from_payload(
                 reader,
@@ -392,6 +415,7 @@ def extract_partitions_from_payload(
                 os.path.join(out_dir, p.partition_name + ".img"),
                 total_length,
                 executor,
+                progress_range=(p_start, p_end),
             )
             print(
                 f"[PAYLOAD_DBG][CORE] EXTRACT_PART_RETURN part={p.partition_name!r}",
@@ -401,6 +425,7 @@ def extract_partitions_from_payload(
 
             if on_partition_done:
                 on_partition_done(p.partition_name)
+        report_progress(100, "Done")
     finally:
         print(
             f"[PAYLOAD_DBG][CORE] EXECUTOR_SHUTDOWN_START requested={partitions_name}",

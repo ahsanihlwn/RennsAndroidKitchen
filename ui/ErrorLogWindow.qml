@@ -9,12 +9,13 @@ DialogWindow {
     objectName: "errorLogWindow"
     property string logText: ""
     property bool copied: false
+    property bool fatalError: false
     property var commandTarget: model
     readonly property int logHeight: Math.min(330,Math.max(100,Screen.desktopAvailableHeight-180))
     implicitWidth: Math.min(680,Screen.desktopAvailableWidth-48); implicitHeight: logHeight+111
-    title: "Fatal Crash! — Log"
-    function showLog(text) { logText=text; copied=false; open() }
-    RakLabel { x: 20; y: 18; height: 19; text: "<b>Fatal Crash! — Log</b>"; color: dialog.c.FG; font.pixelSize: 13 }
+    title: fatalError ? "Fatal Crash! — Log" : "Operation failed — Log"
+    function showLog(text, fatal) { logText=text; fatalError=!!fatal; copied=false; open() }
+    RakLabel { x: 20; y: 18; height: 19; text: "<b>"+dialog.title+"</b>"; color: dialog.c.FG; font.pixelSize: 13 }
     RakScrollView {
         colors: dialog.c
         x: 20; y: 51; width: parent.width-40; height: dialog.logHeight

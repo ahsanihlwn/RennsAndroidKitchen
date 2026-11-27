@@ -1,51 +1,28 @@
 # SPDX-License-Identifier: MPL-2.0
 import os
-from core import kitchen_process as subprocess
-import time
 print("[CORE STAGE] FILESYSTEM DETECT")
-# Magic identifiers
-MAGIC_EROF = "0xE0F5E1E2"
-
-BIN_PATH = os.path.join(
-    os.environ.get("LOCALAPPDATA", os.path.expanduser("~")),
-    "RennsAndroidKitchen",
-    "bin"
-)
-
-from core.binary_handler import resolve_binary
-from core.proc_util import CREATE_NO_WINDOW
-
 
 from core.header_magic import is_fs_image as _detect_fs_type_fast
+
 
 def detect_fs_type(path):
 
     if not os.path.isfile(path):
         return ""
 
-    # 🔥 RESOLVE SAAT DIPAKAI (LIVE)
-    dump_erofs = resolve_binary(BIN_PATH, "dump.erofs.exe")
-    if not dump_erofs:
-        return ""
-
-    # CHECK EROFS
+    # Native EROFS / sparse-EROFS detection via rak_native (no binary spawn)
     try:
-        cmd = [dump_erofs, path]
-        with subprocess.without_console():
-            p = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                shell=False,
-                text=True,
-                creationflags=CREATE_NO_WINDOW
-            )
-            out, err = p.communicate(timeout=5)
-            if p.returncode == 0:
-                for line in out.splitlines():
-                    if "Filesystem magic number" in line and MAGIC_EROF in line:
-                        return "EROFS"
-    except:
+        from core import native_backend
+        if native_backend.erofs_detect(path).get("is_erofs"):
+            return "EROFS"
+    except Exception:
+        pass
+
+    try:
+        fast = _detect_fs_type_fast(path)
+        if fast:
+            return fast
+    except Exception:
         pass
 
     # CHECK EXT2/3/4
@@ -54,7 +31,7 @@ def detect_fs_type(path):
         fs = check_ext4_magic(path)
         if fs:
             return fs
-    except:
+    except Exception:
         pass
 
     return ""
@@ -68,14 +45,19 @@ def detect_fs_root(base_dir, folder_name):
     bootconf_path = os.path.join(cfg_dir, f"{folder_name}_bootconf")
     if os.path.isfile(bootconf_path):
         try:
-            with open(bootconf_path, "r", encoding="utf-8", errors="ignore") as f:
-                kind = f.read().strip().lower()
+            from core.boot_image import read_bootconf
+            kind, _ = read_bootconf(bootconf_path)
             if kind == "boot":
                 return "BOOT"
             if kind in ("vndrboot", "vendor_boot"):
                 return "VNDRBOOT"
         except:
             pass
+
+    if os.path.isfile(os.path.join(cfg_dir, f"{folder_name}_dtboconf")) or os.path.isfile(
+        os.path.join(base_dir, folder_name, "dtbo_manifest.json")
+    ):
+        return "DTBO"
 
 
     opt_path = os.path.join(cfg_dir, f"{folder_name}_fs_options")

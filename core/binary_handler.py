@@ -50,12 +50,16 @@ class BinaryIndexWatcher(QObject):
         except Exception:
             return
 
+        from core.native_tools import NATIVE_BUILTIN_PACKAGES, is_native_tool
+
         idx = {}
         for env, env_data in data.items():
+            if env in NATIVE_BUILTIN_PACKAGES:
+                continue
             env_path = os.path.join(self.bin_root, env)
             for b in env_data.get("binaries", []):
                 name = b.get("name")
-                if not name:
+                if not name or is_native_tool(name):
                     continue
                 flat = os.path.join(env_path, name)
                 if not os.path.isfile(flat):
@@ -67,6 +71,10 @@ class BinaryIndexWatcher(QObject):
         self.index = idx
 
     def resolve(self, name):
+        from core.native_tools import NATIVE_BUILTIN_PACKAGES, is_native_tool
+
+        if is_native_tool(name):
+            return None
         # 1️⃣ coba dari index (fast path)
         path = self.index.get(name)
         if path and os.path.isfile(path):
@@ -83,6 +91,8 @@ class BinaryIndexWatcher(QObject):
             return None
 
         for env, env_data in data.items():
+            if env in NATIVE_BUILTIN_PACKAGES:
+                continue
             env_path = os.path.join(self.bin_root, env)
             for b in env_data.get("binaries", []):
                 if b.get("name") == name:
@@ -102,6 +112,10 @@ class BinaryIndexWatcher(QObject):
 _BIN_WATCHERS = {}
 
 def _resolve_from_package(bin_root, binary_name):
+    from core.native_tools import NATIVE_BUILTIN_PACKAGES, is_native_tool
+
+    if is_native_tool(binary_name):
+        return None
     package_json = os.path.join(bin_root, "package.json")
     if not os.path.isfile(package_json):
         return None
@@ -113,6 +127,8 @@ def _resolve_from_package(bin_root, binary_name):
         return None
 
     for env, env_data in data.items():
+        if env in NATIVE_BUILTIN_PACKAGES:
+            continue
         env_path = os.path.join(bin_root, env)
         for b in env_data.get("binaries", []):
             if b.get("name") == binary_name:
@@ -143,16 +159,25 @@ def _get_watcher(bin_root):
     return watcher
 
 
+def resolve_external_binary(bin_root, binary_name):
+    """Resolve a real external executable/JAR from package.json (never native rak_native)."""
+    from core.native_tools import is_native_tool
+
+    if is_native_tool(binary_name):
+        return None
+    watcher = _get_watcher(bin_root)
+    if not watcher:
+        return _resolve_from_package(bin_root, binary_name)
+    return watcher.resolve(binary_name) or _resolve_from_package(bin_root, binary_name)
+
+
 def resolve_binary(bin_root, binary_name):
     from core.native_tools import resolve_native_tool
 
     native = resolve_native_tool(binary_name)
     if native:
         return native
-    watcher = _get_watcher(bin_root)
-    if not watcher:
-        return _resolve_from_package(bin_root, binary_name)
-    return watcher.resolve(binary_name) or _resolve_from_package(bin_root, binary_name)
+    return resolve_external_binary(bin_root, binary_name)
 
 
 from core.app_paths import BIN_DIR as _DEFAULT_BIN_ROOT
@@ -163,5 +188,13 @@ def is_available(*binary_names, bin_root=None):
     root = bin_root or _DEFAULT_BIN_ROOT
     for name in binary_names:
         if not resolve_binary(root, name):
+            return False
+    return True
+
+
+def is_external_available(*binary_names, bin_root=None):
+    root = bin_root or _DEFAULT_BIN_ROOT
+    for name in binary_names:
+        if not resolve_external_binary(root, name):
             return False
     return True

@@ -6,7 +6,9 @@ import ctypes
 import math
 import os
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -117,15 +119,17 @@ class CInfo(ctypes.Structure):
 def _find_termcore_dll():
     root = Path(__file__).resolve().parent.parent
     candidates = [
+        root / "build" / "termcore_runtime" / "release" / "termcore.dll",
         root / "core" / "terminal" / "core" / "target" / "release" / "termcore.dll",
+        root / "core" / "termcore.dll",
         root / "core" / "terminal" / "build" / "Release" / "termcore.dll",
         root / "core" / "terminal" / "build" / "cargo" / "release" / "termcore.dll",
-        root / "core" / "termcore.dll",
         Path(sys.executable).parent / "termcore.dll",
     ]
-    for c in candidates:
-        if c.is_file():
-            return str(c)
+    existing = [c for c in candidates if c.is_file()]
+    if existing:
+        newest = max(existing, key=lambda p: p.stat().st_mtime)
+        return str(newest)
     return "termcore.dll"
 
 _lib_path = _find_termcore_dll()
@@ -141,6 +145,9 @@ if _termcore:
         ctypes.c_char_p, ctypes.POINTER(ctypes.c_char_p), ctypes.c_char_p,
         ctypes.c_int, ctypes.c_int, ctypes.c_int, CALLBACK_FUNC, ctypes.c_void_p
     ]
+    if hasattr(_termcore, "term_new_log"):
+        _termcore.term_new_log.restype = ctypes.c_void_p
+        _termcore.term_new_log.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_int, CALLBACK_FUNC, ctypes.c_void_p]
     _termcore.term_free.argtypes = [ctypes.c_void_p]
     _termcore.term_str_free.argtypes = [ctypes.c_char_p]
     _termcore.term_resize.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int]
@@ -154,6 +161,8 @@ if _termcore:
     _termcore.term_cell_extra.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_uint32), ctypes.c_size_t]
     _termcore.term_write.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
     _termcore.term_feed.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_size_t]
+    if hasattr(_termcore, "term_set_pty_mute"):
+        _termcore.term_set_pty_mute.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_char_p]
     _termcore.term_paste.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
     _termcore.term_focus.argtypes = [ctypes.c_void_p, ctypes.c_int]
     _termcore.term_key.restype = ctypes.c_int
@@ -242,7 +251,11 @@ class Terminal(QQuickPaintedItem):
     selectionChanged = Signal()
     bell = Signal()
     exited = Signal(int)
+    interruptRequested = Signal()
+    nativeCommandSubmitted = Signal(str)
     _core_event_signal = Signal(int)
+    _native_output_signal = Signal(str)
+    _native_done_signal = Signal(int, bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -253,12 +266,23 @@ class Terminal(QQuickPaintedItem):
         self.setCursor(Qt.CursorShape.IBeamCursor)
         self.setOpaquePainting(True)
         self._core_event_signal.connect(self._handle_core_event, Qt.ConnectionType.QueuedConnection)
+        self._native_output_signal.connect(self._on_native_output, Qt.ConnectionType.QueuedConnection)
+        self._native_done_signal.connect(self._on_native_done, Qt.ConnectionType.QueuedConnection)
 
         self._program = ""
         self._arguments = []
         self._cwd = ""
         self._auto_start = True
+        self._wsl_mode = False
         self._scrollback = 10000
+        self._native_cmd_running = False
+        self._native_cancel = None
+        self._native_thread = None
+        self._native_conhost_row = 0
+        self._native_conhost_col = 0
+        self._native_shell_kind = "cmd"
+        self._native_lines_fed = 0
+        self._native_sync_seq = 0
 
         self._family = _detect_terminal_font()
         self._pixel_size = 15
@@ -278,6 +302,7 @@ class Terminal(QQuickPaintedItem):
         self._rows = 24
 
         self._term = None
+        self._output_only = False
         self._cells = None
         self._info = CInfo()
 
@@ -285,6 +310,10 @@ class Terminal(QQuickPaintedItem):
         self._cell_h = 16.0
         self._ascent = 12.0
         self._fonts = [QFont() for _ in range(4)]
+        self._paint_lock = threading.Lock()
+        self._has_focus = False
+        self._color_cache = {}
+        self._pen_cache = {}
 
         # Animation & frame timer for smooth cursor crossfade & smooth glide motion
         self._cursor_opacity = 1.0
@@ -353,6 +382,15 @@ class Terminal(QQuickPaintedItem):
     def autoStart(self): return self._auto_start
     @autoStart.setter
     def autoStart(self, val): self._auto_start = bool(val)
+
+    @Property(bool, notify=configChanged)
+    def wslMode(self): return self._wsl_mode
+    @wslMode.setter
+    def wslMode(self, val):
+        b = bool(val)
+        if self._wsl_mode != b:
+            self._wsl_mode = b
+            self.configChanged.emit()
 
     @Property(int, notify=configChanged)
     def scrollback(self): return self._scrollback
@@ -537,6 +575,7 @@ class Terminal(QQuickPaintedItem):
                 self.start()
 
     def _update_metrics(self):
+        fonts = []
         for i in range(4):
             f = QFont(self._family)
             f.setPixelSize(self._pixel_size)
@@ -546,13 +585,18 @@ class Terminal(QQuickPaintedItem):
             f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
             f.setBold(bool(i & 1))
             f.setItalic(bool(i & 2))
-            self._fonts[i] = f
+            fonts.append(f)
 
-        fm = QFontMetricsF(self._fonts[0])
+        fm = QFontMetricsF(fonts[0])
         adv = fm.horizontalAdvance("M" * 64) / 64.0
-        self._cell_w = max(1.0, adv)
-        self._cell_h = max(1.0, math.ceil(fm.height()))
-        self._ascent = fm.ascent() + (self._cell_h - fm.height()) / 2.0
+        cell_w = max(1.0, adv)
+        cell_h = max(1.0, math.ceil(fm.height()))
+        ascent = fm.ascent() + (cell_h - fm.height()) / 2.0
+        with self._paint_lock:
+            self._fonts = fonts
+            self._cell_w = cell_w
+            self._cell_h = cell_h
+            self._ascent = ascent
 
     def _fit(self):
         w, h = self.width(), self.height()
@@ -601,35 +645,13 @@ class Terminal(QQuickPaintedItem):
     @Slot()
     def start(self):
         self.stop()
+        self._output_only = False
         if not _termcore or self._cols < 2 or self._rows < 1:
             return
 
         prog = self._program.strip()
         if not prog:
             prog = os.environ.get("COMSPEC", "cmd.exe") if sys.platform == "win32" else os.environ.get("SHELL", "/bin/bash")
-
-        try:
-            from core.app_paths import BIN_DIR
-            from core.terminal_binary import get_native_cli_directory
-
-            native_cli_dir = get_native_cli_directory(BIN_DIR)
-            if native_cli_dir:
-                if not os.path.isfile(os.path.join(native_cli_dir, "adb.cmd")):
-                    try:
-                        from core.rak_cli import ensure_rak_bat
-                        ensure_rak_bat()
-                    except Exception:
-                        pass
-                if os.path.isdir(native_cli_dir):
-                    norm_native = os.path.normcase(os.path.normpath(native_cli_dir))
-                    current_path = os.environ.get("PATH", "")
-                    parts = [
-                        p for p in current_path.split(os.pathsep)
-                        if p and os.path.normcase(os.path.normpath(p)) != norm_native
-                    ]
-                    os.environ["PATH"] = os.pathsep.join([native_cli_dir, *parts])
-        except Exception:
-            pass
 
         prog_b = prog.encode("utf-8")
         args_b = [a.encode("utf-8") for a in self._arguments]
@@ -640,6 +662,19 @@ class Terminal(QQuickPaintedItem):
             prog_b, argv, cwd_b, self._cols, self._rows, self._scrollback,
             self._cb_holder, None
         )
+        self._initialize_view()
+
+    @Slot()
+    def startOutput(self):
+        if self._term and self._output_only:
+            return
+        self.stop()
+        self._output_only = True
+        if _termcore and hasattr(_termcore, "term_new_log"):
+            self._term = _termcore.term_new_log(self._cols, self._rows, self._scrollback, self._cb_holder, None)
+            self._initialize_view()
+
+    def _initialize_view(self):
         if self._term:
             self._apply_theme()
             self._refresh()
@@ -651,6 +686,13 @@ class Terminal(QQuickPaintedItem):
 
     @Slot()
     def stop(self):
+        if self._native_cancel is not None:
+            try:
+                self._native_cancel.cancel()
+            except Exception:
+                pass
+            self._native_cancel = None
+        self._native_cmd_running = False
         if isValid(self._resize_timer) and self._resize_timer.isActive():
             self._resize_timer.stop()
         if isValid(self._anim_timer):
@@ -687,8 +729,11 @@ class Terminal(QQuickPaintedItem):
             return
         ptr = _termcore.term_sel_text(self._term)
         if ptr:
-            s = ctypes.c_char_p(ptr).value.decode("utf-8", errors="replace")
-            _termcore.term_str_free(ctypes.cast(ptr, ctypes.c_char_p))
+            try:
+                raw = ctypes.cast(ptr, ctypes.c_char_p).value or b""
+            finally:
+                _termcore.term_str_free(ctypes.cast(ptr, ctypes.c_char_p))
+            s = raw.decode("utf-8", errors="replace")
             cb = QGuiApplication.clipboard()
             if cb:
                 cb.setText(s)
@@ -701,6 +746,13 @@ class Terminal(QQuickPaintedItem):
         if cb:
             t = cb.text()
             if t:
+                if not self._output_only and not self._wsl_mode and not self._native_cmd_running and not (self._info.mode & MODE_ALT_SCREEN):
+                    stripped = t.strip()
+                    if "\n" not in stripped and "\r" not in stripped and (t.endswith("\n") or t.endswith("\r")):
+                        from core.terminal_native_router import is_locked_terminal_command
+                        if is_locked_terminal_command(stripped):
+                            self.runNativeCommand(stripped)
+                            return
                 b = t.encode("utf-8")
                 _termcore.term_paste(self._term, b)
 
@@ -724,11 +776,10 @@ class Terminal(QQuickPaintedItem):
     def debugInfo(self) -> str:
         return f"cols={self._cols} rows={self._rows} alive={self.running} hist={self.historySize}"
 
-    @Slot(result=str)
-    def screenText(self) -> str:
+    def _screen_lines(self) -> list[str]:
         self._refresh()
         if not self._cells or not self._info.rows or not self._info.cols:
-            return ""
+            return []
         lines = []
         cols = self._info.cols
         for r in range(self._info.rows):
@@ -740,7 +791,141 @@ class Terminal(QQuickPaintedItem):
                 ch = cc.ch
                 chars.append(chr(ch) if ch else " ")
             lines.append("".join(chars).rstrip())
-        return "\n".join(lines)
+        return lines
+
+    @Slot(result=str)
+    def screenText(self) -> str:
+        return "\n".join(self._screen_lines())
+
+    @Slot(str)
+    def _on_native_output(self, chunk: str):
+        if not isValid(self) or not self._term or not chunk:
+            return
+        norm = chunk.replace("\r\n", "\n").replace("\n", "\r\n")
+        self._native_lines_fed += norm.count("\n")
+        self.feedText(norm)
+
+    @Slot(int, bool)
+    def _on_native_done(self, _exit_code: int, prompt_cr: bool):
+        self._native_cmd_running = False
+        self._native_cancel = None
+        if not isValid(self) or not self._term or not _termcore:
+            return
+        if prompt_cr and not self._output_only:
+            _termcore.term_write(self._term, b"\r", 1)
+
+    def _start_locked_native_command(
+        self,
+        raw_cmd: str,
+        tokens: list[str],
+        cwd: str,
+        *,
+        echo_cmd: bool = True,
+        prefix_nl: bool = False,
+        prompt_cr: bool = True,
+    ):
+        self._native_cmd_running = True
+        self._native_lines_fed = 0
+        try:
+            from core import native_backend
+            self._native_cancel = native_backend.platform_cancel_token()
+        except Exception:
+            self._native_cancel = None
+        if echo_cmd:
+            self._native_lines_fed += 1
+            self.feedText(raw_cmd + "\r\n")
+        elif prefix_nl:
+            self._native_lines_fed += 1
+            self.feedText("\r\n")
+        self.nativeCommandSubmitted.emit(raw_cmd)
+
+        cancel_token = self._native_cancel
+        def _worker():
+            from core.terminal_native_router import run_locked_terminal_command
+            rc = 0
+            try:
+                rc = run_locked_terminal_command(
+                    tokens,
+                    cwd=cwd,
+                    emit=lambda text: self._native_output_signal.emit(text),
+                    cancel_token=cancel_token,
+                )
+            except Exception as exc:
+                self._native_output_signal.emit(f"error: {exc}\n")
+                rc = 1
+            finally:
+                if isValid(self):
+                    self._native_done_signal.emit(int(rc), bool(prompt_cr))
+
+        self._native_thread = threading.Thread(target=_worker, name="RAK-NativeTerminalCmd", daemon=True)
+        self._native_thread.start()
+
+    @Slot(str)
+    def runNativeCommand(self, command: str):
+        """Run a locked native command in-process and pipe its output to this terminal."""
+        from core.terminal_native_router import split_command_tokens, is_locked_terminal_command
+        clean = str(command or "").strip()
+        if not clean or not is_locked_terminal_command(clean):
+            self.sendText(clean + "\r")
+            return
+        if self._native_cmd_running:
+            return
+        tokens = split_command_tokens(clean)
+        lines = self._screen_lines()
+        self._native_conhost_row = int(self._info.cursor_row)
+        self._native_conhost_col = int(self._info.cursor_col)
+        self._native_shell_kind = "cmd"
+        cwd = self._cwd or os.getcwd()
+        if lines and 0 <= self._info.cursor_row < len(lines):
+            row_text = lines[self._info.cursor_row].strip()
+            if ">" in row_text:
+                cand = row_text.rsplit(">", 1)[0].strip()
+                if cand.startswith("PS "):
+                    cand = cand[3:].strip()
+                    self._native_shell_kind = "powershell"
+                if cand and os.path.isdir(cand):
+                    cwd = cand
+        self._start_locked_native_command(clean, tokens, cwd, echo_cmd=True, prefix_nl=False, prompt_cr=True)
+
+    def _try_intercept_prompt_command(self) -> bool:
+        if (
+            self._output_only
+            or self._wsl_mode
+            or self._native_cmd_running
+            or (self._info.mode & MODE_ALT_SCREEN)
+        ):
+            return False
+        from core.terminal_native_router import extract_prompt_command
+        lines = self._screen_lines()
+        parsed = extract_prompt_command(lines, self._info.cursor_row, self._cols, fallback_cwd=self._cwd)
+        if not parsed:
+            return False
+        effective_cwd, raw_cmd, tokens, shell_kind = parsed
+        self._native_conhost_row = int(self._info.cursor_row)
+        self._native_conhost_col = max(0, int(self._info.cursor_col) - len(raw_cmd))
+        self._native_shell_kind = shell_kind
+        self._native_cmd_running = True
+        if hasattr(_termcore, "term_set_pty_mute"):
+            _termcore.term_set_pty_mute(self._term, 1, None)
+        clear_seq = b"\x1b" if shell_kind == "cmd" else b"\x15\x0b"
+        _termcore.term_write(self._term, clear_seq, len(clear_seq))
+
+        def _begin():
+            if not isValid(self) or not self._term:
+                return
+            if hasattr(_termcore, "term_set_pty_mute"):
+                _termcore.term_set_pty_mute(self._term, 0, None)
+            self._start_locked_native_command(
+                raw_cmd,
+                tokens,
+                effective_cwd,
+                echo_cmd=False,
+                prefix_nl=True,
+                prompt_cr=True,
+            )
+
+        QTimer.singleShot(45, _begin)
+        return True
 
     # ---- Event Loop & Refresh ----
 
@@ -774,6 +959,20 @@ class Terminal(QQuickPaintedItem):
     def inputMethodEvent(self, e):
         # Consume IME events without committing uncontrolled text into raw PTY
         e.accept()
+
+    def _sample_cursor_motion(self, now: float) -> tuple[float, float]:
+        """Pure cursor interpolation for paint() on QSGRenderThread (never touches QTimers)."""
+        if self._cur_move_start <= 0.0:
+            return self._cur_render_x, self._cur_render_y
+        dt = (now - self._cur_move_start) / max(0.001, self._cur_move_duration)
+        if dt >= 1.0:
+            return self._cur_target_x, self._cur_target_y
+        t = max(0.0, min(1.0, dt))
+        ease = 1.0 - (1.0 - t) ** 2
+        return (
+            self._cur_start_x + (self._cur_target_x - self._cur_start_x) * ease,
+            self._cur_start_y + (self._cur_target_y - self._cur_start_y) * ease,
+        )
 
     def _advance_cursor_motion(self, now: float) -> bool:
         """Advance smooth cursor coordinates to `now`; returns True while glide remains active."""
@@ -935,14 +1134,15 @@ class Terminal(QQuickPaintedItem):
         if not self._term or not _termcore or self._cols <= 0 or self._rows <= 0:
             return
         total = self._cols * self._rows
-        if not self._cells or len(self._cells) < total:
-            self._cells = (CCell * total)()
+        with self._paint_lock:
+            if not self._cells or len(self._cells) < total:
+                self._cells = (CCell * total)()
 
-        prev_scroll = self._info.display_offset
-        prev_sel = self._info.has_selection
-        prev_col = self._info.cursor_col
-        prev_row = self._info.cursor_row
-        _termcore.term_snapshot(self._term, self._cells, total, ctypes.byref(self._info))
+            prev_scroll = self._info.display_offset
+            prev_sel = self._info.has_selection
+            prev_col = self._info.cursor_col
+            prev_row = self._info.cursor_row
+            _termcore.term_snapshot(self._term, self._cells, total, ctypes.byref(self._info))
 
         if self._info.display_offset != prev_scroll:
             self.scrollChanged.emit()
@@ -954,122 +1154,148 @@ class Terminal(QQuickPaintedItem):
             self.selectionChanged.emit()
         self.update()
 
+    def _cached_color(self, val: int) -> QColor:
+        c = self._color_cache.get(val)
+        if c is None:
+            if len(self._color_cache) >= 512:
+                self._color_cache.clear()
+            c = _rgb(val)
+            self._color_cache[val] = c
+        return c
+
+    def _cached_pen(self, val: int) -> QPen:
+        p = self._pen_cache.get(val)
+        if p is None:
+            if len(self._pen_cache) >= 512:
+                self._pen_cache.clear()
+            p = QPen(self._cached_color(val))
+            self._pen_cache[val] = p
+        return p
+
     # ---- Painting ----
 
     def paint(self, painter: QPainter):
-        bg = _rgb(self._info.bg) if (self._term and self._info.cols > 0) else self._bg
-        painter.fillRect(self.boundingRect(), bg)
-        if not self._term or not self._cells or self._info.cols <= 0 or self._info.rows <= 0:
-            return
+        with self._paint_lock:
+            if not self._term or not self._cells or self._info.cols <= 0 or self._info.rows <= 0:
+                painter.fillRect(self.boundingRect(), self._bg)
+                return
 
-        cols, rows = self._info.cols, self._info.rows
-        x0, y0 = self._padding, self._padding
-        w, h = self._cell_w, self._cell_h
-        ascent = self._ascent
-        cells = self._cells
-        def_bg = self._info.bg
+            cols, rows = self._info.cols, self._info.rows
+            if len(self._cells) < cols * rows:
+                painter.fillRect(self.boundingRect(), self._bg)
+                return
 
-        painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            bg = self._cached_color(self._info.bg)
+            painter.fillRect(self.boundingRect(), bg)
 
-        # 1. Backgrounds (only for non-default cells, run-length merged)
-        for r in range(rows):
-            c = 0
-            row_idx = r * cols
-            y = y0 + r * h
-            while c < cols:
-                bg_val = cells[row_idx + c].bg
-                if bg_val == def_bg:
-                    c += 1
-                    continue
-                start_c = c
-                while c < cols and cells[row_idx + c].bg == bg_val:
-                    c += 1
-                painter.fillRect(QRectF(x0 + start_c * w, y, (c - start_c) * w, h), _rgb(bg_val))
+            x0, y0 = self._padding, self._padding
+            w, h = self._cell_w, self._cell_h
+            ascent = self._ascent
+            cells = self._cells
+            fonts = self._fonts
+            def_bg = self._info.bg
+            has_focus = self._has_focus
+            c_col, c_row = self._info.cursor_col, self._info.cursor_row
+            cursor_color_val = self._info.cursor_color
+            cursor_text_val = self._info.cursor_text
 
-        # 2. Text Glyphs
-        for r in range(rows):
-            row_idx = r * cols
-            last_col = cols - 1
-            while last_col >= 0 and cells[row_idx + last_col].ch <= 32:
-                last_col -= 1
-            if last_col < 0:
-                continue
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
-            y = y0 + r * h
-            base_y = y + ascent
-            c = 0
-            while c <= last_col:
-                cell = cells[row_idx + c]
-                ch = cell.ch
-                flags = cell.flags
-                if (flags & CF_SPACER) or ch <= 32:
-                    c += 1
-                    continue
-
-                if ch < 127 and not (flags & (CF_HAS_EXTRA | CF_WIDE)):
-                    fgc = cell.fg
-                    style = flags & (CF_BOLD | CF_ITALIC)
-                    font_idx = (1 if (style & CF_BOLD) else 0) | (2 if (style & CF_ITALIC) else 0)
-                    start_c = c
-                    run_chars = []
-                    while c <= last_col:
-                        d = cells[row_idx + c]
-                        if (d.flags & (CF_SPACER | CF_HAS_EXTRA | CF_WIDE)) or d.ch >= 127:
-                            break
-                        if d.ch <= 32:
-                            break
-                        if (d.fg != fgc or (d.flags & (CF_BOLD | CF_ITALIC)) != style):
-                            break
-                        run_chars.append(chr(d.ch))
+            # 1. Backgrounds (only for non-default cells, run-length merged)
+            for r in range(rows):
+                c = 0
+                row_idx = r * cols
+                y = y0 + r * h
+                while c < cols:
+                    bg_val = cells[row_idx + c].bg
+                    if bg_val == def_bg:
                         c += 1
-                    painter.setFont(self._fonts[font_idx])
-                    painter.setPen(_rgb(fgc))
-                    painter.drawText(QPointF(x0 + start_c * w, base_y), "".join(run_chars))
-                else:
-                    # Unicode or box-drawing character
-                    ch_w = 2 * w if (flags & CF_WIDE) else w
-                    painter.setFont(self._fonts[(1 if (flags & CF_BOLD) else 0) | (2 if (flags & CF_ITALIC) else 0)])
-                    painter.setPen(_rgb(cell.fg))
-                    painter.drawText(QPointF(x0 + c * w, base_y), chr(ch))
-                    c += 1
+                        continue
+                    start_c = c
+                    while c < cols and cells[row_idx + c].bg == bg_val:
+                        c += 1
+                    painter.fillRect(QRectF(x0 + start_c * w, y, (c - start_c) * w, h), self._cached_color(bg_val))
 
-        # 3. Smooth Gliding Cursor
-        if self._cur_initialized and self._cur_move_start > 0.0:
-            self._advance_cursor_motion(time.perf_counter())
-        c_col, c_row = self._info.cursor_col, self._info.cursor_row
-        if 0 <= c_row < rows and 0 <= c_col < cols:
-            cur_x = self._cur_render_x if self._cur_initialized else (x0 + c_col * w)
-            cur_y = self._cur_render_y if self._cur_initialized else (y0 + c_row * h)
-            cur_w = w
-            cur_rect = QRectF(cur_x, cur_y, cur_w, h)
-            ccol = _rgb(self._info.cursor_color)
-            if not self.hasActiveFocus():
-                painter.setPen(QPen(ccol, 1))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawRect(cur_rect.adjusted(0.5, 0.5, -0.5, -0.5))
-            elif self._cursor_opacity > 0.02:
-                ccol.setAlphaF(self._cursor_opacity)
-                shape = self._cursor_shape_int()
-                bw = max(4.0, self._cursor_width)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-                if shape == 1:
-                    painter.fillRect(QRectF(cur_rect.x(), cur_rect.bottom() - bw, cur_rect.width(), bw), ccol)
-                elif shape == 2:
-                    # Clean vertical beam with comfortable, distinct thickness and subtle soft radius
-                    r_rect = QRectF(cur_rect.x(), cur_rect.y(), bw, cur_rect.height())
-                    painter.setPen(Qt.PenStyle.NoPen)
-                    painter.setBrush(ccol)
-                    painter.drawRoundedRect(r_rect, 1.2, 1.2)
+            # 2. Text Glyphs
+            for r in range(rows):
+                row_idx = r * cols
+                last_col = cols - 1
+                while last_col >= 0 and cells[row_idx + last_col].ch <= 32:
+                    last_col -= 1
+                if last_col < 0:
+                    continue
+
+                y = y0 + r * h
+                base_y = y + ascent
+                c = 0
+                while c <= last_col:
+                    cell = cells[row_idx + c]
+                    ch = cell.ch
+                    flags = cell.flags
+                    if (flags & CF_SPACER) or ch <= 32:
+                        c += 1
+                        continue
+
+                    if ch < 127 and not (flags & (CF_HAS_EXTRA | CF_WIDE)):
+                        fgc = cell.fg
+                        style = flags & (CF_BOLD | CF_ITALIC)
+                        font_idx = (1 if (style & CF_BOLD) else 0) | (2 if (style & CF_ITALIC) else 0)
+                        start_c = c
+                        run_chars = []
+                        while c <= last_col:
+                            d = cells[row_idx + c]
+                            if (d.flags & (CF_SPACER | CF_HAS_EXTRA | CF_WIDE)) or d.ch >= 127:
+                                break
+                            if d.ch <= 32:
+                                break
+                            if (d.fg != fgc or (d.flags & (CF_BOLD | CF_ITALIC)) != style):
+                                break
+                            run_chars.append(chr(d.ch))
+                            c += 1
+                        painter.setFont(fonts[font_idx])
+                        painter.setPen(self._cached_pen(fgc))
+                        painter.drawText(QPointF(x0 + start_c * w, base_y), "".join(run_chars))
+                    else:
+                        painter.setFont(fonts[(1 if (flags & CF_BOLD) else 0) | (2 if (flags & CF_ITALIC) else 0)])
+                        painter.setPen(self._cached_pen(cell.fg))
+                        painter.drawText(QPointF(x0 + c * w, base_y), chr(ch))
+                        c += 1
+
+            # 3. Smooth Gliding Cursor (never touch QTimers or QQuickItem focus from QSGRenderThread paint())
+            if 0 <= c_row < rows and 0 <= c_col < cols:
+                if self._cur_initialized:
+                    cur_x, cur_y = self._sample_cursor_motion(time.perf_counter())
                 else:
-                    painter.fillRect(cur_rect, ccol)
-                    cell = cells[c_row * cols + c_col]
-                    if cell.ch > 32 and not (cell.flags & CF_SPACER):
-                        tcol = _rgb(self._info.cursor_text)
-                        tcol.setAlphaF(self._cursor_opacity)
-                        painter.setFont(self._fonts[0])
-                        painter.setPen(tcol)
-                        painter.drawText(QPointF(cur_rect.x(), cur_rect.y() + ascent), chr(cell.ch))
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+                    cur_x, cur_y = x0 + c_col * w, y0 + c_row * h
+                cur_w = w
+                cur_rect = QRectF(cur_x, cur_y, cur_w, h)
+                ccol = QColor(self._cached_color(cursor_color_val))
+                if not has_focus:
+                    painter.setPen(QPen(ccol, 1))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.drawRect(cur_rect.adjusted(0.5, 0.5, -0.5, -0.5))
+                elif self._cursor_opacity > 0.02:
+                    ccol.setAlphaF(self._cursor_opacity)
+                    shape = self._cursor_shape_int()
+                    bw = max(4.0, self._cursor_width)
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                    if shape == 1:
+                        painter.fillRect(QRectF(cur_rect.x(), cur_rect.bottom() - bw, cur_rect.width(), bw), ccol)
+                    elif shape == 2:
+                        r_rect = QRectF(cur_rect.x(), cur_rect.y(), bw, cur_rect.height())
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(ccol)
+                        painter.drawRoundedRect(r_rect, 1.2, 1.2)
+                    else:
+                        painter.fillRect(cur_rect, ccol)
+                        cell = cells[c_row * cols + c_col]
+                        if cell.ch > 32 and not (cell.flags & CF_SPACER):
+                            tcol = QColor(self._cached_color(cursor_text_val))
+                            tcol.setAlphaF(self._cursor_opacity)
+                            painter.setFont(fonts[0])
+                            painter.setPen(tcol)
+                            painter.drawText(QPointF(cur_rect.x(), cur_rect.y() + ascent), chr(cell.ch))
+                    painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
 
     # ---- Input Events ----
 
@@ -1091,6 +1317,28 @@ class Terminal(QQuickPaintedItem):
             self.copy()
             e.accept()
             return
+        if m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_C and self._info.has_selection:
+            self.copy()
+            self.clearSelection()
+            e.accept()
+            return
+        if self._output_only:
+            if m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_C:
+                self.interruptRequested.emit()
+                e.accept()
+            else:
+                e.ignore()
+            return
+        if self._native_cmd_running:
+            if m == Qt.KeyboardModifier.ControlModifier and k == Qt.Key.Key_C:
+                if self._native_cancel is not None:
+                    try:
+                        self._native_cancel.cancel()
+                    except Exception:
+                        pass
+                self.feedText("^C\r\n")
+            e.accept()
+            return
         if (m == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier) and k == Qt.Key.Key_V) or (m == Qt.KeyboardModifier.ShiftModifier and k == Qt.Key.Key_Insert):
             self.paste()
             e.accept()
@@ -1101,6 +1349,10 @@ class Terminal(QQuickPaintedItem):
             return
 
         key = _map_qt_key(k)
+        if key == TK_ENTER and (m & ~Qt.KeyboardModifier.KeypadModifier) == Qt.KeyboardModifier.NoModifier:
+            if self._try_intercept_prompt_command():
+                e.accept()
+                return
         mods = self._mods_of(m)
         text = e.text()
         base = 0
@@ -1175,6 +1427,7 @@ class Terminal(QQuickPaintedItem):
 
     def focusInEvent(self, e):
         super().focusInEvent(e)
+        self._has_focus = True
         if self._term and _termcore:
             _termcore.term_focus(self._term, 1)
         self._cursor_on = True
@@ -1186,6 +1439,7 @@ class Terminal(QQuickPaintedItem):
 
     def focusOutEvent(self, e):
         super().focusOutEvent(e)
+        self._has_focus = False
         if self._term and _termcore:
             _termcore.term_focus(self._term, 0)
         self._cursor_opacity = 0.0

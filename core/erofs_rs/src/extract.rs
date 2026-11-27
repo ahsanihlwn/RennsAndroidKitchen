@@ -16,6 +16,39 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::time::{Duration, UNIX_EPOCH};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SymlinkMode {
+    /// Cygwin UTF-16LE `!<symlink>\xff\xfe` + `FILE_ATTRIBUTE_SYSTEM` on Windows; OS symlink on Unix.
+    #[default]
+    Auto,
+    /// Always emit Cygwin UTF-16LE symlinks (`!<symlink>\xff\xfe`), compatible with Windows ROM kitchens.
+    Cygwin,
+    /// Always create OS-native symlinks (`symlink_file` on Windows, `symlink` on Unix).
+    Native,
+}
+
+impl SymlinkMode {
+    pub fn parse(s: &str) -> Result<Self> {
+        match s.to_ascii_lowercase().as_str() {
+            "auto" => Ok(Self::Auto),
+            "cygwin" => Ok(Self::Cygwin),
+            "native" | "os" => Ok(Self::Native),
+            other => Err(ErofsError::InvalidArg(format!(
+                "invalid symlink mode '{other}' (expected auto|cygwin|native)"
+            ))),
+        }
+    }
+
+    fn effective_cygwin(self) -> bool {
+        match self {
+            Self::Auto => cfg!(windows),
+            Self::Cygwin => true,
+            Self::Native => false,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ExtractOptions {
@@ -27,6 +60,7 @@ pub struct ExtractOptions {
     pub write_configs: bool,
     pub overwrite: bool,
     pub verify_digest: bool,
+    pub symlink_mode: SymlinkMode,
     pub threads: usize,
     pub quiet: bool,
 }
@@ -92,6 +126,28 @@ pub fn safe_dest_path(dest_dir: &Path, internal_path: &str) -> Result<PathBuf> {
 
 /// Extract an EROFS image (or target subset) into `opts.out_dir`.
 pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractReport> {
+    extract_image_with_progress(img, opts, |_, _| {})
+}
+
+fn emit_monotonic<F: Fn(u8, &str)>(last: &Mutex<u8>, cb: &F, pct: u8, stage: &str) {
+    let clamped = pct.min(100);
+    let mut guard = last.lock().unwrap();
+    if clamped > *guard || clamped == 0 {
+        *guard = clamped.max(*guard);
+        cb(clamped, stage);
+    }
+}
+
+pub fn extract_image_with_progress<F>(
+    img: &ErofsImage,
+    opts: &ExtractOptions,
+    on_progress: F,
+) -> Result<ExtractReport>
+where
+    F: Fn(u8, &str) + Sync,
+{
+    let last_pct = Mutex::new(0u8);
+    emit_monotonic(&last_pct, &on_progress, 1, "Scanning EROFS image");
     let is_targeted = !opts.targets.is_empty();
 
     let mut nodes: Vec<FileNode> = if is_targeted {
@@ -132,6 +188,7 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
     };
 
     let configs = if opts.write_configs || opts.config_only {
+        emit_monotonic(&last_pct, &on_progress, 6, "Writing Android configs");
         Some(write_android_configs(
             img,
             &nodes,
@@ -145,6 +202,7 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
     };
 
     if opts.config_only {
+        emit_monotonic(&last_pct, &on_progress, 100, "Done");
         return Ok(ExtractReport {
             extract_dir: extract_dir.display().to_string(),
             config_dir: Some(config_dir.display().to_string()),
@@ -169,45 +227,9 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
 
     fs::create_dir_all(&extract_dir)?;
 
-    // Detect Windows case-insensitive collisions & partition dirs vs files/symlinks/hardlinks.
-    let mut dir_nodes: Vec<&FileNode> = Vec::new();
-    let mut primary_non_dirs: Vec<&FileNode> = Vec::new();
-    let mut hardlink_pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
-    let mut hardlink_first: HashMap<u64, PathBuf> = HashMap::new();
-    let mut seen_out: HashMap<String, String> = HashMap::new();
-    let mut collision_warnings: Vec<String> = Vec::new();
-
-    for n in &nodes {
-        if n.path == "/" {
-            continue;
-        }
-        let dst = safe_dest_path(&extract_dir, &n.path)?;
-        #[cfg(windows)]
-        let key = dst.to_string_lossy().to_ascii_lowercase();
-        #[cfg(not(windows))]
-        let key = dst.to_string_lossy().into_owned();
-
-        if let Some(prev) = seen_out.insert(key, n.path.clone()) {
-            if prev != n.path {
-                collision_warnings.push(format!(
-                    "case/sanitization collision on host FS: '{}' vs '{}' (merging/overwriting)",
-                    prev, n.path
-                ));
-            }
-        }
-
-        if n.is_dir {
-            dir_nodes.push(n);
-        } else if !n.is_link && n.nlink > 1 {
-            if let Some(src_path) = hardlink_first.get(&n.nid) {
-                hardlink_pairs.push((src_path.clone(), dst));
-            } else {
-                hardlink_first.insert(n.nid, dst);
-                primary_non_dirs.push(n);
-            }
-        } else {
-            primary_non_dirs.push(n);
-        }
+    let mut case_sensitive_dirs: HashSet<PathBuf> = HashSet::new();
+    if enable_ntfs_case_sensitive(&extract_dir) {
+        case_sensitive_dirs.insert(extract_dir.clone());
     }
 
     let dirs_created = AtomicUsize::new(0);
@@ -217,23 +239,96 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
     let hardlinks_created = AtomicUsize::new(0);
     let skipped_existing = AtomicUsize::new(0);
     let bytes_written = AtomicU64::new(0);
-    let errors: Mutex<Vec<String>> = Mutex::new(collision_warnings);
-    let skipped_links_log: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+    let mut initial_errors: Vec<String> = Vec::new();
 
-    // 1. Create all directories sequentially in sorted parent-first order.
-    for d in &dir_nodes {
-        let dst = safe_dest_path(&extract_dir, &d.path)?;
-        if let Err(e) = fs::create_dir_all(&dst) {
-            errors
-                .lock()
-                .unwrap()
-                .push(format!("mkdir {}: {e}", d.path));
+    // 1. Create all directories sequentially parent-first, enabling NTFS case-sensitivity while empty.
+    emit_monotonic(&last_pct, &on_progress, 10, "Creating directories");
+    let total_dirs = nodes.iter().filter(|n| n.path != "/" && n.is_dir).count().max(1);
+    let mut dir_idx = 0usize;
+    for n in &nodes {
+        if n.path == "/" || !n.is_dir {
+            continue;
+        }
+        dir_idx += 1;
+        let pct = 10 + ((dir_idx * 10) / total_dirs).min(10) as u8;
+        emit_monotonic(&last_pct, &on_progress, pct, "Creating directories");
+        let dst = safe_dest_path(&extract_dir, &n.path)?;
+        if let Err(e) = create_dir_all_case_sensitive(&dst, &extract_dir, &mut case_sensitive_dirs)
+        {
+            initial_errors.push(format!("mkdir {}: {e}", n.path));
         } else {
             dirs_created.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    // 2. Extract regular files and symlinks in parallel using Rayon.
+    // 2. Partition non-directory nodes vs hardlinks and detect any remaining host-FS collisions.
+    let mut primary_non_dirs: Vec<&FileNode> = Vec::new();
+    let mut sequential_non_dirs: Vec<&FileNode> = Vec::new();
+    let mut hardlink_pairs: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut hardlink_first: HashMap<u64, PathBuf> = HashMap::new();
+    let mut seen_out: HashMap<String, String> = HashMap::new();
+
+    for n in &nodes {
+        if n.path == "/" || n.is_dir {
+            continue;
+        }
+        let dst = safe_dest_path(&extract_dir, &n.path)?;
+        let parent_cs = dst
+            .parent()
+            .map(|p| case_sensitive_dirs.contains(p))
+            .unwrap_or(false);
+        #[cfg(windows)]
+        let key = if parent_cs {
+            dst.to_string_lossy().into_owned()
+        } else {
+            dst.to_string_lossy().to_ascii_lowercase()
+        };
+        #[cfg(not(windows))]
+        let key = {
+            let _ = parent_cs;
+            dst.to_string_lossy().into_owned()
+        };
+
+        let is_collision = if let Some(prev) = seen_out.insert(key, n.path.clone()) {
+            if prev != n.path {
+                initial_errors.push(format!(
+                    "case/sanitization collision on host FS: '{}' vs '{}' (merging/overwriting)",
+                    prev, n.path
+                ));
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !n.is_link && n.nlink > 1 {
+            if let Some(src_path) = hardlink_first.get(&n.nid) {
+                hardlink_pairs.push((src_path.clone(), dst));
+            } else {
+                hardlink_first.insert(n.nid, dst);
+                if is_collision {
+                    sequential_non_dirs.push(n);
+                } else {
+                    primary_non_dirs.push(n);
+                }
+            }
+        } else if is_collision {
+            sequential_non_dirs.push(n);
+        } else {
+            primary_non_dirs.push(n);
+        }
+    }
+
+    let errors: Mutex<Vec<String>> = Mutex::new(initial_errors);
+    let skipped_links_log: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+    let use_cygwin_symlinks = opts.symlink_mode.effective_cygwin();
+    let total_extract_items = (primary_non_dirs.len() + sequential_non_dirs.len()).max(1);
+    let done_extract_items = AtomicUsize::new(0);
+    emit_monotonic(&last_pct, &on_progress, 22, "Extracting files");
+
+    // 3. Extract regular files and symlinks in parallel using Rayon.
     let worker_fn = |n: &&FileNode| {
         let dst = match safe_dest_path(&extract_dir, &n.path) {
             Ok(p) => p,
@@ -246,12 +341,17 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
             let _ = fs::create_dir_all(par);
         }
 
-        if dst.symlink_metadata().is_ok() {
+        if let Ok(existing) = dst.symlink_metadata() {
             if !opts.overwrite {
                 skipped_existing.fetch_add(1, Ordering::Relaxed);
                 return;
             }
-            let _ = fs::remove_file(&dst);
+            clear_restrictive_attrs(&dst);
+            if existing.is_dir() {
+                let _ = fs::remove_dir_all(&dst);
+            } else {
+                let _ = fs::remove_file(&dst);
+            }
         }
 
         let inode = match img.read_inode(n.nid) {
@@ -277,7 +377,12 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
                             return;
                         }
                     }
-                    match File::create(&dst).and_then(|mut f| f.write_all(&data)) {
+                    let write_res = File::create(&dst).and_then(|mut f| {
+                        f.write_all(&data)?;
+                        let _ = f.set_modified(UNIX_EPOCH + Duration::from_secs(inode.mtime));
+                        Ok(())
+                    });
+                    match write_res {
                         Ok(()) => {
                             apply_unix_permissions(&dst, inode.mode);
                             bytes_written.fetch_add(data.len() as u64, Ordering::Relaxed);
@@ -300,7 +405,12 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
             },
             FT_SYMLINK => {
                 let target = n.target.as_deref().unwrap_or("");
-                if create_symlink(target, &dst).is_ok() {
+                let link_res = if use_cygwin_symlinks {
+                    create_cygwin_symlink(target, &dst)
+                } else {
+                    create_native_symlink(target, &dst)
+                };
+                if link_res.is_ok() {
                     symlinks_created.fetch_add(1, Ordering::Relaxed);
                 } else {
                     symlinks_skipped.fetch_add(1, Ordering::Relaxed);
@@ -319,6 +429,9 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
                 // recorded cleanly in fs_config/file_contexts.
             }
         }
+        let done = done_extract_items.fetch_add(1, Ordering::Relaxed) + 1;
+        let pct = 22 + ((done * 72) / total_extract_items).min(72) as u8;
+        emit_monotonic(&last_pct, &on_progress, pct, "Extracting files");
     };
 
     if opts.threads == 1 {
@@ -332,17 +445,20 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
     } else {
         primary_non_dirs.par_iter().for_each(worker_fn);
     }
+    sequential_non_dirs.iter().for_each(worker_fn);
 
-    // 3. Create hardlinks after primary targets exist.
+    // 4. Create hardlinks after primary targets exist.
+    emit_monotonic(&last_pct, &on_progress, 95, "Finalizing hardlinks");
     for (src, dst) in hardlink_pairs {
         if let Some(par) = dst.parent() {
             let _ = fs::create_dir_all(par);
         }
-        if dst.exists() {
+        if dst.symlink_metadata().is_ok() {
             if !opts.overwrite {
                 skipped_existing.fetch_add(1, Ordering::Relaxed);
                 continue;
             }
+            clear_restrictive_attrs(&dst);
             let _ = fs::remove_file(&dst);
         }
         match fs::hard_link(&src, &dst).or_else(|_| fs::copy(&src, &dst).map(|_| ())) {
@@ -378,6 +494,8 @@ pub fn extract_image(img: &ErofsImage, opts: &ExtractOptions) -> Result<ExtractR
             }
         }
     }
+
+    emit_monotonic(&last_pct, &on_progress, 100, "Done");
 
     Ok(ExtractReport {
         extract_dir: extract_dir.display().to_string(),
@@ -442,11 +560,218 @@ fn apply_unix_permissions(path: &Path, mode: u16) {
 fn apply_unix_permissions(_path: &Path, _mode: u16) {}
 
 #[cfg(unix)]
-fn create_symlink(target: &str, dst: &Path) -> std::io::Result<()> {
+fn create_native_symlink(target: &str, dst: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, dst)
 }
 
 #[cfg(windows)]
-fn create_symlink(target: &str, dst: &Path) -> std::io::Result<()> {
+fn create_native_symlink(target: &str, dst: &Path) -> std::io::Result<()> {
     std::os::windows::fs::symlink_file(target, dst)
 }
+
+fn create_cygwin_symlink(target: &str, dst: &Path) -> std::io::Result<()> {
+    clear_restrictive_attrs(dst);
+    let mut payload = Vec::with_capacity(12 + target.len() * 2 + 2);
+    payload.extend_from_slice(b"!<symlink>\xFF\xFE");
+    for code_unit in target.encode_utf16() {
+        payload.extend_from_slice(&code_unit.to_le_bytes());
+    }
+    payload.extend_from_slice(&[0u8, 0u8]);
+    let mut f = File::create(dst)?;
+    f.write_all(&payload)?;
+    drop(f);
+    set_cygwin_system_attr(dst);
+    Ok(())
+}
+
+fn create_dir_all_case_sensitive(
+    dst: &Path,
+    stop_root: &Path,
+    tracked: &mut HashSet<PathBuf>,
+) -> std::io::Result<()> {
+    let mut missing = Vec::new();
+    let mut cur = dst.to_path_buf();
+    while !cur.exists() {
+        missing.push(cur.clone());
+        if cur == stop_root {
+            break;
+        }
+        let Some(p) = cur.parent() else {
+            break;
+        };
+        cur = p.to_path_buf();
+    }
+    for dir in missing.into_iter().rev() {
+        if let Err(e) = fs::create_dir(&dir) {
+            if e.kind() != std::io::ErrorKind::AlreadyExists {
+                return Err(e);
+            }
+        }
+        if enable_ntfs_case_sensitive(&dir) {
+            tracked.insert(dir);
+        }
+    }
+    if !tracked.contains(dst) && enable_ntfs_case_sensitive(dst) {
+        tracked.insert(dst.to_path_buf());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn to_wide_null(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
+    let raw: Vec<u16> = path.as_os_str().encode_wide().collect();
+    // Prepend \\?\ for long paths on drive-letter absolute paths if needed.
+    if raw.len() > 240 && !raw.starts_with(&[b'\\' as u16, b'\\' as u16]) {
+        if raw.get(1) == Some(&(b':' as u16)) {
+            let mut out = Vec::with_capacity(4 + raw.len() + 1);
+            out.extend_from_slice(&[b'\\' as u16, b'\\' as u16, b'?' as u16, b'\\' as u16]);
+            for u in raw {
+                out.push(if u == b'/' as u16 { b'\\' as u16 } else { u });
+            }
+            out.push(0);
+            return out;
+        }
+    }
+    let mut out = raw;
+    out.push(0);
+    out
+}
+
+#[cfg(windows)]
+mod win_fs {
+    use core::ffi::c_void;
+    use std::path::Path;
+
+    const FILE_READ_ATTRIBUTES: u32 = 0x0000_0080;
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+    const FILE_SHARE_READ: u32 = 1;
+    const FILE_SHARE_WRITE: u32 = 2;
+    const FILE_SHARE_DELETE: u32 = 4;
+    const OPEN_EXISTING: u32 = 3;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    const INVALID_HANDLE: *mut c_void = -1isize as *mut c_void;
+    const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
+    const FILE_ATTRIBUTE_NORMAL: u32 = 0x0000_0080;
+    const FILE_CASE_SENSITIVE_INFORMATION: i32 = 71;
+    const FILE_CS_FLAG_CASE_SENSITIVE_DIR: u32 = 1;
+    const STATUS_DIRECTORY_NOT_EMPTY: i32 = 0xC000_0101u32 as i32;
+
+    #[repr(C)]
+    struct IoStatusBlock {
+        status_or_ptr: usize,
+        information: usize,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn CreateFileW(
+            file_name: *const u16,
+            desired_access: u32,
+            share_mode: u32,
+            security_attributes: *mut c_void,
+            creation_disposition: u32,
+            flags_and_attributes: u32,
+            template_file: *mut c_void,
+        ) -> *mut c_void;
+        fn CloseHandle(handle: *mut c_void) -> i32;
+        fn SetFileAttributesW(file_name: *const u16, file_attributes: u32) -> i32;
+    }
+
+    #[link(name = "ntdll")]
+    unsafe extern "system" {
+        fn NtSetInformationFile(
+            file_handle: *mut c_void,
+            io_status_block: *mut IoStatusBlock,
+            file_information: *mut c_void,
+            length: u32,
+            file_information_class: i32,
+        ) -> i32;
+        fn NtQueryInformationFile(
+            file_handle: *mut c_void,
+            io_status_block: *mut IoStatusBlock,
+            file_information: *mut c_void,
+            length: u32,
+            file_information_class: i32,
+        ) -> i32;
+    }
+
+    pub fn enable_ntfs_case_sensitive(dir: &Path) -> bool {
+        let wide = super::to_wide_null(dir);
+        unsafe {
+            let h = CreateFileW(
+                wide.as_ptr(),
+                FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                core::ptr::null_mut(),
+                OPEN_EXISTING,
+                FILE_FLAG_BACKUP_SEMANTICS,
+                core::ptr::null_mut(),
+            );
+            if h == INVALID_HANDLE {
+                return false;
+            }
+            let mut iosb = IoStatusBlock {
+                status_or_ptr: 0,
+                information: 0,
+            };
+            let mut flags = FILE_CS_FLAG_CASE_SENSITIVE_DIR;
+            let status = NtSetInformationFile(
+                h,
+                &mut iosb,
+                (&mut flags as *mut u32).cast::<c_void>(),
+                4,
+                FILE_CASE_SENSITIVE_INFORMATION,
+            );
+            let ok = if status == 0 {
+                true
+            } else if status == STATUS_DIRECTORY_NOT_EMPTY {
+                let mut cur_flags = 0u32;
+                let mut qiosb = IoStatusBlock {
+                    status_or_ptr: 0,
+                    information: 0,
+                };
+                let qstatus = NtQueryInformationFile(
+                    h,
+                    &mut qiosb,
+                    (&mut cur_flags as *mut u32).cast::<c_void>(),
+                    4,
+                    FILE_CASE_SENSITIVE_INFORMATION,
+                );
+                qstatus == 0 && (cur_flags & FILE_CS_FLAG_CASE_SENSITIVE_DIR) != 0
+            } else {
+                false
+            };
+            CloseHandle(h);
+            ok
+        }
+    }
+
+    pub fn clear_restrictive_attrs(path: &Path) {
+        let wide = super::to_wide_null(path);
+        unsafe {
+            SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_NORMAL);
+        }
+    }
+
+    pub fn set_cygwin_system_attr(path: &Path) {
+        let wide = super::to_wide_null(path);
+        unsafe {
+            SetFileAttributesW(wide.as_ptr(), FILE_ATTRIBUTE_SYSTEM);
+        }
+    }
+}
+
+#[cfg(windows)]
+use win_fs::{clear_restrictive_attrs, enable_ntfs_case_sensitive, set_cygwin_system_attr};
+
+#[cfg(not(windows))]
+fn enable_ntfs_case_sensitive(_dir: &Path) -> bool {
+    true
+}
+
+#[cfg(not(windows))]
+fn clear_restrictive_attrs(_path: &Path) {}
+
+#[cfg(not(windows))]
+fn set_cygwin_system_attr(_path: &Path) {}

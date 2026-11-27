@@ -142,7 +142,7 @@ RakCard {
             from: 0; to: 1
             duration: 1300
             loops: Animation.Infinite
-            running: deletionEffect.visible && card.model.settings.animations
+            running: deletionEffect.visible
         }
 
         // Top border light runner + inward impact
@@ -246,7 +246,7 @@ RakCard {
             from: 0; to: 1
             duration: 1300
             loops: Animation.Infinite
-            running: openEffect.visible && card.model.settings.animations
+            running: openEffect.visible
         }
 
         // Top border light runner + inward impact

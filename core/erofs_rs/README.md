@@ -9,6 +9,7 @@ Licensed under the permissive **MIT License**.
 ## Features
 
 - **Android ROM Kitchen Ready**: Multi-threaded unpack emitting standard AOSP `fs_config`, SELinux `file_contexts`, and `fs_options` metadata.
+- **Windows Unprivileged Compatibility**: Automatic NTFS per-directory case-sensitivity (preserving case-colliding filenames on extract) and unprivileged Cygwin UTF-16LE symlink support (`--symlink-mode auto|cygwin|native`) on unpack and pack.
 - **Multiple Compression Engines**: Supports `none`, `lz4`, `lz4hc`, `deflate`, `zstd`, and `lzma` (MicroLZMA) with configurable cluster sizes (4K, 16K, etc.).
 - **Direct Image Editing**: Modify files (`edit write`), file modes (`edit chmod`), SELinux contexts (`edit selinux`), or delete entries (`edit rm`) directly inside the image without unpacking.
 - **In-Place Compaction**: Reclaim internal slack and relocate metadata blocks in-place (`compact`).
@@ -22,7 +23,7 @@ Licensed under the permissive **MIT License**.
 
 ## Build
 
-Requirements: Rust 1.80+ (MSRV)
+Requirements: Rust 1.85+ (Edition 2024)
 
 ```bash
 cargo build --release
@@ -61,11 +62,14 @@ erofs-rs read product.img /etc/build.prop --check-text --json
 
 ### Unpack & Metadata Generation
 
-Multi-threaded extraction with hardlink deduplication, Windows-safe path handling, and complete Android ROM kitchen metadata export:
+Multi-threaded extraction with hardlink deduplication, NTFS per-directory case-sensitivity & unprivileged Cygwin symlinks on Windows (`--symlink-mode auto|cygwin|native`), and complete Android ROM kitchen metadata export:
 
 ```bash
 # Extract full partition (writes extracted files + config/ directory)
 erofs-rs unpack product.img -o ./out --overwrite
+
+# Explicitly select symlink format (auto = Cygwin on Windows, native on Unix)
+erofs-rs unpack product.img -o ./out --symlink-mode cygwin --overwrite
 
 # Generate only metadata configs (fs_config, file_contexts, fs_options) without extracting files
 erofs-rs unpack product.img -o ./out --config-only
@@ -82,7 +86,7 @@ Generated metadata files in `<out>/config/`:
 
 ### Image Packing
 
-Build clean EROFS images from a directory with full metadata and compression control:
+Build clean EROFS images from a directory with hardlink preservation, Cygwin/native symlink support, automatic `--mount-point` inference from Android configs, and full compression control:
 
 ```bash
 # Pack with LZ4HC and Android configs

@@ -54,9 +54,10 @@ class DirectoryView:
             for child in node.children:items[0].appendRow(self.items(child))
         elif self.owner._may_have_children(node) and not node.loaded:self.ensure_dummy(node)
         return items
-    def ensure_dummy(self,node):
+    def ensure_dummy(self,node,*,allow_after_up=False):
         parent=self.parent_item(node)
-        if parent.rowCount():return
+        max_rows=1 if allow_after_up else 0
+        if parent.rowCount()>max_rows:return
         dummy=self.owner._new_view_dummy(node)
         parent.appendRow(self.items(dummy,dummy=True));node.view_dummy=True
     def clear_dummy(self,node):
@@ -71,6 +72,7 @@ class DirectoryView:
         node.view_dummy=False
     def append(self,parent,nodes):
         if not self.enabled:return
+        if nodes:self.clear_dummy(parent)
         target=self.parent_item(parent)
         if nodes:
             rows=[self.items(node) for node in nodes]
@@ -82,10 +84,10 @@ class DirectoryView:
                 for row,items in enumerate(rows,first):
                     for column,item in enumerate(items):target.setChild(row,column,item)
             self.model.dataChanged.emit(target.child(first,0).index(),target.child(first+len(rows)-1,2).index(),[])
-        if nodes:self.clear_dummy(parent)
     def insert(self,parent,row,node):
         if not self.enabled:return
-        self.parent_item(parent).insertRow(row+int(parent.view_dummy),self.items(node));self.clear_dummy(parent)
+        self.clear_dummy(parent)
+        self.parent_item(parent).insertRow(row,self.items(node))
     def remove(self,parent,row):
         if not self.enabled:return
         target=self.parent_item(parent)

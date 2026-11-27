@@ -18,11 +18,15 @@ def text_of(content):
 
 class Protocol:
     interruptible = True
+    supports_steer = False
 
-    def __init__(self, send, emit, cwd, instructions, session='', model=''):
+    def __init__(self, send, emit, cwd, instructions, session='', model='', *, lazy_thread=False):
         self.send=send;self.emit=emit;self.cwd=cwd;self.instructions=instructions
         self.session=session;self.model=model;self.turn='';self.serial=0
-        self.pending={};self.requests={};self._part=0;self.effort=''
+        self.pending={};self.requests={};self._part=0;self.effort='';self.lazy_thread=lazy_thread
+
+    def steer(self, text, on_fallback=None):
+        if on_fallback: on_fallback(text)
 
     def event(self, kind, **fields): self.emit({'type':kind, **fields})
     def rpc(self, method, params, callback=None, *, optional=False, on_error=None):
@@ -54,7 +58,8 @@ class Protocol:
 
 
 class CodexProtocol(Protocol):
-    def __init__(self,*args,**kwargs):super().__init__(*args,**kwargs);self.items={}
+    supports_steer = True
+    def __init__(self,*args,**kwargs):super().__init__(*args,**kwargs);self.items={};self._pending_prompt=None
 
     def start(self):
         self.rpc('initialize',{'clientInfo':{'name':'renns_kitchen','title':'Renns Android Kitchen','version':'1.0.0'}},self._initialized)
@@ -83,6 +88,8 @@ class CodexProtocol(Protocol):
         if self.session:
             params=self._thread_params();params['threadId']=self.session
             self.rpc('thread/resume',params,self._thread,on_error=self._on_resume_error)
+        elif self.lazy_thread:
+            self.ready()
         else:
             self._start_thread()
 
@@ -96,14 +103,34 @@ class CodexProtocol(Protocol):
         access=result.get('sandbox',{}).get('type','configured')
         access={'workspaceWrite':'Workspace files','readOnly':'Read only','dangerFullAccess':'Full filesystem'}.get(access,access)
         self.event('policy',text='Approval: '+str(result.get('approvalPolicy','configured'))+' · Access: '+str(access))
+        if self._pending_prompt is not None:
+            pending=self._pending_prompt;self._pending_prompt=None
+            self.event('session',session=self.session,model=self.model)
+            self.prompt(pending)
+            return
         self.ready()
 
     def prompt(self, text):
+        if not self.session and self.lazy_thread:
+            self._pending_prompt=text
+            self._start_thread()
+            return
         params={'threadId':self.session,'input':[{'type':'text','text':text,'text_elements':[]}]}
         if self.model:params['model']=self.model
         if self.effort:params['effort']=self.effort
         def started(r):self.turn=r['turn']['id'];self.event('turn_started',turn=self.turn)
         self.rpc('turn/start',params,started)
+
+    def steer(self, text, on_fallback=None):
+        if not self.session or not self.turn:
+            if on_fallback: on_fallback(text)
+            return
+        def fallback(_msg, _raw):
+            if on_fallback:
+                on_fallback(text)
+                return True
+            return False
+        self.rpc('turn/steer',{'threadId':self.session,'expectedTurnId':self.turn,'input':[{'type':'text','text':text,'text_elements':[]}]},on_error=fallback)
 
     def interrupt(self):
         if self.turn:self.rpc('turn/interrupt',{'threadId':self.session,'turnId':self.turn},optional=True)
@@ -186,15 +213,23 @@ class AcpProtocol(Protocol):
         self.rpc('initialize',{'protocolVersion':1,'clientInfo':{'name':'renns_kitchen','version':'1.0.0'},
             'clientCapabilities':{'fs':{'readTextFile':False,'writeTextFile':False},'terminal':False}},self._initialized)
 
+    def _on_load_error(self,text,_raw):
+        if self.session:
+            self.session=''
+            self.event('notice',text='Previous ACP session could not be loaded ('+text+'). Started a new session.',resume_fallback=True)
+            self.rpc('session/new',{'cwd':self.cwd,'mcpServers':[]},self._session)
+            return True
+        return False
+
     def _initialized(self,result):
         self.capabilities=result.get('agentCapabilities',{})
         params={'cwd':self.cwd,'mcpServers':[]}
         if self.session and self.capabilities.get('loadSession'):
-            params['sessionId']=self.session;method='session/load'
+            params['sessionId']=self.session
+            self.rpc('session/load',params,self._session,on_error=self._on_load_error)
         else:
             if self.session:self.event('notice',text='This ACP backend cannot load the previous session. A new conversation was created.',resume_fallback=True)
-            method='session/new'
-        self.rpc(method,params,self._session)
+            self.rpc('session/new',params,self._session)
 
     def _session(self,result):
         self.session=result.get('sessionId',self.session);self._configuration(result)
@@ -296,6 +331,7 @@ class AcpProtocol(Protocol):
 
 
 class ClaudeProtocol(Protocol):
+    supports_steer = True
     def __init__(self,*args,**kwargs):
         super().__init__(*args,**kwargs)
         self.message_id='claude';self._turn_serial=0;self._thinking_blocks={};self._tool_blocks={}
@@ -324,6 +360,12 @@ class ClaudeProtocol(Protocol):
         self._streamed_text_messages.clear()
         self.send({'type':'user','session_id':self.session,'message':{'role':'user','content':text},'parent_tool_use_id':None})
         self.event('turn_started',turn=self.turn)
+
+    def steer(self,text,on_fallback=None):
+        if not self.session and not self.turn:
+            if on_fallback:on_fallback(text)
+            return
+        self.send({'type':'user','session_id':self.session,'message':{'role':'user','content':text},'parent_tool_use_id':None})
 
     def interrupt(self):self.control('interrupt')
     def set_model(self,model):

@@ -12,6 +12,18 @@ class ContentInputRegion(QObject):
         super().__init__(parent)
         self._item = None
         self._viewport = None
+        self._filter_installed = False
+
+    def _sync_filter(self):
+        want = self._item is not None and self._viewport is not None
+        if want == self._filter_installed:
+            return
+        if self._item is not None:
+            if want:
+                self._item.installEventFilter(self)
+            else:
+                self._item.removeEventFilter(self)
+        self._filter_installed = want and self._item is not None
 
     @Property(QQuickItem, notify=itemChanged)
     def item(self):
@@ -21,11 +33,11 @@ class ContentInputRegion(QObject):
     def item(self, value):
         if self._item is value:
             return
-        if self._item is not None:
+        if self._item is not None and self._filter_installed:
             self._item.removeEventFilter(self)
+            self._filter_installed = False
         self._item = value
-        if value is not None:
-            value.installEventFilter(self)
+        self._sync_filter()
         self.itemChanged.emit()
 
     @Property(QQuickItem, notify=viewportChanged)
@@ -36,6 +48,7 @@ class ContentInputRegion(QObject):
     def viewport(self, value):
         if self._viewport is not value:
             self._viewport = value
+            self._sync_filter()
             self.viewportChanged.emit()
 
     @Slot(QPointF, result=bool)

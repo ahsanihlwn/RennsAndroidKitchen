@@ -8,11 +8,17 @@ from ui.rows import RowsModel
 from core.file_types import TEXT_EXT,AUDIO_EXT,VIDEO_EXT,ARCHIVE_EXT
 
 IMAGE_EXT = (".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp", ".ico", ".tiff", ".tif", ".svg")
+MARKDOWN_EXT = (".md", ".markdown", ".mdown", ".mkd", ".mkdn")
+
+
+def is_markdown_path(path):
+    return os.path.splitext(str(path or ""))[1].lower() in MARKDOWN_EXT
 
 
 def viewer_kind(path):
     ext = os.path.splitext(path)[1].lower()
     if ext in IMAGE_EXT: return "image"
+    if ext in MARKDOWN_EXT: return "markdown"
     if ext in AUDIO_EXT: return "audio"
     if ext in VIDEO_EXT: return "video"
     if ext in (".ofp", ".ops", ".ozip", ".kdz", ".dz", ".cpb", ".pac") or os.path.basename(path).upper() == "UPDATE.APP":
@@ -57,7 +63,8 @@ def _inspect(spec):
         rows = format_hex_lines(read_hex_chunk(path, 0, 65536))
         return True, {"summary": str(header), "rows": rows}
     if kind == "elf":
-        from core.so_core import analyze_file, result_to_jsonable
+        from core.binary_core import analyze_file
+        from core.so_core import result_to_jsonable
         result = result_to_jsonable(analyze_file(path))
         return True, {"summary": str(result.get("header", {})), "rows": result.get("sections", [])}
     if kind == "payload":
@@ -105,9 +112,11 @@ class ViewerDocument(QObject):
             if ok:
                 self._summary = result.get("summary", "")
                 self._rows.replace([{**row, "key": str(index)} for index, row in enumerate(result.get("rows", []))], animate=False)
-            else: self._error = str(result)
+            else:
+                from core.command_context import failure_summary
+                self._error = failure_summary(result) or str(result)
             self.changed.emit()
-        self._jobs.submit("inspect", _inspect, (path, kind), finished)
+        self._jobs.submit("inspect", _inspect, (path, kind), finished, report_operation_errors=False)
         self.changed.emit()
 
     @Slot()

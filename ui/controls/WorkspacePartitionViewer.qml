@@ -53,4 +53,14 @@ Item {
             }
         }
     }
+    RakLabel {
+        anchors.centerIn: parent
+        visible: !document.busy && document.error.length > 0
+        width: Math.min(parent.width - 48, 520)
+        wrapMode: Text.WordWrap
+        horizontalAlignment: Text.AlignHCenter
+        color: viewer.c.FG_MUTED
+        font.pixelSize: 12
+        text: document.error
+    }
 }

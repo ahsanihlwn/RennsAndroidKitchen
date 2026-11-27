@@ -27,7 +27,8 @@ _HOME_CATEGORY = "android.intent.category.HOME"
 
 class ApkInfo:
     __slots__ = ("vpath", "host", "package", "shared_user_id", "permissions",
-                 "libraries", "overlay_target", "is_launcher", "error")
+                 "libraries", "overlay_target", "is_launcher", "cert_sha256",
+                 "declared_permissions", "components", "error")
 
     def __init__(self, vpath, host):
         self.vpath = vpath
@@ -38,6 +39,9 @@ class ApkInfo:
         self.libraries = []        # [(nama, required: bool)]
         self.overlay_target = ""
         self.is_launcher = False
+        self.cert_sha256 = ""
+        self.declared_permissions = {}
+        self.components = []       # [(tag, resolved_class_name)]
         self.error = ""
 
     @property
@@ -65,6 +69,8 @@ def _as_bool(value, default=True):
 
 def _zip_arg(src):
 
+    if callable(src):
+        src = src()
     if isinstance(src, (bytes, bytearray, memoryview)):
         return _io.BytesIO(src)
     return src
@@ -111,6 +117,21 @@ def read_apk(vpath, host):
         elif tag == "category":
             if attrs.get("name") == _HOME_CATEGORY:
                 info.is_launcher = True
+        elif tag in ("application", "service", "provider"):
+            n = attrs.get("name")
+            enabled = _as_bool(attrs.get("enabled"), True)
+            if enabled and isinstance(n, str) and n and not n.startswith("@") and len(info.components) < 64:
+                info.components.append((tag, n))
+
+    if info.package and info.components:
+        resolved = []
+        for ctag, cname in info.components:
+            if cname.startswith("."):
+                cname = info.package + cname
+            elif "." not in cname:
+                cname = f"{info.package}.{cname}"
+            resolved.append((ctag, cname))
+        info.components = resolved
 
     return info
 
@@ -262,7 +283,10 @@ def cert_available():
 
 def cert_fingerprint(host):
 
-
+    if callable(host):
+        host = host()
+    if host is None:
+        return None
     fp = _cert_from_signing_block(host)
     if fp is not None:
         return fp

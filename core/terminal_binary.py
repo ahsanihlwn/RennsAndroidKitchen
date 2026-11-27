@@ -12,14 +12,20 @@ def resolve_terminal_binary(bin_root: str, command_name: str):
     if not bin_root:
         return None
 
+    from core.native_tools import NATIVE_BUILTIN_PACKAGES, NATIVE_PLATFORM_TOOLS, is_native_tool
+
     cmd = command_name.lower()
     cmd_stem = os.path.splitext(cmd)[0]
     native_dir = get_native_cli_directory(bin_root)
-    if native_dir and os.path.isdir(native_dir):
+    if cmd_stem in NATIVE_PLATFORM_TOOLS and native_dir and os.path.isdir(native_dir):
         for ext in (".cmd", ".bat"):
             candidate = os.path.join(native_dir, f"{cmd_stem}{ext}")
             if os.path.isfile(candidate):
                 return candidate
+
+    # Never fall back to legacy .exe files for tools backed natively by rak_native.
+    if is_native_tool(cmd_stem):
+        return None
 
     pkg = os.path.join(bin_root, "package.json")
     if not os.path.isfile(pkg):
@@ -32,11 +38,15 @@ def resolve_terminal_binary(bin_root: str, command_name: str):
         return None
 
     for folder, meta in data.items():
+        if folder in NATIVE_BUILTIN_PACKAGES or folder == "erofs_env":
+            continue
         for b in meta.get("binaries", []):
             name = b.get("name", "")
+            if is_native_tool(name):
+                continue
             base = os.path.splitext(name)[0].lower()
 
-            if base == cmd:
+            if base == cmd_stem:
                 real = os.path.join(bin_root, folder, name)
                 if os.path.isfile(real):
                     return real
@@ -47,6 +57,8 @@ def resolve_terminal_binary(bin_root: str, command_name: str):
 def get_terminal_binary_directories(bin_root: str) -> list[str]:
     if not bin_root:
         return []
+
+    from core.native_tools import NATIVE_BUILTIN_PACKAGES
 
     native_dir = get_native_cli_directory(bin_root)
     if not os.path.isdir(bin_root) and not os.path.isdir(native_dir):
@@ -64,6 +76,8 @@ def get_terminal_binary_directories(bin_root: str) -> list[str]:
             with open(pkg, "r", encoding="utf-8") as f:
                 data = json.load(f)
             for folder in data.keys():
+                if folder in NATIVE_BUILTIN_PACKAGES or folder == "erofs_env":
+                    continue
                 sub = os.path.join(bin_root, folder)
                 if os.path.isdir(sub) and sub not in dirs:
                     dirs.append(sub)

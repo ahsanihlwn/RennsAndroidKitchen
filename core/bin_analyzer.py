@@ -121,6 +121,12 @@ def detect_binary_format(filepath: str, header_data: Optional[bytes] = None) -> 
         return info
 
     # ── 3. Device Tree Blob (DTB / DTBO) ──
+    if header_data[:4] == b"\xD7\xB7\xAB\x1E":
+        info["format"] = "Android DTBO Container"
+        info["vendor"] = "Google / AOSP"
+        info["category"] = "Hardware Device Tree"
+        info["description"] = "Android Device Tree Blob Overlay (DTBO) partition image."
+        return info
     if header_data[:4] == b"\xD0\x0D\xFE\xED":
         info["format"] = "Device Tree Blob (DTB)"
         info["vendor"] = "Linux Kernel / Device Tree"

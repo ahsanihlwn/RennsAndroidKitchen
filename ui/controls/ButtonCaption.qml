@@ -21,6 +21,7 @@ Item {
             sourceComponent: WorkspaceNativeIcon {
                 iconKey: caption.button.iconKey || ""
                 iconSize: caption.button.iconWidth || 16
+                isLight: typeof rakPreferences !== "undefined" && rakPreferences && rakPreferences.colors ? !!rakPreferences.colors.is_light : false
                 color: !caption.button.enabled ? caption.button.disabledLabelColor : caption.button.visualHovered ? caption.button.hoverLabelColor : caption.button.labelColor
                 hovered: caption.button.visualHovered
                 down: caption.button.down

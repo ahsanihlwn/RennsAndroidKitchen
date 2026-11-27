@@ -252,8 +252,6 @@ class LauncherApplication(QObject):
                 QTimer.singleShot(100, self._login)
         QTimer.singleShot(500, self._maintain_trash)
         QTimer.singleShot(0, self._prepare_startup)
-        if not getattr(self, "_in_process_workspace", False) and os.environ.get("RAK_TEST_IN_PROCESS") != "1":
-            QTimer.singleShot(0, self._spawn_standby_worker)
         # Reveal the real launcher as soon as the UI content and initial
         # drives are ready; never hold the skeleton on network/prewarm work.
         QTimer.singleShot(900, self._startup_disks_timeout)
@@ -306,7 +304,7 @@ class LauncherApplication(QObject):
         pending, self._pending_editor = self._pending_editor, None
         if pending is not None:
             self._construct_editor(*pending)
-        if not error and not self._quitting:
+        if not error and not self._quitting and not self.model.startupActive:
             QTimer.singleShot(0, self._spawn_standby_worker)
 
     def _resolve_workspace_command(self, extra_args):
@@ -469,6 +467,7 @@ class LauncherApplication(QObject):
         self.window.requestActivate()
 
     def hide(self):
+        self.model.presentationRequested.emit("launcherHiding", {})
         self.window.hide()
 
     def _message(self, text, title=None, *, confirmation=None, delete_path="", on_cancel=None, accept_label="", danger=False, error=False):
@@ -525,6 +524,8 @@ class LauncherApplication(QObject):
             elif command == "startupRevealed":
                 self.model.setStartupActive(False)
                 self.startupFinished.emit()
+                if self._prewarm_complete and not self._quitting:
+                    QTimer.singleShot(150, self._spawn_standby_worker)
             elif command == "createPopupClosed" and self._pending_created is not None:
                 record, self._pending_created = self._pending_created, None
                 self._open_project(record,"create_popup")
@@ -539,6 +540,9 @@ class LauncherApplication(QObject):
                  "treeMode": theme.set_tree_view_mode}[data["key"]](data["value"])
                 if data["key"] == "animations" and not data["value"]:
                     self._finish_deferred_job()
+                if getattr(self, "_standby_worker", None) is not None:
+                    self._kill_standby_worker()
+                    QTimer.singleShot(0, self._spawn_standby_worker)
             elif command == "newProject" and not self.model.busy:
                 self._output_location = None
                 self._reload()
@@ -640,9 +644,10 @@ class LauncherApplication(QObject):
             start("windows", list_windows_disk_usage)
         if self._services_enabled and time.monotonic() - self._last_wsl_scan >= 60:
             self._last_wsl_scan = time.monotonic()
-            from core.wsl_manager import list_disk_usage, save_disk_usage_cache
+            from core.wsl_manager import list_disk_usage, save_disk_usage_cache, update_distro_cache
             def scan_wsl():
                 rows = list_disk_usage()
+                update_distro_cache([row["distro"] for row in rows if row.get("distro")])
                 save_disk_usage_cache(rows)
                 return rows
             start("wsl", scan_wsl)
@@ -835,12 +840,8 @@ class LauncherApplication(QObject):
 
     def _created(self, record):
         self._scan_disks()
-        self._pending_created = record
-        self.model.presentationRequested.emit("created", {})
-        # Full-page creation has no popup to dismiss.
-        if self.model.page == "create":
-            self._pending_created = None
-            self._open_project(record,"create")
+        self._pending_created = None
+        self._open_project(record, "create" if self.model.page == "create" else "create_popup")
 
     def _open_project(self, record, origin="existing"):
         if self.editor is not None or self.model.openingPath or getattr(self, "_workspace_process", None) is not None:
@@ -894,6 +895,7 @@ class LauncherApplication(QObject):
                 "p2": record.get("port2"),
                 "palette": self.model.paletteName,
                 "lang": self.model._language,
+                "settings": self._settings(),
             }) + "\n"
             proc.write(payload.encode("utf-8"))
             print(f"[APP STAGE] sent open command to standby worker ({(time.perf_counter()-opened_at)*1000:.1f}ms)", flush=True)

@@ -135,13 +135,14 @@ RakButton {
                 enabled: !control.chat.busy
                 toolTip: control.tr.new_conversation || control.tr.new || "New conversation"
                 contentItem: Item {
-                    Image {
+                    WorkspaceNativeIcon {
                         id: plusIcon
                         anchors.left: parent.left
                         anchors.verticalCenter: parent.verticalCenter
-                        width: 14; height: 14
-                        sourceSize: Qt.size(16, 16)
-                        source: "image://rak/plus?color=" + encodeURIComponent(newChatButton.visualHovered ? control.colors.FG_BRIGHT : control.colors.FG)
+                        width: 14; height: 14; iconSize: 14
+                        iconKey: "plus"
+                        strokeColor: newChatButton.visualHovered ? control.colors.FG_BRIGHT : control.colors.FG
+                        isLight: !!(control.colors && control.colors.is_light)
                     }
                     RakLabel {
                         anchors.left: plusIcon.right; anchors.leftMargin: 8

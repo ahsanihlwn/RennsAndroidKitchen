@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
+import QtQuick.Window
 import QtTerm 1.0
 
 Item {
@@ -15,6 +16,10 @@ Item {
 
     function focusInput() {
         if (!inputAllowed || !visible || !enabled || !termItem) return
+        if (pane.Window.window && pane.Window.window.mouseGrabberItem) {
+            Qt.callLater(focusInput)
+            return
+        }
         termItem.forceActiveFocus(Qt.OtherFocusReason)
         focusPending = false
     }
@@ -52,6 +57,7 @@ Item {
         arguments: pane.session ? (pane.session.arguments || []) : []
         workingDirectory: pane.session ? (pane.session.workingDirectory || "") : ""
         autoStart: (pane.session ? (pane.session.autoStart !== undefined ? pane.session.autoStart : true) : true) && pane.layoutSettled
+        wslMode: pane.session ? Boolean(pane.session.wslMode) : false
         fontFamily: pane.session ? (pane.session.fontFamily || "Cascadia Mono") : "Cascadia Mono"
         fontPixelSize: pane.session ? (pane.session.fontPixelSize || 15) : 15
         cursorShape: pane.session ? (pane.session.cursorShape || "beam") : "beam"

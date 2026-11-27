@@ -45,7 +45,7 @@ def main():
             QTest.qWait(15)
     try:
         assert len(engine._dialog_stack.dialogs)==7
-        for name,size in [('license',(400,534)),('credit',(360,421)),('theme',(520,460)),('packages',(540,420))]:
+        for name,size in [('license',(700,520)),('credit',(360,421)),('theme',(520,460)),('packages',(540,420))]:
             dialog=owner.findChild(QObject,'themePicker' if name=='theme' else name+'Window')
             assert dialog is not None
             model.presentationRequested.emit('showDialog',{'kind':name})
@@ -83,8 +83,8 @@ def main():
         y=close.mapToScene(close.boundingRect().center()).y()
         assert 12<y<388,('Small-window dialog footer clipped',y)
         owner.resize(1440,900);QTest.qWait(50)
-        assert dialog.property('height')==534
-        assert dialog.property('y')==183
+        assert dialog.property('height')==520
+        assert dialog.property('y')==190
         QTest.keyClick(owner,Qt.Key_Escape);wait_for(lambda:not dialog.property("visible"))
         assert not errors,errors
         assert not QApplication.allWidgets()

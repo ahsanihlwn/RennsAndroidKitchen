@@ -1,0 +1,51 @@
+{
+  "apktool": {
+    "display": "Apktool Suite",
+    "author": "INF1NUM, AndnixSH",
+    "license": "-",
+    "version": "3.0.3",
+    "url": "https://github.com/ahsanihlwn/apktool/archive/refs/heads/main.zip",
+    "binaries": [
+      {
+        "name": "apktool.jar",
+        "size": 15478013
+      },
+      {
+        "name": "apksigner.jar",
+        "size": 1100545
+      },
+      {
+        "name": "APKEditor.jar",
+        "size": 7733037
+      },
+      {
+        "name": "baksmali.jar",
+        "size": 4432747
+      },
+      {
+        "name": "smali.jar",
+        "size": 5371006
+      },
+      {
+        "name": "aapt.exe",
+        "size": 2033816
+      },
+      {
+        "name": "aapt2.exe",
+        "size": 5976728
+      },
+      {
+        "name": "zipalign.exe",
+        "size": 910488
+      },
+      {
+        "name": "testkey.pk8",
+        "size": 1217
+      },
+      {
+        "name": "testkey.x509.pem",
+        "size": 1702
+      }
+    ]
+  }
+}

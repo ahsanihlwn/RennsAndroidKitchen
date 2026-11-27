@@ -153,19 +153,21 @@ pub fn xattr_add(
 ) -> Result<(), String> {
     let ibody_off = EXT4_INODE_STRUCT_SIZE;
     let first_off = ibody_off + 4;
-    if let Some(_) = xattr_addto_range(
-        inode_buf,
-        first_off,
-        inode_size as usize,
-        first_off,
-        name_index,
-        name,
-        value,
-    )? {
-        write_u32_le(inode_buf, ibody_off, EXT4_XATTR_MAGIC);
-        let extra = (EXT4_INODE_STRUCT_SIZE as u16) - EXT4_GOOD_OLD_INODE_SIZE;
-        write_u16_le(inode_buf, inode_off::I_EXTRA_ISIZE, extra);
-        return Ok(());
+    if (inode_size as usize) > first_off + 4 {
+        if let Some(_) = xattr_addto_range(
+            inode_buf,
+            first_off,
+            inode_size as usize,
+            first_off,
+            name_index,
+            name,
+            value,
+        )? {
+            write_u32_le(inode_buf, ibody_off, EXT4_XATTR_MAGIC);
+            let extra = (EXT4_INODE_STRUCT_SIZE as u16) - EXT4_GOOD_OLD_INODE_SIZE;
+            write_u16_le(inode_buf, inode_off::I_EXTRA_ISIZE, extra);
+            return Ok(());
+        }
     }
 
     let xattr_block = if let Some(existing) = xattr_blocks.get(&inode_num) {

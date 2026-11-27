@@ -15,6 +15,7 @@ SIZE_LABEL_ROLE = Qt.UserRole + 30
 IS_FOLDER_ROLE = Qt.UserRole + 98
 UI_STABLE_ROLE = Qt.UserRole + 9
 APKTOOL_LINK_ROLE = Qt.UserRole + 71
+READ_ONLY_ROLE = Qt.UserRole + 151
 
 
 def _is_physical_checkout(tree, path):
@@ -148,7 +149,7 @@ def build_tree_entry(tree, entry_tuple, is_root_parent, is_branch_only_dir, _nb_
         phys_dir = branch_only_abs if branch_only_abs else (full if not is_branch_only_dir else full)
         child.setIcon(0, tree._resolve_folder_icon(phys_dir, fs_type))
 
-        if fs_type in ("EROFS", "EXT4", "EXT3", "EXT2") or fs_type in tree.NON_FS_BADGE:
+        if fs_type in ("EROFS", "EXT4", "EXT3", "EXT2", "EXT") or fs_type in tree.NON_FS_BADGE:
             child.setData(0, Qt.UserRole + 1, fs_type)
             if fs_type in tree.NON_FS_BADGE:
                 child.setData(0, UI_STABLE_ROLE, True)
@@ -240,6 +241,10 @@ def build_tree_entry(tree, entry_tuple, is_root_parent, is_branch_only_dir, _nb_
     child = item_factory([base_name, ctx, perm])
     child.setData(0, IS_FOLDER_ROLE, False)
     child.setData(0, Qt.UserRole, source_full)
+    if entry_info is not None:
+        child.setData(0, READ_ONLY_ROLE, bool(entry_info.get("read_only", False)))
+    elif not os.access(phys, os.W_OK) if os.path.isfile(phys) else False:
+        child.setData(0, READ_ONLY_ROLE, True)
     if branch_only_abs or is_branch_only_dir:
         child.setData(0, Qt.UserRole + 20, branch_only_abs or full)
 

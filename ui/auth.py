@@ -144,10 +144,8 @@ class AuthModel(QObject):
         except Exception as error:self._error(str(error))
 
     def _error(self,message):
-        from core.error_reporting import report_fatal
-        report_fatal('Authentication\n\n'+str(message),owner=self,application_error=False)
         self._set_busy(False)
-        self._alert=message;self.changed.emit();self.shake.emit("")
+        self._alert=str(message or "");self.changed.emit();self.shake.emit("")
 
     @Slot()
     def finishing(self):self._set_busy(True,"Finishing up…")

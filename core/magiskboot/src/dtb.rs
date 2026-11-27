@@ -3,8 +3,38 @@ use std::fs;
 
 use memchr::memmem;
 
+use serde::Serialize;
+
 use crate::format::DTB_MAGIC;
 use crate::pattern::patch_verity;
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DtbFstabEntry {
+    pub node: String,
+    pub dev: String,
+    pub mnt_point: String,
+    pub fs_type: String,
+    pub mnt_flags: String,
+    pub fsmgr_flags: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DtbMetadata {
+    pub bootargs: Vec<String>,
+    pub fstab: Vec<DtbFstabEntry>,
+    pub compatibles: Vec<String>,
+    pub symbols: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct DtboFdtMeta {
+    pub model: String,
+    pub compatibles: Vec<String>,
+    pub fixups: Vec<String>,
+    pub target_paths: Vec<String>,
+    pub bootargs: Vec<String>,
+    pub fstab: Vec<DtbFstabEntry>,
+}
 
 const FDT_BEGIN_NODE: u32 = 1;
 const FDT_END_NODE: u32 = 2;
@@ -259,6 +289,169 @@ fn print_node(buf: &[u8], node: &FdtNode, depth: usize, depth_flags: &mut Vec<bo
         depth_flags[depth] = i < last_idx;
         print_node(buf, child, depth + 1, depth_flags);
     }
+}
+
+fn prop_str_list(buf: &[u8], prop: &FdtProp) -> Vec<String> {
+    let Some(end) = prop.val_abs_off.checked_add(prop.len) else {
+        return Vec::new();
+    };
+    let Some(raw) = buf.get(prop.val_abs_off..end) else {
+        return Vec::new();
+    };
+    raw.split(|&b| b == 0)
+        .filter_map(|s| std::str::from_utf8(s).ok())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+fn collect_fstab_from_node(buf: &[u8], node: &FdtNode, out: &mut Vec<DtbFstabEntry>) {
+    let prop_str = |prop: &FdtProp| -> Option<String> {
+        let end = prop.val_abs_off.checked_add(prop.len)?;
+        let raw = buf.get(prop.val_abs_off..end)?;
+        let nul = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+        let s = std::str::from_utf8(&raw[..nul]).ok()?.trim();
+        if s.is_empty() { None } else { Some(s.to_string()) }
+    };
+    let is_android = node.props.iter().any(|p| {
+        p.name == "compatible" && prop_str(p).is_some_and(|s| s.contains("android,fstab"))
+    });
+    if is_android {
+        for child in &node.children {
+            let mut entry = DtbFstabEntry {
+                node: child.name.clone(),
+                ..Default::default()
+            };
+            for p in &child.props {
+                if let Some(v) = prop_str(p) {
+                    match p.name.as_str() {
+                        "dev" => entry.dev = v,
+                        "mnt_point" => entry.mnt_point = v,
+                        "type" => entry.fs_type = v,
+                        "mnt_flags" => entry.mnt_flags = v,
+                        "fsmgr_flags" => entry.fsmgr_flags = v,
+                        _ => {}
+                    }
+                }
+            }
+            if !entry.mnt_point.is_empty() || !entry.dev.is_empty() {
+                out.push(entry);
+            }
+        }
+    }
+    for child in &node.children {
+        collect_fstab_from_node(buf, child, out);
+    }
+}
+
+pub fn extract_dtb_metadata(buf: &[u8]) -> DtbMetadata {
+    let mut meta = DtbMetadata::default();
+    let prop_str = |prop: &FdtProp| -> Option<String> {
+        let end = prop.val_abs_off.checked_add(prop.len)?;
+        let raw = buf.get(prop.val_abs_off..end)?;
+        let nul = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+        let s = std::str::from_utf8(&raw[..nul]).ok()?.trim();
+        if s.is_empty() {
+            None
+        } else {
+            Some(s.to_string())
+        }
+    };
+
+    for (_abs, _sz, root) in fdt_offsets(buf) {
+        if let Some(prop) = root.props.iter().find(|p| p.name == "compatible") {
+            for c in prop_str_list(buf, prop) {
+                if !meta.compatibles.contains(&c) {
+                    meta.compatibles.push(c);
+                }
+            }
+        }
+        if let Some(syms) = root.children.iter().find(|c| c.name == "__symbols__") {
+            for p in &syms.props {
+                if !p.name.is_empty() && !meta.symbols.contains(&p.name) {
+                    meta.symbols.push(p.name.clone());
+                }
+            }
+        }
+        if let Some(chosen) = find_node(&root, "chosen") {
+            if let Some(prop) = chosen.props.iter().find(|p| p.name == "bootargs") {
+                if let Some(val) = prop_str(prop) {
+                    if !meta.bootargs.contains(&val) {
+                        meta.bootargs.push(val);
+                    }
+                }
+            }
+        }
+        collect_fstab_from_node(buf, &root, &mut meta.fstab);
+    }
+    meta
+}
+
+pub fn extract_dtbo_fdt_meta(buf: &[u8]) -> DtboFdtMeta {
+    let mut meta = DtboFdtMeta::default();
+    let prop_str = |prop: &FdtProp| -> Option<String> {
+        let end = prop.val_abs_off.checked_add(prop.len)?;
+        let raw = buf.get(prop.val_abs_off..end)?;
+        let nul = raw.iter().position(|&b| b == 0).unwrap_or(raw.len());
+        let s = std::str::from_utf8(&raw[..nul]).ok()?.trim();
+        if s.is_empty() { None } else { Some(s.to_string()) }
+    };
+
+    for (_abs, _sz, root) in fdt_offsets(buf) {
+        if meta.model.is_empty() {
+            if let Some(p) = root.props.iter().find(|p| p.name == "model") {
+                if let Some(m) = prop_str(p) {
+                    meta.model = m;
+                }
+            }
+        }
+        if let Some(p) = root.props.iter().find(|p| p.name == "compatible") {
+            for c in prop_str_list(buf, p) {
+                if !meta.compatibles.contains(&c) {
+                    meta.compatibles.push(c);
+                }
+            }
+        }
+        if let Some(fixups) = root.children.iter().find(|c| c.name == "__fixups__") {
+            for p in &fixups.props {
+                if !p.name.is_empty() && !meta.fixups.contains(&p.name) {
+                    meta.fixups.push(p.name.clone());
+                }
+            }
+        }
+        for child in &root.children {
+            if child.name.starts_with("fragment") {
+                if let Some(tp) = child.props.iter().find(|p| p.name == "target-path") {
+                    if let Some(v) = prop_str(tp) {
+                        if !meta.target_paths.contains(&v) {
+                            meta.target_paths.push(v);
+                        }
+                    }
+                }
+                if let Some(ov) = child.children.iter().find(|c| c.name == "__overlay__") {
+                    if let Some(p) = ov.props.iter().find(|p| p.name == "compatible") {
+                        for c in prop_str_list(buf, p) {
+                            if !meta.compatibles.contains(&c) {
+                                meta.compatibles.push(c);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(chosen) = find_node(&root, "chosen") {
+            if let Some(prop) = chosen.props.iter().find(|p| p.name == "bootargs") {
+                if let Some(val) = prop_str(prop) {
+                    if !meta.bootargs.contains(&val) {
+                        meta.bootargs.push(val);
+                    }
+                }
+            }
+        }
+        collect_fstab_from_node(buf, &root, &mut meta.fstab);
+    }
+    meta
 }
 
 pub fn dtb_print(file: &str, fstab_only: bool) -> Result<(), String> {

@@ -235,6 +235,10 @@ class DialogStack(QObject):
     def modalActive(self):
         return any(_is_valid(dialog) and dialog.property("presented") and dialog.property("modal") for dialog in self.stack)
 
+    @Property("QVariantList", notify=changed)
+    def activeDialogs(self):
+        return [dialog for dialog in self.stack if _is_valid(dialog)]
+
     @Slot(QObject)
     def registerDialog(self, dialog):
         if self._closed or not _is_valid(dialog) or dialog in self.dialogs:

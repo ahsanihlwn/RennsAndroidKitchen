@@ -7,7 +7,8 @@ use crate::format::{EROFS_SUPER_MAGIC, read_u16_le, read_u32_le};
 use serde::Serialize;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 pub const SPARSE_MAGIC: u32 = 0xED26_FF3A;
 pub const EXT_SUPER_MAGIC: u16 = 0xEF53;
@@ -61,7 +62,8 @@ struct SparseChunk {
 /// Random-access reader for Android Sparse images.
 #[derive(Debug)]
 pub struct SparseImage {
-    file: File,
+    path: PathBuf,
+    pool: Mutex<Vec<File>>,
     pub block_size: u32,
     pub total_blocks: u32,
     pub total_size: u64,
@@ -165,12 +167,59 @@ impl SparseImage {
         let total_size = declared.max(out_pos);
 
         Ok(Self {
-            file,
+            path: path.to_path_buf(),
+            pool: Mutex::new(vec![file]),
             block_size,
             total_blocks,
             total_size,
             chunks,
         })
+    }
+
+    fn read_raw_exact(&self, mut offset: u64, dst: &mut [u8]) -> Result<()> {
+        let f = match self.pool.lock().unwrap().pop() {
+            Some(h) => h,
+            None => File::open(&self.path)?,
+        };
+        let mut done = 0usize;
+        let res = loop {
+            if done >= dst.len() {
+                break Ok(());
+            }
+            let slice = &mut dst[done..];
+            #[cfg(windows)]
+            let r = {
+                use std::os::windows::fs::FileExt;
+                f.seek_read(slice, offset)
+            };
+            #[cfg(unix)]
+            let r = {
+                use std::os::unix::fs::FileExt;
+                f.read_at(slice, offset)
+            };
+            #[cfg(not(any(windows, unix)))]
+            let r = {
+                let mut f_ref = &f;
+                f_ref
+                    .seek(SeekFrom::Start(offset))
+                    .and_then(|_| f_ref.read(slice))
+            };
+            match r {
+                Ok(0) => {
+                    break Err(ErofsError::Corrupted(
+                        "unexpected EOF in sparse raw chunk".into(),
+                    ));
+                }
+                Ok(n) => {
+                    offset += n as u64;
+                    done += n;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(e) => break Err(e.into()),
+            }
+        };
+        self.pool.lock().unwrap().push(f);
+        res
     }
 
     pub fn read_at(&self, mut offset: u64, mut buf: &mut [u8]) -> Result<usize> {
@@ -206,9 +255,7 @@ impl SparseImage {
 
             match chunk.payload {
                 ChunkPayload::Raw { file_offset } => {
-                    let mut f = self.file.try_clone()?;
-                    f.seek(SeekFrom::Start(file_offset + in_chunk))?;
-                    f.read_exact(&mut buf[..take])?;
+                    self.read_raw_exact(file_offset + in_chunk, &mut buf[..take])?;
                 }
                 ChunkPayload::Fill { pattern } => {
                     let base = (in_chunk as usize) & 3;

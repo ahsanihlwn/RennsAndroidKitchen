@@ -13,7 +13,6 @@ from core.loading import LoadingAnimator
 from core.code_editor import CodeHighlighter
 from core.fsdetect import detect_fs_root
 from PySide6.QtCore import Signal, QMetaObject, Q_ARG
-from core.terminal import Terminal
 from PySide6.QtWidgets import (
     QApplication,
     QWidget,

@@ -85,13 +85,95 @@ class DirSource:
         return os.path.isdir(self.root)
 
 
+class MemoryTreeSource:
+    """In-memory virtual source (e.g. ramdisk CPIO extracted from boot/vendor_boot)."""
+
+    kind = "ramdisk"
+
+    def __init__(self, files=None, symlinks=None, label="ramdisk"):
+        self._label = label
+        self._files = {}      # rel_path -> bytes
+        self._symlinks = {}   # rel_path -> target
+        self._dirs = {""}
+        self._entries = {}    # rel_dir -> {name: (kind, size)}
+
+        for p, raw in (files or {}).items():
+            rel = p.strip("/")
+            if not rel:
+                continue
+            data = raw.encode("utf-8", "replace") if isinstance(raw, str) else bytes(raw)
+            self._files[rel] = data
+            self._add_parents(rel)
+
+        for p, target in (symlinks or {}).items():
+            rel = p.strip("/")
+            if not rel:
+                continue
+            self._symlinks[rel] = target
+            self._add_parents(rel)
+
+        for d in self._dirs:
+            self._entries.setdefault(d, {})
+        for d in sorted(self._dirs):
+            if not d:
+                continue
+            parent, _, name = d.rpartition("/")
+            self._entries.setdefault(parent, {})[name] = (KIND_DIR, 0)
+        for rel, data in self._files.items():
+            parent, _, name = rel.rpartition("/")
+            self._entries.setdefault(parent, {})[name] = (KIND_FILE, len(data))
+        for rel, target in self._symlinks.items():
+            parent, _, name = rel.rpartition("/")
+            self._entries.setdefault(parent, {})[name] = (KIND_FILE, len(target))
+
+    def _add_parents(self, rel):
+        cur = rel.rpartition("/")[0]
+        while cur:
+            self._dirs.add(cur)
+            cur = cur.rpartition("/")[0]
+
+    @property
+    def label(self):
+        return self._label
+
+    def entries(self, rel_dir):
+        return self._entries.get(rel_dir.strip("/"), {})
+
+    def read(self, rel, limit=-1):
+        data = self._files.get(rel.strip("/"))
+        if data is None:
+            return None
+        return data if limit < 0 else data[:limit]
+
+    def open(self, rel):
+        import io
+        data = self.read(rel)
+        return io.BytesIO(data) if data is not None else None
+
+    def selinux(self, rel):
+        return ""
+
+    def link_target(self, rel, size=None):
+        return self._symlinks.get(rel.strip("/"))
+
+    def host_path(self, rel):
+        return None
+
+    def is_root_dir(self):
+        return True
+
+
 class ImageSource:
 
 
     kind = "image"
 
-    def __init__(self, img_path):
+    def __init__(self, img_path, *, super_path=None, partition="", slot=0, fs_hint=""):
         self.img_path = os.path.normpath(img_path)
+        self.super_path = os.path.normpath(super_path) if super_path else None
+        self.partition = partition
+        self.slot = int(slot)
+        self._fs_hint = fs_hint
         self._reader = None
         self._fs = ""
         self._opened = False
@@ -100,13 +182,26 @@ class ImageSource:
         self._dir_ino = {}       # rel_dir -> inode/nid, sudah ter-resolve
         self._dir_full = {}      # rel_dir -> {nama: (kind, size, child_id, is_link)}
         self._dir_pub = {}       # rel_dir -> {nama: (kind, size)}  — cache publik
+        self._walked = False
+        self._link_cache = {}
+        self._selinux_cache = {}
 
     def __repr__(self):
         return f"<ImageSource {os.path.basename(self.img_path)}>"
 
     @property
     def label(self):
-        return "image"
+        return "super" if self.super_path else "image"
+
+    @property
+    def native_handle(self):
+        self._ensure_reader()
+        return getattr(self._reader, "_native", None)
+
+    @property
+    def fs_type(self):
+        self._ensure_reader()
+        return self._fs
 
     # ── buka reader sekali (murah: cuma superblock, bukan tree) ──
     def _ensure_reader(self):
@@ -114,11 +209,72 @@ class ImageSource:
             return
         self._opened = True
         try:
-            from core.imgfs import open_reader
-            self._fs, self._reader = open_reader(self.img_path)
+            from core.imgfs import open_reader, _NativeErofsHandle, _NativeExtHandle
+            from core import native_backend
+            if self.super_path and self.partition:
+                if self._fs_hint == "EXT":
+                    self._fs = "EXT"
+                    self._reader = _NativeExtHandle(
+                        native_backend.vdev_super_open_ext(self.super_path, self.partition, self.slot)
+                    )
+                elif self._fs_hint == "EROFS":
+                    self._fs = "EROFS"
+                    self._reader = _NativeErofsHandle(
+                        native_backend.vdev_super_open_erofs(self.super_path, self.partition, self.slot)
+                    )
+                else:
+                    try:
+                        self._reader = _NativeErofsHandle(
+                            native_backend.vdev_super_open_erofs(self.super_path, self.partition, self.slot)
+                        )
+                        self._fs = "EROFS"
+                    except Exception:
+                        self._reader = _NativeExtHandle(
+                            native_backend.vdev_super_open_ext(self.super_path, self.partition, self.slot)
+                        )
+                        self._fs = "EXT"
+            else:
+                self._fs, self._reader = open_reader(self.img_path)
         except Exception as exc:            # noqa: BLE001 — image rusak itu wajar
             self._failed = True
             self.error = str(exc)
+
+    def _ensure_native_walk(self):
+        if self._walked:
+            return True
+        self._ensure_reader()
+        native = getattr(self._reader, "_native", None)
+        if native is None:
+            return False
+        try:
+            from core import native_backend
+            if self._fs == "EROFS":
+                rows = native_backend.vdev_walk_erofs(native)
+            elif self._fs == "EXT":
+                rows = native_backend.vdev_walk_ext(native)
+            else:
+                return False
+        except Exception:
+            return False
+
+        self._dir_pub.clear()
+        self._dir_pub[""] = {}
+        for row in rows:
+            rel = row.get("path", "").strip("/")
+            if not rel:
+                continue
+            parent, _, name = rel.rpartition("/")
+            kind = KIND_DIR if row.get("is_dir") else KIND_FILE
+            size = int(row.get("size") or 0)
+            self._dir_pub.setdefault(parent, {})[name] = (kind, size)
+            if kind == KIND_DIR:
+                self._dir_pub.setdefault(rel, {})
+            if row.get("is_link") and row.get("target"):
+                self._link_cache[rel] = row["target"].replace("\\", "/")
+            if row.get("selinux"):
+                self._selinux_cache[rel] = row["selinux"]
+        self._walked = True
+        return True
 
     def _root_id(self):
         if self._fs == "EROFS":
@@ -183,6 +339,8 @@ class ImageSource:
 
     def entries(self, rel_dir):
         rel_dir = rel_dir.strip("/")
+        if self._ensure_native_walk():
+            return self._dir_pub.get(rel_dir, {})
         cached = self._dir_pub.get(rel_dir)
         if cached is not None:
             return cached
@@ -195,9 +353,21 @@ class ImageSource:
         rel = rel.strip("/")
         if not rel:
             return None
+        self._ensure_reader()
+        if self._reader is None:
+            return None
+        reader_read_path = getattr(self._reader, "read_path", None)
+        if reader_read_path is not None:
+            try:
+                data = reader_read_path(rel)
+            except Exception:
+                return None
+            if data is None:
+                return None
+            return data if limit < 0 else data[:limit]
         parent, _, name = rel.rpartition("/")
         ent = self._full_entries(parent).get(name)
-        if ent is None or ent[0] != KIND_FILE or self._reader is None:
+        if ent is None or ent[0] != KIND_FILE:
             return None
         try:
             data = self._reader.read_file(ent[2])
@@ -212,6 +382,10 @@ class ImageSource:
         rel = rel.strip("/")
         if not rel:
             return None
+        if self._walked:
+            import io as _io
+            data = self.read(rel)
+            return _io.BytesIO(data) if data is not None else None
         parent, _, name = rel.rpartition("/")
         ent = self._full_entries(parent).get(name)
         if ent is None or ent[0] != KIND_FILE or self._reader is None:
@@ -230,6 +404,8 @@ class ImageSource:
         rel = rel.strip("/")
         if not rel:
             return None
+        if self._walked:
+            return self._link_cache.get(rel)
         parent, _, name = rel.rpartition("/")
         ent = self._full_entries(parent).get(name)
         if ent is None or not ent[3] or self._reader is None:
@@ -248,6 +424,8 @@ class ImageSource:
         rel = rel.strip("/")
         if not rel:
             return ""
+        if self._walked:
+            return self._selinux_cache.get(rel, "")
         self._ensure_reader()
         if self._reader is None:
             return ""
@@ -301,7 +479,7 @@ class ApexSource(ImageSource):
         try:
             import io as _io
             import zipfile as _zip
-            from core.imgfs import _detect_fs_bytes, _NativeErofsHandle, ExtReader
+            from core.imgfs import _detect_fs_bytes, _NativeErofsHandle, _NativeExtHandle, ExtReader, _use_python_ext_backend
             from core import native_backend
 
             PAYLOAD = "apex_payload.img"
@@ -341,7 +519,10 @@ class ApexSource(ImageSource):
             f.seek(0)
             fs = _detect_fs_bytes(head)
             if fs == "EXT":
-                self._fs, self._reader = "EXT", ExtReader(f)
+                if not _use_python_ext_backend():
+                    self._fs, self._reader = "EXT", _NativeExtHandle(native_backend.ext_open_bytes_reader(f.read()))
+                else:
+                    self._fs, self._reader = "EXT", ExtReader(f)
             elif fs == "EROFS":
                 self._fs = "EROFS"
                 self._reader = _NativeErofsHandle(

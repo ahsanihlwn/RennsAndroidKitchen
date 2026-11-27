@@ -7,6 +7,7 @@ Item {
     id: pane
     required property var colors
     required property var document
+    property var workspace: null
     property bool draftDirty: false
     property string draftAddress: ""
     property string draftSha256: ""
@@ -33,12 +34,25 @@ Item {
             if(saved && saved.name===noteName.text && saved.comment===noteComment.text)pane.draftDirty=false
         }
     }
+    function askRea(promptText) {
+        if (!promptText) return
+        const chat = pane.workspace && pane.workspace.agentChat
+        if (chat && chat.available) {
+            if (!chat.opened) chat.toggle()
+            chat.setDraft(promptText)
+        } else {
+            document.copyText(promptText)
+            if (pane.workspace && pane.workspace.showMessage) pane.workspace.showMessage("REA Context Copied", "Analysis context copied to clipboard. Paste into your AI/REA session.")
+        }
+    }
     Row {
         id: tools; x: 12; y: 10; spacing: 8; height: 30
         ViewerToolButton { objectName: "binaryAnalyzeGhidra"; colors: pane.colors; primary: true; text: document.busy?"Working…":"Analyze with Ghidra"; enabled: document.ready && !document.busy && !!document.ghidra.available; onClicked: document.analyzeGhidra() }
+        ViewerToolButton { objectName: "binaryAnalyzeResident"; colors: pane.colors; text: "Resident Bridge (REA)"; enabled: document.ready && !document.busy && !!document.ghidra.available && !!(document.rea && document.rea.available); onClicked: document.analyzeResidentGhidra() }
         ViewerToolButton { objectName: "binaryConfigureGhidra"; colors: pane.colors; text: "Ghidra folder"; enabled: !document.busy; onClicked: ghidraFolder.open() }
+        ViewerToolButton { objectName: "binaryAskAgent"; colors: pane.colors; text: "Ask Agent (REA)"; enabled: !!(document.functionDetail && document.functionDetail.reaPrompt); onClicked: pane.askRea(document.functionDetail.reaPrompt) }
     }
-    RakLabel { x: 12; y: 45; width: parent.width-24; height: 32; text: document.ghidra.message || ""; color: pane.colors.FG_MUTED; font.pixelSize: 10; wrapMode: Text.WordWrap }
+    RakLabel { x: 12; y: 45; width: parent.width-24; height: 32; text: document.ghidra.available ? (document.ghidra.message || "") : (document.nativeDecompiler.available ? "Native Ghidra decompiler active (no JVM). Select a function and press Enter. Ghidra install adds CFG, callers and callees." : ((document.nativeDecompiler.message || "")+" · "+(document.ghidra.message || ""))); color: pane.colors.FG_MUTED; font.pixelSize: 10; wrapMode: Text.WordWrap }
     Item {
         id: browser; x: 12; y: 83; width: Math.max(150,Math.floor((parent.width-32)*0.37)); height: Math.max(1,parent.height-y-12)
         ViewerField { id: filter; objectName: "binaryFunctionFilter"; width: parent.width; colors: pane.colors; placeholderText: "Function or address…"; onTextChanged: document.filterFunctions(text) }
@@ -50,14 +64,22 @@ Item {
     Item {
         x: browser.x+browser.width+10; y: browser.y; width: Math.max(1,parent.width-x-12); height: browser.height
         RakLabel { width: parent.width; height: 28; text: document.functionDetail.function?document.functionDetail.function.signature:"Select a function and press Enter"; color: pane.colors.FG_BRIGHT; font.pixelSize: 11; elide: Text.ElideRight }
-        ViewerTabs { id: views; y: 30; width: parent.width; colors: pane.colors; titles: ["Pseudocode","Assembly","References","Calls","Notes"]; onCurrentIndexChanged: pane.detailTab=currentIndex }
-        ViewerTextArea { objectName: "binaryFunctionOutput"; y: 66; width: parent.width; height: Math.max(1,parent.height-66); visible: pane.detailTab!==4; colors: pane.colors; font.family: "Consolas"; font.pixelSize: 12
+        ViewerTabs { id: views; y: 30; width: parent.width; colors: pane.colors; titles: ["Pseudocode","Assembly","References","Calls","CFG","Notes"]; onCurrentIndexChanged: pane.detailTab=currentIndex }
+        ViewerTextArea { objectName: "binaryFunctionOutput"; y: 66; width: parent.width; height: Math.max(1,parent.height-66); visible: pane.detailTab<4; colors: pane.colors; font.family: "Consolas"; font.pixelSize: 12
             text: pane.detailTab===0?(document.functionDetail.pseudocode || document.functionDetail.decompile_error || "Run analysis once, then open a function. Cached results are shared with rak binary."):
                   pane.detailTab===1?(document.functionDetail.listing || ""):
                   pane.detailTab===2?(document.functionDetail.referencesText || ""):(document.functionDetail.callsText || "")
         }
+        BinaryCfgView {
+            objectName: "binaryCfgView"
+            y: 66; width: parent.width; height: Math.max(1,parent.height-66)
+            visible: pane.detailTab===4
+            colors: pane.colors
+            blocks: document.functionDetail.blocks || []
+            onBlockSelected: address=>document.copyText(address)
+        }
         Item {
-            y: 72; width: parent.width; height: Math.max(1,parent.height-y); visible: pane.detailTab===4
+            y: 72; width: parent.width; height: Math.max(1,parent.height-y); visible: pane.detailTab===5
             RakLabel { width: parent.width; height: 38; text: "Notes for "+(pane.draftAddress || "selected function")+" · Saved locally; shared with agents."; color: pane.colors.FG_MUTED; font.pixelSize: 11; wrapMode: Text.WordWrap }
             ViewerField { id: noteName; objectName: "binaryNoteName"; y: 42; width: parent.width; colors: pane.colors; placeholderText: "Function name"; onTextEdited: pane.draftDirty=true }
             C.ScrollView { y: 80; width: parent.width; height: Math.max(40,parent.height-130); clip: true

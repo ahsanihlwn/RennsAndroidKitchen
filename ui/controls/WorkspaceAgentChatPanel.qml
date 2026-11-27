@@ -22,16 +22,14 @@ Item {
     readonly property var suggestions: composer.text.startsWith("/") && composer.text.indexOf(" ")<0?chat.commands.filter(command=>command.name.startsWith(composer.text.slice(1))).slice(0,6):[]
     onRequestChanged: answers=({})
     function answerQuestion(id,value) {const copy=Object.assign({},answers);copy[id]=value;answers=copy}
-    function sendMessage() {followTail=true;if(chat.send()){tail();composer.forceActiveFocus()}}
+    function sendMessage() {if(chat.modelsLoading)return;followTail=true;if(chat.send()){tail();composer.forceActiveFocus()}}
     function scrollToEnd() {
-        conversation.forceLayout()
         conversation.positionViewAtEnd()
-        conversation.contentY=Math.max(conversation.originY-conversation.topMargin,conversation.originY+conversation.contentHeight-conversation.height+conversation.bottomMargin)
     }
     function tail() {if(followTail)Qt.callLater(()=>{if(followTail)scrollToEnd()})}
-    function latest() {followTail=true;scrollToEnd()}
+    function latest() {followTail=true;chatWheel.reset();scrollToEnd()}
     function chooseModels() {
-        if(chat.models.length<2 && !chat.busy)chat.connectBackend()
+        if(chat.models.length<2 && !chat.busy)chat.prepareModels()
         Qt.callLater(()=>modelPicker.openChoices())
     }
     Connections {
@@ -39,6 +37,7 @@ Item {
         function onTranscriptChanged() {panel.tail()}
         function onModelsRequested() {panel.chooseModels()}
         function onOpenChanged() {if(chat.opened)composer.forceActiveFocus()}
+        function onChanged() {if(composer.text!==chat.draft)composer.text=chat.draft}
     }
     SmoothRectangle { anchors.fill: parent; radius: 12; color: panel.c.BG3; border.width: 1; border.color: panel.c.b08 }
     Item {
@@ -202,19 +201,48 @@ Item {
         x: 18; y: 50; width: parent.width-36; height: Math.max(0,requestCard.y-y-18)
         model: chat.messages; clip: true; spacing: 10; boundsBehavior: Flickable.StopAtBounds
         topMargin: 16; bottomMargin: 10
-        onMovementStarted: panel.followTail=false
-        onContentYChanged: if(moving || scrollBar.pressed)panel.followTail=atYEnd
-        onMovementEnded: panel.followTail=atYEnd
-        onCountChanged: panel.tail()
-        onContentHeightChanged: panel.tail()
-        onHeightChanged: panel.tail()
-        C.ScrollBar.vertical: RakScrollBar { id: scrollBar; width: 3; handleColor: panel.c.b20; hoverColor: panel.c.b35; onPressedChanged: if(pressed)panel.followTail=false }
+        cacheBuffer: 1200
+        flickDeceleration: 3800
+        maximumFlickVelocity: 9000
+        property bool userScrollingDown: false
+        onMovementStarted: { if (!userScrollingDown) panel.followTail = false }
+        onContentYChanged: {
+            if ((dragging || scrollBar.pressed || (moving && userScrollingDown)) && atYEnd) {
+                panel.followTail = true
+            }
+        }
+        onMovementEnded: {
+            userScrollingDown = false
+            if (atYEnd) panel.followTail = true
+        }
+        onCountChanged: if (panel.followTail && !moving && !chatWheel.running) panel.tail()
+        onContentHeightChanged: if (panel.followTail && !moving && !chatWheel.running) panel.tail()
+        onHeightChanged: if (panel.followTail) panel.tail()
+        WorkspaceTreeWheel { id: chatWheel; objectName: "agentChatWheelScroll"; view: conversation; useFlickPhysics: true; animationsEnabled: panel.preferences.settings.animations }
+        MouseArea {
+            anchors.fill: parent
+            z: 5
+            acceptedButtons: Qt.NoButton
+            onWheel: wheel => {
+                const up = wheel.angleDelta.y > 0 || wheel.pixelDelta.y > 0
+                if (up) {
+                    conversation.userScrollingDown = false
+                    panel.followTail = false
+                } else if (wheel.angleDelta.y < 0 || wheel.pixelDelta.y < 0) {
+                    conversation.userScrollingDown = true
+                }
+                chatWheel.handle(wheel)
+                if (!up && conversation.atYEnd) panel.followTail = true
+            }
+        }
+        C.ScrollBar.vertical: RakScrollBar { id: scrollBar; width: 3; handleColor: panel.c.b20; hoverColor: panel.c.b35; onPressedChanged: { if(pressed){ chatWheel.reset(); conversation.userScrollingDown=false; panel.followTail=false } } }
         delegate: Item {
             id: message; required property var modelData; width: conversation.width; height: body.implicitHeight+(user?22:6)
             property bool expanded: false
             readonly property bool user: modelData.role==="user"
             readonly property bool thought: modelData.role==="thought"
             readonly property bool activity: modelData.role==="tool" || thought
+            readonly property bool canExpandActivity: !thought || !!(modelData && modelData.text && String(modelData.text).trim().length > 0)
             readonly property bool status: modelData.role==="status"
             readonly property bool problem: modelData.role==="problem"
             readonly property bool isRunning: !!(panel.chat && panel.chat.running) && (
@@ -241,20 +269,25 @@ Item {
                 }
                 return "op_command"
             }
-            TextMetrics {
-                id: userTextMetrics
+            C.TextArea {
+                id: userTextMeasurer
+                visible: false
+                padding: 0
                 font.family: "Poppins"
                 font.pixelSize: 13
+                textFormat: TextEdit.MarkdownText
+                wrapMode: TextEdit.NoWrap
+                background: null
                 text: message.user ? (message.modelData.text || "") : ""
             }
             readonly property real userContentWidth: {
                 if (!user) return message.width
                 var maxW = Math.max(60, message.width - 38)
-                var w = userTextMetrics.width + 4
+                var w = Math.ceil(userTextMeasurer.implicitWidth) + 2
                 if (modelData.attachments && modelData.attachments.length > 0) {
                     w = Math.max(w, Math.min(maxW, 174))
                 }
-                return Math.min(maxW, Math.max(20, Math.ceil(w)))
+                return Math.min(maxW, Math.max(24, w))
             }
             SmoothRectangle { x: body.x-12; y: 0; width: body.width+24; height: message.height; visible: message.user; radius: 13; color: panel.c.b04; border.width: 1; border.color: panel.c.b06 }
             Column {
@@ -311,36 +344,55 @@ Item {
                     rightPadding: 6; cornerRadius: 6
                     edgeWidth: 0
                     fillColor: "transparent"
-                    hoverFillColor: panel.c.b03
+                    hoverFillColor: message.canExpandActivity ? panel.c.b03 : "transparent"
+                    downFillColor: message.canExpandActivity ? panel.c.b06 : "transparent"
                     labelColor: message.isFailed ? (panel.c.RED_STATUS || "#f87171") : panel.c.FG_MUTED
-                    hoverLabelColor: panel.c.FG
-                    onClicked: message.expanded = !message.expanded
+                    hoverLabelColor: message.canExpandActivity ? panel.c.FG : activityButton.labelColor
+                    animatePress: message.canExpandActivity && panel.preferences.settings.animations
+                    onClicked: { if (message.canExpandActivity) message.expanded = !message.expanded }
 
                     contentItem: Item {
-                        implicitWidth: opIconImg.width + 6 + titleText.implicitWidth + 8 + arrowIcon.width
+                        implicitWidth: opIconSlot.width + 6 + titleText.implicitWidth + (arrowIcon.visible ? (8 + arrowIcon.width) : 4)
                         implicitHeight: activityButton.height
 
-                        Image {
-                            id: opIconImg
+                        Item {
+                            id: opIconSlot
                             anchors.left: parent.left
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 13; height: 13
-                            sourceSize: Qt.size(16, 16)
-                            source: "image://rak/" + message.opIconName + "?color=" + encodeURIComponent(activityButton.visualHovered ? activityButton.hoverLabelColor : activityButton.labelColor)
-                            SequentialAnimation on opacity {
-                                running: !!message.modelData.thinking && panel.preferences.settings.animations
-                                loops: Animation.Infinite
-                                NumberAnimation { to: .35; duration: 650 }
-                                NumberAnimation { to: 1; duration: 650 }
+                            width: 14; height: 14
+
+                            WorkspaceNativeIcon {
+                                id: thoughtStarIcon
+                                objectName: "agentChatThoughtStar"
+                                visible: message.thought
+                                anchors.centerIn: parent
+                                iconKey: "sparkle"
+                                iconSize: 14
+                                isLight: !!(panel.c && panel.c.is_light)
+                                accentColor: panel.c.accent_hex || "#58b9ef"
+                                strokeColor: activityButton.visualHovered ? activityButton.hoverLabelColor : activityButton.labelColor
+                                aiActive: message.thought && (message.isRunning || !!message.modelData.thinking)
+                                aiColored: message.thought
+                                aiGlow: message.thought
+                                animationsEnabled: panel.preferences.settings.animations
+                            }
+
+                            Image {
+                                id: opIconImg
+                                visible: !message.thought
+                                anchors.centerIn: parent
+                                width: 13; height: 13
+                                sourceSize: Qt.size(16, 16)
+                                source: "image://rak/" + message.opIconName + "?color=" + encodeURIComponent(activityButton.visualHovered ? activityButton.hoverLabelColor : activityButton.labelColor)
                             }
                         }
 
                         Text {
                             id: titleText
-                            anchors.left: opIconImg.right
+                            anchors.left: opIconSlot.right
                             anchors.leftMargin: 6
                             anchors.right: arrowIcon.left
-                            anchors.rightMargin: 8
+                            anchors.rightMargin: arrowIcon.visible ? 8 : 0
                             anchors.verticalCenter: parent.verticalCenter
                             text: activityButton.text
                             font: activityButton.font
@@ -392,9 +444,11 @@ Item {
 
                         Image {
                             id: arrowIcon
+                            objectName: "agentChatActivityArrow"
+                            visible: message.canExpandActivity
                             anchors.right: parent.right
                             anchors.verticalCenter: parent.verticalCenter
-                            width: 8; height: 8
+                            width: visible ? 8 : 0; height: 8
                             sourceSize: Qt.size(16, 16)
                             source: "image://rak/arrow_right?color=" + encodeURIComponent(activityButton.visualHovered ? activityButton.hoverLabelColor : activityButton.labelColor)
                             rotation: message.expanded ? 90 : 0
@@ -408,7 +462,7 @@ Item {
                 ViewerToolButton { visible: message.problem; colors: panel.c; text: message.expanded ? panel.tr.hide_details : panel.tr.details; font.pixelSize: 10; onClicked: message.expanded = !message.expanded }
                 SmoothRectangle {
                     id: terminalBox
-                    visible: (message.problem || message.activity) && message.expanded
+                    visible: (message.problem || (message.activity && message.canExpandActivity)) && message.expanded
                     width: parent.width
                     height: visible ? (boxHeader.height + scrollArea.height + (truncatedLabel.visible ? (truncatedLabel.implicitHeight + 8) : 0) + 4) : 0
                     radius: 7
@@ -440,7 +494,17 @@ Item {
                             anchors.verticalCenter: parent.verticalCenter
                             spacing: 6
 
+                            WorkspaceNativeIcon {
+                                visible: message.thought
+                                anchors.verticalCenter: parent.verticalCenter
+                                iconKey: "sparkle"
+                                iconSize: 12
+                                isLight: !!(panel.c && panel.c.is_light)
+                                accentColor: panel.c.accent_hex || "#58b9ef"
+                                aiColored: true
+                            }
                             Image {
+                                visible: !message.thought
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: 12; height: 12
                                 sourceSize: Qt.size(16, 16)
@@ -458,7 +522,7 @@ Item {
 
                         SmoothRectangle {
                             visible: message.isFailed
-                            anchors.right: copyOutputBtn.left
+                            anchors.right: parent.right
                             anchors.rightMargin: 8
                             anchors.verticalCenter: parent.verticalCenter
                             width: failedBadgeText.implicitWidth + 10
@@ -477,23 +541,6 @@ Item {
                                 font.weight: Font.Medium
                                 color: panel.c.RED_STATUS
                             }
-                        }
-
-                        RakButton {
-                            id: copyOutputBtn
-                            anchors.right: parent.right
-                            anchors.rightMargin: 6
-                            anchors.verticalCenter: parent.verticalCenter
-                            width: 22; height: 20
-                            cornerRadius: 4
-                            edgeWidth: 0
-                            leftPadding: 0; rightPadding: 0
-                            fillColor: "transparent"
-                            hoverFillColor: panel.c.b06
-                            iconSource: "image://rak/chat_copy?color=" + encodeURIComponent(visualHovered ? panel.c.FG : panel.c.FG_MUTED)
-                            iconWidth: 12; iconHeight: 12
-                            toolTip: panel.tr.copy
-                            onClicked: chat.copyText(technical.text)
                         }
                     }
 
@@ -544,23 +591,146 @@ Item {
                     delegate: AgentAttachmentChip { required property var modelData; attachment: modelData; chat: panel.chat; preferences: panel.preferences; width: Math.min(174,body.width) }
                   }
                 }
-                RakButton { visible: message.modelData.role==="assistant"; objectName: "agentChatCopy"; width: 24; height: 22; cornerRadius: 6; edgeWidth: 0; leftPadding: 0; rightPadding: 0
-                    iconSource: "image://rak/chat_copy?color="+encodeURIComponent(panel.c.FG_MUTED); iconWidth: 14; iconHeight: 14; hoverFillColor: panel.c.b05; toolTip: panel.tr.copy; onClicked: chat.copyText(message.modelData.text)
-                }
             }
         }
         Column {
-            visible: conversation.count===0; x: 5; y: Math.max(20,(parent.height-height)*.38); width: parent.width-10; spacing: 12
-            RakLabel { width: parent.width; text: panel.tr.welcome; font.pixelSize: 18; font.weight: Font.DemiBold; color: panel.c.FG_BRIGHT; wrapMode: Text.WordWrap }
-            RakLabel { width: parent.width; text: panel.tr.welcome_body; font.pixelSize: 12; color: panel.c.FG_MUTED; wrapMode: Text.WordWrap }
-            ActionButton { colors: panel.c; text: panel.tr.example; height: 30; font.pixelSize: 11; onClicked: {composer.text=panel.tr.example;composer.forceActiveFocus()} }
+            id: emptyHero
+            visible: conversation.count===0
+            x: 8
+            y: Math.max(18, (parent.height - height) * 0.42)
+            width: parent.width - 16
+            spacing: 16
+
+            Item {
+                width: 60; height: 60
+                anchors.horizontalCenter: parent.horizontalCenter
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 60; height: 60; radius: 30
+                    color: panel.c.a10 || Qt.rgba(0.25, 0.78, 0.58, 0.08)
+                    border.width: 1
+                    border.color: panel.c.a20 || Qt.rgba(0.25, 0.78, 0.58, 0.16)
+                }
+
+                Rectangle {
+                    anchors.centerIn: parent
+                    width: 44; height: 44; radius: 22
+                    color: panel.c.BG2
+                    border.width: 1
+                    border.color: panel.c.b14
+
+                    WorkspaceNativeIcon {
+                        anchors.centerIn: parent
+                        iconKey: "sparkle"
+                        iconSize: 20
+                        isLight: !!(panel.c && panel.c.is_light)
+                        strokeColor: panel.c.FG_BRIGHT
+                        accentColor: panel.c.accent_hex
+                    }
+                }
+            }
+
+            Column {
+                width: parent.width
+                spacing: 6
+
+                RakLabel {
+                    width: parent.width
+                    text: panel.tr.welcome
+                    font.pixelSize: 17
+                    font.weight: Font.DemiBold
+                    color: panel.c.FG_BRIGHT
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                }
+
+                RakLabel {
+                    width: Math.min(parent.width, 280)
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    text: panel.tr.welcome_body
+                    font.pixelSize: 12
+                    lineHeight: 1.3
+                    color: panel.c.FG_MUTED
+                    horizontalAlignment: Text.AlignHCenter
+                    wrapMode: Text.WordWrap
+                }
+            }
+
+            SmoothRectangle {
+                width: Math.min(parent.width, 304)
+                anchors.horizontalCenter: parent.horizontalCenter
+                height: hintList.implicitHeight + 16
+                radius: 12
+                color: panel.c.b03
+                border.width: 1
+                border.color: panel.c.b07
+
+                Column {
+                    id: hintList
+                    x: 12; y: 8
+                    width: parent.width - 24
+                    spacing: 2
+
+                    Repeater {
+                        model: [
+                            {icon: "op_read", text: panel.tr.welcome_hint_context || "Reads selected files & editor lines automatically"},
+                            {icon: "op_edit", text: panel.tr.welcome_hint_edit || "Edits open buffers & runs Kitchen commands"},
+                            {icon: "op_command", text: panel.tr.welcome_hint_commands || "Type / for commands · Drop files to attach"}
+                        ]
+                        delegate: Item {
+                            required property var modelData
+                            required property int index
+                            width: hintList.width
+                            height: Math.max(30, hintLabel.implicitHeight + 10)
+
+                            SmoothRectangle {
+                                visible: index > 0
+                                anchors.top: parent.top
+                                width: parent.width
+                                height: 1
+                                color: panel.c.b05
+                            }
+
+                            Row {
+                                anchors.verticalCenter: parent.verticalCenter
+                                anchors.verticalCenterOffset: index > 0 ? 1 : 0
+                                width: parent.width
+                                spacing: 10
+
+                                SmoothRectangle {
+                                    width: 22; height: 22; radius: 6
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    color: panel.c.b04
+                                    Image {
+                                        anchors.centerIn: parent
+                                        width: 12; height: 12
+                                        sourceSize: Qt.size(16, 16)
+                                        source: "image://rak/" + modelData.icon + "?color=" + encodeURIComponent(panel.c.FG2)
+                                    }
+                                }
+
+                                RakLabel {
+                                    id: hintLabel
+                                    width: parent.width - 32
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    text: modelData.text
+                                    font.pixelSize: 11
+                                    color: panel.c.FG2
+                                    wrapMode: Text.WordWrap
+                                }
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     RakButton {
         objectName: "agentChatJumpLatest"; z: 4
         visible: conversation.contentHeight>conversation.height && conversation.contentY+conversation.height<conversation.originY+conversation.contentHeight-24
         x: (panel.width-width)/2; y: requestCard.y-height-10; width: 32; height: 32; cornerRadius: 16
-        leftPadding: 0; rightPadding: 0; edgeWidth: 1; edgeColor: panel.c.b14; fillColor: panel.c.BG3; hoverFillColor: panel.c.BG2
+        leftPadding: 0; rightPadding: 0; edgeWidth: 1; edgeColor: panel.c.b14; fillColor: panel.c.b10; hoverFillColor: panel.c.b16
         iconSource: "image://rak/chat_arrow_down?color="+encodeURIComponent(panel.c.FG2); iconWidth: 18; iconHeight: 18
         toolTip: panel.tr.latest; onClicked: panel.latest()
     }
@@ -650,19 +820,45 @@ Item {
             AgentPermissionChoice {
                 id: permissionPicker
                 objectName: "agentChatPermission"
-                anchors.right: sendButton.left
+                anchors.right: steerButton.visible ? steerButton.left : sendButton.left
                 anchors.rightMargin: 6
                 anchors.verticalCenter: parent.verticalCenter
                 chat: panel.chat
                 preferences: panel.preferences
                 popupBoundsItem: panel
             }
-            RakButton { id: sendButton; objectName: "agentChatSend"; x: parent.width-width; y: 0; width: 32; height: 32; cornerRadius: 16; leftPadding: 0; rightPadding: 0; edgeWidth: 0
+            RakButton { id: steerButton; objectName: "agentChatSteer"
+                visible: !chat.modelsLoading && chat.running && (composer.text.trim().length>0 || chat.attachments.length>0)
+                anchors.right: sendButton.left; anchors.rightMargin: 6; y: 0
+                width: visible?32:0; height: 32; cornerRadius: 16; leftPadding: 0; rightPadding: 0; edgeWidth: 0
                 fillColor: panel.c.FG; hoverFillColor: panel.c.FG_BRIGHT; disabledFillColor: panel.c.b06
-                iconSource: "image://rak/"+(chat.running?"chat_stop":"chat_arrow_up")+"?color="+encodeURIComponent(enabled?panel.c.BG:panel.c.FG_MUTED); iconWidth: 19; iconHeight: 19
-                enabled: chat.running || ((!chat.busy || chat.state==="connecting") && (composer.text.trim().length>0 || chat.attachments.length>0))
-                toolTip: chat.state==="stopping"?panel.tr.force_stop:chat.running?(chat.provider==="agy"?panel.tr.stop_after:panel.tr.stop):(panel.tr.send + " (Enter)")
+                iconSource: "image://rak/chat_arrow_up?color="+encodeURIComponent(panel.c.BG); iconWidth: 19; iconHeight: 19
+                enabled: !chat.modelsLoading
+                toolTip: panel.tr.send + " (Enter)"
+                onClicked: panel.sendMessage()
+            }
+            RakButton { id: sendButton; objectName: "agentChatSend"; x: parent.width-width; y: 0; width: 32; height: 32; cornerRadius: 16; leftPadding: 0; rightPadding: 0; edgeWidth: 0
+                readonly property bool modelsLoading: !!chat.modelsLoading
+                fillColor: modelsLoading ? "transparent" : panel.c.FG; hoverFillColor: modelsLoading ? "transparent" : panel.c.FG_BRIGHT; disabledFillColor: modelsLoading ? "transparent" : panel.c.b06
+                iconSource: modelsLoading ? "" : ("image://rak/"+(chat.running?"chat_stop":"chat_arrow_up")+"?color="+encodeURIComponent(enabled?panel.c.BG:panel.c.FG_MUTED)); iconWidth: 19; iconHeight: 19
+                enabled: !modelsLoading && (chat.running || ((!chat.busy || chat.state==="connecting") && (composer.text.trim().length>0 || chat.attachments.length>0)))
+                toolTip: modelsLoading ? (panel.tr.waiting || "Loading...") : (chat.state==="stopping"?panel.tr.force_stop:chat.running?(chat.provider==="agy"?panel.tr.stop_after:panel.tr.stop):(panel.tr.send + " (Enter)"))
                 onClicked: {if(chat.running)chat.stop();else panel.sendMessage()}
+            }
+            Rectangle { id: sendSkeleton; objectName: "agentChatSendSkeleton"
+                visible: !!chat.modelsLoading
+                anchors.fill: sendButton
+                radius: 16
+                property real phase: 0.0
+                SequentialAnimation on phase {
+                    loops: Animation.Infinite
+                    running: sendSkeleton.visible
+                    NumberAnimation { from: 0.0; to: 1.0; duration: 750; easing.type: Easing.InOutSine }
+                    NumberAnimation { from: 1.0; to: 0.0; duration: 750; easing.type: Easing.InOutSine }
+                }
+                color: (panel.c && panel.c.is_light)
+                    ? Qt.rgba(0.08, 0.10, 0.14, 0.09 + 0.07 * phase)
+                    : Qt.rgba(1.0, 1.0, 1.0, 0.08 + 0.07 * phase)
             }
         }
         RakLabel { id: inputError; x: 13; y: footer.y+footer.height+7; width: parent.width-26; visible: !!chat.error && chat.state!=="failed"; text: visible?chat.error:""; color: panel.c.RED_STATUS; font.pixelSize: 10; wrapMode: Text.WordWrap }

@@ -38,12 +38,16 @@ def publish_repack(actual,requested):
 
 def image_to_dat(path,*,brotli=False):
     from core import native_backend
+    from core.threader_control import report_progress
     folder=os.path.dirname(path);prefix=os.path.splitext(os.path.basename(path))[0]
+    report_progress(25,'Converting to .new.dat')
     native_backend.img2sdat(path, folder, version=4, prefix=prefix)
     output=os.path.join(folder,prefix+'.new.dat')
     if brotli:
         from core.brotli_tool import compress_to_br
+        report_progress(65,'Compressing Brotli (.dat.br)')
         output=checked(compress_to_br(output,keep_source=False))
+    report_progress(100,'Done')
     return output
 
 
@@ -61,6 +65,7 @@ def unpack_image(path):
 
 def dat_to_image(path,*,folder=False):
     from core import native_backend
+    from core.threader_control import report_progress
     compressed=path.lower().endswith('.new.dat.br')
     suffix='.new.dat.br' if compressed else '.new.dat'
     if not path.lower().endswith(suffix):raise ValueError('Expected a .new.dat or .new.dat.br file')
@@ -69,17 +74,25 @@ def dat_to_image(path,*,folder=False):
     dat=path
     if compressed:
         from core.brotli_tool import decompress_from_br
+        report_progress(10,'Decompressing .dat.br')
         dat=checked(decompress_from_br(path,keep_source=True))
+    report_progress(35 if not folder else 25,'Reconstructing .img from .new.dat')
     native_backend.sdat2img(transfer, dat, output)
     if compressed:os.remove(dat)
     if folder:
+        report_progress(50,'Unpacking reconstructed image')
         result=unpack_image(output);os.remove(output);return result
+    report_progress(100,'Done')
     return output
 
 
 def brotli_to_image(path,*,folder=False):
     from core.brotli_tool import decompress_from_br
+    from core.threader_control import report_progress
+    report_progress(15,'Decompressing Brotli image')
     output=checked(decompress_from_br(path,keep_source=True))
     if folder:
+        report_progress(45,'Unpacking image')
         result=unpack_image(output);os.remove(output);return result
+    report_progress(100,'Done')
     return output

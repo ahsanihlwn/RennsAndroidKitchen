@@ -9,8 +9,8 @@ from core.command_context import OperationError
 
 def resolve_tool(name):
     from core.app_paths import BIN_DIR
-    from core.binary_handler import resolve_binary
-    installed=resolve_binary(BIN_DIR,name+'.exe' if os.name=='nt' else name)
+    from core.binary_handler import resolve_external_binary
+    installed=resolve_external_binary(BIN_DIR,name+'.exe' if os.name=='nt' else name)
     if installed:return installed
     installed=shutil.which(name)
     if installed:return installed

@@ -16,8 +16,8 @@ NATIVE_PLATFORM_TOOLS = (
 )
 
 NATIVE_BUILTIN_PACKAGES = frozenset({
-    "ext_tool", "make_ext4fs", "lpunpack", "magiskboot",
-    "erofs_rs", "erofs", "mkfs.erofs", "dump.erofs", "fsck.erofs", "extract.erofs",
+    "ext_tool", "make_ext4fs", "lpunpack", "magiskboot", "pac_extractor",
+    "erofs_env", "erofs_rs", "erofs", "mkfs.erofs", "dump.erofs", "fsck.erofs", "extract.erofs",
     "sdatimg", "sdat2img", "img2sdat",
     "brotli_env", "brotli", "brotli_rs",
     "platform-tools", "platform_tools", "platform_tools_rs",
@@ -26,13 +26,15 @@ NATIVE_BUILTIN_PACKAGES = frozenset({
 
 _NATIVE_TOOL_FNS = {
     "lpunpack": "super_extract_json",
-    "lpmake": "super_extract_json",
+    "lpmake": "super_make_json",
     "ext_cli": "ext_unpack",
     "ext_tool": "ext_unpack",
     "make_ext4fs": "ext_make_fs",
     "img2simg": "sparse_img2simg",
     "simg2img": "sparse_simg2img",
     "magiskboot": "boot_unpack_json",
+    "dtbo": "dtbo_unpack_json",
+    "mkdtboimg": "dtbo_pack_json",
     "mkfs.erofs": "erofs_pack",
     "mkfs_erofs": "erofs_pack",
     "dump.erofs": "erofs_info_json",

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 """Original kitchen queue and loading state, without widget presentation."""
 from core.command_context import CommandFailure, current_command, failure_from_exception
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject, QThread, Qt, Signal
 
 from core.task_queue import TaskItem, TaskQueue
 from main_ext.class_LoadingManager import LoadingManager
@@ -12,18 +12,20 @@ class WorkspaceTasks(QObject):
     changed = Signal()
     drained = Signal()
     recoveryFinished = Signal(bool, str)
+    progressReported = Signal(int, str, int, str)
 
     def __init__(self, parent=None, *, runner=None, recovery=None):
         super().__init__(parent)
-        self.jobs = AsyncJobs(self, limit=1)
+        self.jobs = AsyncJobs(self, limit=None)
         self.loading = LoadingManager(self)
+        self.progressReported.connect(self._on_progress_reported, Qt.QueuedConnection)
         self._recovery = recovery
         self._recovering = False
         self._recovery_batch = None
         self._halt_reason = ''
         self._external=set()
         self._external_results={}
-        self.queue = TaskQueue(self._run, self._queue_empty, on_halted=self._begin_recovery if recovery is not None else None)
+        self.queue = TaskQueue(self._run, self._queue_empty, on_halted=self._begin_recovery if recovery is not None else None, pass_task_id=True)
         if recovery is not None:
             recovery.finished.connect(self._recovered)
             recovery.progress.connect(self._recovery_progress)
@@ -34,6 +36,8 @@ class WorkspaceTasks(QObject):
         self.halted = False
         self.text = ''
         self.state = 'idle'
+        self.progress = -1
+        self.stage = ''
         self.pending = []
         self.history_lines = []
         self.loading.state_active.connect(self._active)
@@ -41,12 +45,21 @@ class WorkspaceTasks(QObject):
         self.loading.state_failed.connect(lambda text, history: self._set(text, 'error', [], history))
         self.loading.state_clean.connect(lambda history: self._set('', 'idle', [], history))
 
+    def _on_progress_reported(self, batch_id, task_id, percent, stage):
+        if self._closed:
+            return
+        self.loading.update_task_progress(batch_id, task_id, percent, stage)
+
     @property
     def count(self):
         return len(self._entries)
 
     def _set(self, text, state, pending, history):
         self.text, self.state = text, state
+        if state == 'active':
+            self.progress, self.stage = self.loading.get_progress_info()
+        else:
+            self.progress, self.stage = -1, ''
         self.pending, self.history_lines = list(pending), list(history)
         self.changed.emit()
 
@@ -57,8 +70,8 @@ class WorkspaceTasks(QObject):
         self._set(text, 'error' if failed else 'done', [], history)
 
     def _run(self, worker, arg, callback):
-        key = self.queue.snapshot()['ring1']
-        self._start(key,worker,arg,callback)
+        key = arg if isinstance(arg, str) and arg in self._entries else self.queue.snapshot()['ring1']
+        self._start(key, worker, None, callback)
 
     def _queue_empty(self):
         if not self._external:self.drained.emit()
@@ -68,7 +81,7 @@ class WorkspaceTasks(QObject):
 
     def _start(self,key,worker,arg,callback):
         entry = self._entries[key]
-        self.loading.mark_group_active(entry['batch'], entry['label'])
+        self.loading.mark_task_active(entry['batch'], key, entry.get('member_label') or entry['label'])
         if entry.get('starter') is not None:
             settled=[False]
             def completed(ok,result):
@@ -77,7 +90,7 @@ class WorkspaceTasks(QObject):
                 if not ok and current_command() is not None and not isinstance(result,CommandFailure):result=CommandFailure(result)
                 callback(ok,result)
             try:
-                entry['starter'](completed,lambda percent,stage='':self.loading.update_progress(entry['batch'],percent,stage))
+                entry['starter'](completed,lambda percent,stage='':self.loading.update_task_progress(entry['batch'],key,percent,stage))
             except Exception as error:completed(False,failure_from_exception(error))
             return
         if self._runner:
@@ -85,7 +98,8 @@ class WorkspaceTasks(QObject):
         else:
             self.jobs.submit(key, lambda _=None: worker(), None, callback)
 
-    def enqueue(self, label, worker, callback, *, batch=None, starter=None, immediate=False):
+    def enqueue(self, label, worker, callback, *, batch=None, starter=None, immediate=False, lane=None, targets=None,
+                weight=1.0, member_label=None, highlight_path=''):
         if self._closed:
             return None
         if self.halted and self._recovery is None and not immediate:
@@ -95,11 +109,22 @@ class WorkspaceTasks(QObject):
         # One batch per command retains the source manager's pending/history,
         # composite completion messages and 4-second result hold before cleanup.
         if batch is None:batch = self.loading.start_batch(label, 1, label=label)
-        self._entries[key] = {'label': label, 'batch': batch, 'starter':starter}
+        display_member = member_label or label
+        self.loading.register_task(batch, key, display_member, weight=weight, folder_path=highlight_path)
+        self._entries[key] = {'label': label, 'member_label': display_member, 'batch': batch, 'starter':starter}
 
         def run():
+            from core.threader_control import progress_scope
+            def emit_progress(percent, stage=''):
+                if self._closed:
+                    return
+                if QThread.currentThread() == self.thread():
+                    self._on_progress_reported(batch, key, int(percent), str(stage or ''))
+                else:
+                    self.progressReported.emit(batch, key, int(percent), str(stage or ''))
             try:
-                result = worker()
+                with progress_scope(emit_progress):
+                    result = worker()
                 if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], bool):
                     if not result[0] and current_command() is not None and not isinstance(result[1], CommandFailure):
                         return False, CommandFailure(result[1])
@@ -116,7 +141,7 @@ class WorkspaceTasks(QObject):
             if was_external:
                 self._external.discard(key)
                 self._external_results[key]=(bool(ok),str(result))
-            self.loading.report_done(batch, ok, member_name=label,
+            self.loading.report_done(batch, ok, member_name=entry.get('member_label') or label,
                                      detail=str(result or "") if not ok else None,task_id=key)
             from core.error_reporting import error_checkpoint, error_reported_since, report_fatal
             checkpoint = error_checkpoint()
@@ -141,7 +166,11 @@ class WorkspaceTasks(QObject):
         if immediate:
             self._external.add(key)
             self._start(key,run,None,finished)
-        else:self.queue.enqueue(TaskItem(key, run, finished, halt_if=halt))
+        else:
+            from core.threader_control import classify_lane, normalize_targets
+            norm_targets = normalize_targets(targets)
+            effective_lane = classify_lane(label, lane=lane, targets=norm_targets) if (lane is not None or norm_targets) else 'serial'
+            self.queue.enqueue(TaskItem(key, run, finished, halt_if=halt, lane=effective_lane, targets=norm_targets))
         self.changed.emit()
         return key
 
@@ -150,17 +179,20 @@ class WorkspaceTasks(QObject):
         return self.enqueue(label,None,callback,starter=starter,immediate=True)
 
     def activity_snapshot(self):
-        queue=self.queue.snapshot()
+        queue=self.queue.detailed_snapshot()
         groups=self.loading.get_activity()
         by_batch={row['batch_id']:row for row in groups}
+        running_ids=set(queue['running'])|set(self._external)
+        ordered=list(dict.fromkeys([*queue['running'],queue['ring2'],*queue['ring3'],*sorted(self._external)]))
         tasks=[]
-        for key in [queue['ring1'],queue['ring2'],*queue['ring3'],*sorted(self._external)]:
+        for key in ordered:
             if key is None:continue
             entry=self._entries.get(key,{})
             group=by_batch.get(entry.get('batch'),{})
-            tasks.append({'id':key,'label':entry.get('label',key),'state':'running' if key==queue['ring1'] or key in self._external else 'queued',
+            tasks.append({'id':key,'label':entry.get('label',key),'state':'running' if key in running_ids else 'queued',
                           'batch_id':entry.get('batch'),'progress':group.get('progress',-1),
-                          'stage':group.get('stage',''),'elapsed':group.get('elapsed',0)})
+                          'stage':group.get('stage',''),'elapsed':group.get('elapsed',0),
+                          'subtasks':group.get('subtasks',[])})
         results={row[1]:row for row in self.queue.results_since(0)}
         history=self.loading.get_history()
         for row in history:
@@ -171,13 +203,21 @@ class WorkspaceTasks(QObject):
                 'busy':self.busy,'status':self.text,'halt_reason':self._halt_reason,
                 'tasks':tasks,'activity':groups,'history':list(reversed(history))}
 
-    def enqueue_batch(self,label,items):
+    def enqueue_batch(self,label,items,*,lane=None):
         """One source loading group, with independently queued partition jobs."""
         items=list(items)
         if self._closed or not items:return []
         if self.halted and self._recovery is None:raise RuntimeError('Task queue paused after a failed source restore.\n'+self._halt_reason)
         batch=self.loading.start_batch('extracting',len(items),label=label)
-        return [self.enqueue(member,worker,callback,batch=batch) for member,worker,callback in items]
+        keys=[]
+        for row in items:
+            if len(row)==4:
+                member,worker,callback,targets=row
+            else:
+                member,worker,callback=row
+                targets=None
+            keys.append(self.enqueue(member,worker,callback,batch=batch,lane=lane,targets=targets))
+        return keys
 
     def clear_history(self):
         self.loading.clear_history()

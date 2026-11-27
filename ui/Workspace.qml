@@ -16,13 +16,14 @@ Window {
     readonly property int headerInset: 1
     readonly property int editorGap: 12
     property var dialogStack: null
-    readonly property var managedDialogs: [message,fatalMessage].concat([errorLogLoader.item,settingsLoader.item,actionDialogLoader.item,agentDialogLoader.item,inboxPanelLoader.item,permissionDialogLoader.item,openWithDialogLoader.item,branchCreateLoader.item,branchPickerLoader.item,makeFilesystemLoader.item,androidToolsLoader.item,apkDebloaterLoader.item,sepolicyPatchLoader.item,flashableLoader.item,fileConflictsLoader.item,symlinkLoader.item,partitionPickerLoader.item,renxecPickerLoader.item,automationLogLoader.item,comparePickerLoader.item,compareWindowLoader.item].filter(dialog => !!dialog))
+    readonly property var managedDialogs: [message,fatalMessage].concat([errorLogLoader.item,settingsLoader.item,actionDialogLoader.item,agentDialogLoader.item,inboxPanelLoader.item,permissionDialogLoader.item,openWithDialogLoader.item,branchCreateLoader.item,branchPickerLoader.item,makeFilesystemLoader.item,androidToolsLoader.item,bootAnalyzerLoader.item,apkDebloaterLoader.item,sepolicyPatchLoader.item,flashableLoader.item,packSuperLoader.item,fileConflictsLoader.item,symlinkLoader.item,partitionPickerLoader.item,renxecPickerLoader.item,automationLogLoader.item,comparePickerLoader.item,compareWindowLoader.item].filter(dialog => !!dialog))
     readonly property bool nativeDialogActive: (dialogStack && dialogStack.modalActive) || importPicker.visible || mountExtractPicker.visible || (inboxPanelLoader.item && inboxPanelLoader.item.presented && focusInside(inboxPanelLoader.item.contentItem)) || managedDialogs.some(dialog => dialog.presented && dialog.modal)
     readonly property real dialogScrimOpacity: {
         if (mountExtractPicker.visible) return 1
         let peak = importPicker.visible ? importPicker.opacity : 0
-        for (let i = 0; i < managedDialogs.length; ++i) {
-            const d = managedDialogs[i]
+        const all = managedDialogs.concat(dialogStack ? dialogStack.activeDialogs : [])
+        for (let i = 0; i < all.length; ++i) {
+            const d = all[i]
             if (d && d.visible && d.modal) peak = Math.max(peak, d.opacity)
         }
         return peak
@@ -302,12 +303,25 @@ Window {
                 }
                 WorkspaceTabs {
                     id: editorTabs; objectName: "workspaceEditorTabs"
-                    x: window.headerInset; y: window.headerInset; width: parent.width-2*window.headerInset-30-(workspace.activeRunnable?30:0); height: 34
+                    readonly property int trailingActionsWidth: (workspace.agentChat.available ? 30 : 0)
+                        + (workspace.activeRunnable ? 30 : 0)
+                        + (workspace.activeKind === "editor" && !!workspace.activeDetails.markdown ? 78 : 0)
+                    x: window.headerInset; y: window.headerInset; width: Math.max(80, parent.width-2*window.headerInset-trailingActionsWidth); height: 34
                     rightCornerRadius: Math.abs(x+width-parent.width+window.headerInset)<.5?7:0
                     preferences: window.preferences; rows: workspace.tabs; activeKey: workspace.activeTab
                     workspace: window.workspace
                     onSelected: key => workspace.selectTab(key)
                     onClosed: key => workspace.closeTab(key)
+                }
+                ImageToolButton {
+                    objectName: "markdownPreviewToggle"
+                    anchors.right: parent.right
+                    anchors.rightMargin: window.cardInset + (workspace.agentChat.available ? 34 : 4) + (workspace.activeRunnable ? 30 : 0)
+                    y: window.headerInset + 4; height: 26
+                    visible: workspace.activeKind === "editor" && !!workspace.activeDetails.markdown
+                    colors: window.c; text: "Preview"
+                    toolTip: "Switch to Markdown Preview"
+                    onClicked: workspace.setMarkdownEditMode(workspace.activeTab, false)
                 }
                 WorkspaceIconButton {
                     objectName: "workspaceRunFile"; anchors.right: parent.right; anchors.rightMargin: window.cardInset+30; y: window.headerInset+2; width: 30; height: 30
@@ -322,8 +336,9 @@ Window {
                     onClicked: {
                         var qEd = monaco.findQuillEditor()
                         if (qEd) {
-                            monaco.session.setSelection(qEd.filePath || workspace.activeTab, qEd.selectionRange)
-                            workspace.dispatch("agentSend", {origin: "editor", path: qEd.filePath || workspace.activeTab, selection: qEd.selectionRange})
+                            var targetPath = workspace.activeTab || qEd.filePath
+                            monaco.session.setSelection(targetPath, qEd.selectionRange)
+                            workspace.dispatch("agentSend", {origin: "editor", path: targetPath, selection: qEd.selectionRange})
                         } else {
                             workspace.dispatch("agentSend", {origin: "editor"})
                         }
@@ -432,9 +447,11 @@ Window {
     AsyncDialogLoader { id: branchPickerLoader }
     AsyncDialogLoader { id: makeFilesystemLoader }
     AsyncDialogLoader { id: androidToolsLoader }
+    AsyncDialogLoader { id: bootAnalyzerLoader }
     AsyncDialogLoader { id: apkDebloaterLoader }
     AsyncDialogLoader { id: sepolicyPatchLoader }
     AsyncDialogLoader { id: flashableLoader }
+    AsyncDialogLoader { id: packSuperLoader }
     AsyncDialogLoader { id: fileConflictsLoader }
     AsyncDialogLoader { id: symlinkLoader }
     AsyncDialogLoader { id: partitionPickerLoader }
@@ -462,13 +479,15 @@ Window {
         function onPresentationRequested(kind,data) {
             if(kind==="message")message.showMessage(data)
             else if(kind==="fatal") {window.requestActivate();fatalMessage.showMessage(data)}
-            else if(kind==="errorLog") { const txt=data.text; openDialog(errorLogLoader,"ErrorLogWindow.qml",{model:window.preferences,commandTarget:window.workspace,hostWindow:window},"",function(d){d.showLog(txt)}) }
+            else if(kind==="errorLog") { const log=data; openDialog(errorLogLoader,"ErrorLogWindow.qml",{model:window.preferences,commandTarget:window.workspace,hostWindow:window},"",function(d){d.showLog(log.text,log.fatal)}) }
             else if(kind==="settings")openModelDialog(settingsLoader,"controls/WorkspaceSettings.qml","settings",function(d){d.showSettings()})
             else if(kind==="agentSettingGuide") { const tgt=data.target; openModelDialog(settingsLoader,"controls/WorkspaceSettings.qml","settings",function(d){d.showSettings(tgt)}) }
             else if(kind==="android")openModelDialog(androidToolsLoader,"controls/WorkspaceAndroidTools.qml","android",function(d){d.showTools()})
+            else if(kind==="bootAnalyzer")openModelDialog(bootAnalyzerLoader,"controls/WorkspaceBootAnalyzer.qml","bootAnalyzer",function(d){d.showAnalyzer()})
             else if(kind==="apkDebloater") { const payload=data||{}; openModelDialog(apkDebloaterLoader,"controls/WorkspaceApkDebloater.qml","apkDebloater",function(d){d.showDebloater(payload.path||"")}) }
             else if(kind==="sepolicyPatch") { const payload=data||{}; openModelDialog(sepolicyPatchLoader,"controls/WorkspaceSepolicyPatch.qml","sepolicyPatch",function(d){d.showSepolicyPatch(payload.path||"")}) }
             else if(kind==="flashable") { const payload=data; openModelDialog(flashableLoader,"controls/WorkspaceFlashable.qml","",function(d){d.showBuilder(payload)}) }
+            else if(kind==="packSuper") { const payload=data; openModelDialog(packSuperLoader,"controls/WorkspacePackSuper.qml","",function(d){d.showPackSuper(payload)}) }
             else if(kind==="fileConflicts") { const payload=data; openModelDialog(fileConflictsLoader,"controls/WorkspaceFileConflicts.qml","",function(d){d.showConflicts(payload)}) }
             else if(kind==="symlink") { const payload=data; openModelDialog(symlinkLoader,"controls/WorkspaceSymlink.qml","",function(d){d.showSymlink(payload)}) }
             else if(kind==="symlinksCreated") { if(symlinkLoader.item)symlinkLoader.item.dismiss(); else symlinkLoader.cancelPending() }

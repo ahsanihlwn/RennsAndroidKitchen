@@ -52,12 +52,15 @@ DialogWindow {
                 width: parent.width - 140
                 height: parent.height
                 spacing: 10
-                Image {
+                WorkspaceNativeIcon {
                     width: 16
                     height: 16
-                    source: "image://icons/android_tools"
+                    iconSize: 16
+                    iconKey: "android_tools"
+                    strokeColor: dialog.c.accent_hex || dialog.c.FG
+                    accentColor: dialog.c.accent_hex || "#38bdf8"
+                    isLight: !!(dialog.c && dialog.c.is_light)
                     anchors.verticalCenter: parent.verticalCenter
-                    smooth: true
                 }
                 RakLabel {
                     text: "APK Debloater"

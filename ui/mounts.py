@@ -14,7 +14,7 @@ class WorkspaceMounts(QObject):
     changed=Signal()
     def __init__(self,session):
         super().__init__(session);self.session=session;self._jobs=AsyncJobs(self)
-        self._registries={};self._image_base={};self._closed=False
+        self._registries={};self._image_base={};self._unpack_previews={};self._closed=False
         for directory in session.directories:directory.mounts=self
     def registry(self,base):return self._registries.setdefault(base,MountIndex(base))
     def reference(self,path,*,resolve=True):
@@ -63,7 +63,7 @@ class WorkspaceMounts(QObject):
             registry.indexes[path]=index;registry.metadata[path]=meta;self._image_base[path]=base
             self._reload_views()
         from ui.workspace_actions import operation
-        return operation(self.session,'Mount image '+os.path.basename(path),work,done)
+        return operation(self.session,'Mount image '+os.path.basename(path),work,done,lane='light',targets=(path,))
     @Slot(str)
     def unmount(self,path):
         ref=self.reference(path,resolve=False)
@@ -100,7 +100,7 @@ class WorkspaceMounts(QObject):
             writable=self.writable(image)
             def save(tab_id,content):self.save_text(image,internal,tab_id,content);return False
             self.session.editor.bridge.open_virtual(tab_id,text,language=_detect_language(internal),read_only=not writable,on_save=save if writable else None)
-            self.session._tab_data.append({'key':tab_id,'path':tab_id,'documentPath':tab_id,'title':os.path.basename(internal),'kind':'editor','icon':'txt','unsaved':False,'url':''})
+            self.session._tab_data.append({'key':tab_id,'path':tab_id,'documentPath':tab_id,'title':os.path.basename(internal),'kind':'editor','icon':'txt','unsaved':False,'readOnly':not writable,'url':''})
             self.session._active_tab=tab_id;self.session._refresh_tabs();self.session._reveal_right()
             self.session.editor.openFile(tab_id)
         self._jobs.submit('read:'+tab_id,work,None,done)
@@ -110,7 +110,7 @@ class WorkspaceMounts(QObject):
         def finished(result):
             if done:done(result)
             self.mount(image)
-        operation(self.session,label,work,finished)
+        operation(self.session,label,work,finished,lane='mount_write',targets=(image,))
     def save_text(self,image,internal,tab_id,content):
         bridge=self.session.editor.bridge
         if not self.writable(image):bridge.documentSaveFailed.emit(tab_id,'This mounted image is read-only');return
@@ -125,7 +125,8 @@ class WorkspaceMounts(QObject):
         from ui.workspace_actions import operation
         def settled(ok,result):
             if not ok:bridge.documentSaveFailed.emit(tab_id,str(result))
-        operation(self.session,'Save '+internal,work,lambda result:(done(result),self.mount(image)),settled=settled)
+        operation(self.session,'Save '+internal,work,lambda result:(done(result),self.mount(image)),settled=settled,
+                  lane='mount_write',targets=(image,))
     def metadata(self,path,column,value):
         image,internal=self.reference(path)
         if column==0:return
@@ -135,7 +136,8 @@ class WorkspaceMounts(QObject):
         ref=self.reference(path);destination=url.toLocalFile()
         if ref and destination:
             from ui.workspace_actions import operation
-            operation(self.session,'Extract '+ref[1],lambda:imgfs.extract_path(ref[0],ref[1],destination))
+            operation(self.session,'Extract '+ref[1],lambda:imgfs.extract_path(ref[0],ref[1],destination),
+                      lane='heavy',targets=(ref[0],destination))
     @Slot(str)
     def delete(self,path):
         ref=self.reference(path,resolve=False)
@@ -155,5 +157,215 @@ class WorkspaceMounts(QObject):
             lines+=['',f"{data['files']} files, {data['dirs']} folders, {data['links']} symlinks",f"Logical content: {fmt(data['logical_bytes'])}"]
             compact=data['fs']=='EROFS' and data['reclaimable_bytes']>=1024**2
             self.session.message('\n'.join(lines),'Space usage',confirm=(lambda:self._mutate('Compact '+os.path.basename(image),image,lambda:imgfs.compact_image(image))) if compact else None,accept='Compact' if compact else '',cancel_label='Later' if compact else '',error=False)
-        operation(self.session,'Space usage '+os.path.basename(image),lambda:imgfs.usage_report(image),done)
+        operation(self.session,'Space usage '+os.path.basename(image),lambda:imgfs.usage_report(image),done,
+                  lane='light',targets=(image,))
+
+    @staticmethod
+    def build_preview_payload(image):
+        image = os.path.normpath(image)
+        if not os.path.isfile(image):
+            return None
+        kind = imgfs.detect_fs(image)
+        if kind not in ('EXT', 'EROFS'):
+            return None
+        if kind == 'EXT':
+            try:
+                from core import native_backend
+                ext_fmt = native_backend.ext_inspect(image).get('fs_type')
+                if ext_fmt in ('EXT2', 'EXT3', 'EXT4'):
+                    kind = ext_fmt
+            except Exception:
+                kind = 'EXT4'
+            if kind == 'EXT':
+                kind = 'EXT4'
+        entries = imgfs.list_image(image)
+        return (_build_child_index(entries), kind, image)
+
+    def _combined_mounts_for(self, base):
+        norm_base = os.path.normcase(os.path.normpath(base))
+        combined = dict(self.registry(base).indexes)
+        for entry in self._unpack_previews.values():
+            if os.path.normcase(os.path.normpath(entry['base'])) == norm_base:
+                combined.setdefault(entry['image'], entry['index'])
+        return combined
+
+    def begin_unpack_preview(self, image, target_dir, base, *, preloaded=None):
+        target = os.path.normpath(target_dir)
+        key = os.path.normcase(target)
+        payload = preloaded if preloaded is not None else self.build_preview_payload(image)
+        if payload is None:
+            return False
+        index, kind, physical_img = payload
+        reg = MountIndex(base)
+        norm_img = os.path.normpath(physical_img)
+        reg.indexes[norm_img] = index
+        reg.metadata[norm_img] = {'fs': kind, 'sparse': False, 'writable': False, 'physical': norm_img}
+        reg._ensure_mounts = lambda b=base: self._combined_mounts_for(b)
+        self._unpack_previews[key] = {
+            'key': key,
+            'image': norm_img,
+            'target': target,
+            'base': base,
+            'fs': kind,
+            'index': index,
+            'registry': reg,
+        }
+        self._refresh_target_views(base, target)
+        return True
+
+    def end_unpack_preview(self, target_dir, *, ok=True, refresh_views=True):
+        target = os.path.normpath(target_dir)
+        key = os.path.normcase(target)
+        entry = self._unpack_previews.pop(key, None)
+        if entry is None:
+            return
+        prefix = key + os.sep
+        if ok and os.path.isdir(target):
+            from core import filesystem_map
+            filesystem_map.seed_from_mount_index(entry['base'], target, entry['index'], entry['fs'])
+            for directory in self.session.directories:
+                target_node = directory._nodes.get(target)
+                if target_node is not None and target_node.loaded:
+                    target_node.watch_path = target
+                    if directory._watch_enabled and target not in directory._watcher.directories():
+                        directory._watcher.addPath(target)
+                for npath, node in tuple(directory._nodes.items()):
+                    nkey = os.path.normcase(os.path.normpath(npath))
+                    if nkey.startswith(prefix):
+                        if not os.path.isdir(npath):
+                            node.loaded = False
+                        elif node.loaded:
+                            node.watch_path = npath
+                            if directory._watch_enabled and npath not in directory._watcher.directories():
+                                directory._watcher.addPath(npath)
+        else:
+            refresh_views = True
+            for directory in self.session.directories:
+                for npath, node in tuple(directory._nodes.items()):
+                    nkey = os.path.normcase(os.path.normpath(npath))
+                    if nkey.startswith(prefix):
+                        node.loaded = False
+        if refresh_views:
+            self._refresh_target_views(entry['base'], target)
+        else:
+            self.changed.emit()
+
+    def _refresh_target_views(self, base, target_dir):
+        parent_dir = os.path.dirname(target_dir)
+        in_preview = os.path.normcase(os.path.normpath(target_dir)) in self._unpack_previews
+        for directory in self.session.directories:
+            if not directory.base:
+                continue
+            if os.path.normcase(os.path.normpath(directory.base)) != os.path.normcase(os.path.normpath(base)):
+                continue
+            root_node = directory._nodes.get(directory.base)
+            target_node = directory._nodes.get(target_dir)
+            parent_node = directory._nodes.get(parent_dir)
+            if target_node is not None and target_node.loaded and (in_preview or os.path.isdir(target_dir)):
+                directory._scan(target_node, refresh=True)
+            if parent_node is not None and parent_node is not target_node:
+                directory._scan(parent_node, refresh=True)
+            elif root_node is not None:
+                directory._scan(root_node, refresh=True)
+        self.changed.emit()
+
+    def active_preview_roots_in(self, parent_dir):
+        norm_parent = os.path.normcase(os.path.normpath(parent_dir))
+        return [
+            entry for entry in self._unpack_previews.values()
+            if os.path.normcase(os.path.dirname(entry['target'])) == norm_parent
+        ]
+
+    def unpack_preview_reference(self, path, *, resolve=True):
+        if not path or not self._unpack_previews or path.startswith('mount://'):
+            return None
+        norm = os.path.normcase(os.path.normpath(path))
+        matched = None
+        for key, entry in self._unpack_previews.items():
+            if norm == key:
+                matched = (entry, '')
+                break
+            if norm.startswith(key + os.sep):
+                rel = norm[len(key) + 1:].replace(os.sep, '/')
+                raw_rel = os.path.normpath(path)[len(entry['target']) + 1:].replace(os.sep, '/')
+                matched = (entry, raw_rel or rel)
+                break
+        if matched is None:
+            return None
+        entry, internal = matched
+        image = entry['image']
+        if resolve and internal:
+            parent = internal.rsplit('/', 1)[0] if '/' in internal else ''
+            row = next((r for r in entry['index'].get(parent, []) if r['path'].strip('/') == internal), None)
+            if row and row.get('is_link') and row.get('target'):
+                virtual, physical, _is_dir, exists = entry['registry']._resolve_symlink_target_for_mount(
+                    image, internal, row['target']
+                )
+                if virtual:
+                    return (virtual[0], virtual[1], entry)
+                if physical and exists:
+                    return ('disk', physical, entry)
+        return (image, internal, entry)
+
+    def preview_children(self, entry, internal, *, image=None):
+        image = os.path.normpath(image or entry['image'])
+        registry = entry['registry']
+        mounts = self._combined_mounts_for(entry['base'])
+        idx = mounts.get(image, entry['index'])
+        rows = idx.get(internal.strip('/'), [])
+        if not rows:
+            redirected = registry._mountpoint_redirect(image, internal)
+            if redirected:
+                image, internal = redirected
+                idx = mounts.get(os.path.normpath(image), entry['index'])
+                rows = idx.get(internal.strip('/'), [])
+        return image, internal, rows, registry
+
+    def open_preview(self, path):
+        path = os.path.normpath(path)
+        ref = self.unpack_preview_reference(path)
+        if not ref:
+            return False
+        image, internal, _entry = ref
+        if image == 'disk':
+            self.session.openAs(internal, 'editor')
+            return True
+        existing = self.session._find_tab(path)
+        if existing is not None:
+            self.session.selectTab(existing['path'])
+            return True
+        if not imgfs.is_text_filename(path):
+            if os.path.isfile(path):
+                self.session.openPath(path)
+            else:
+                self.session.message('Extracting in progress — file will open once extracted.', os.path.basename(path))
+            return True
+        def work():
+            raw, _ = imgfs.read_path(image, internal)
+            if not imgfs.is_text_bytes(raw):
+                raise ValueError('This is a binary file')
+            return True, imgfs.decode_text(raw)[0]
+        def done(ok, text):
+            if not ok:
+                self.session.message(str(text), os.path.basename(path))
+                return
+            if self.session._find_tab(path) is not None:
+                self.session.selectTab(path)
+                return
+            from core.editor_document import _detect_language
+            is_still_locked = self.session.isPathLocked(path)
+            self.session.editor.bridge.open_virtual(
+                path, text, language=_detect_language(path), read_only=is_still_locked
+            )
+            self.session._tab_data.append({
+                'key': path, 'path': path, 'documentPath': path,
+                'title': os.path.basename(path), 'kind': 'editor',
+                'icon': 'txt', 'unsaved': False, 'readOnly': is_still_locked, 'url': ''
+            })
+            self.session._active_tab = path
+            self.session._refresh_tabs()
+            self.session._reveal_right()
+            self.session.editor.openFile(path, read_only=is_still_locked)
+        self._jobs.submit('preview-read:' + path, work, None, done)
+        return True
     def close(self):self._closed=True;self._jobs.stop()

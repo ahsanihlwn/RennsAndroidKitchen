@@ -57,6 +57,35 @@ def diagnostics():
             "version": getattr(module, "__version__", None), "native_calls": calls}
 
 
+def binary_image_bytechunks(path, ranges):
+    module = _get_native()
+    encoder = getattr(module, "binary_image_bytechunks", None)
+    if encoder is None:
+        return None
+    result = encoder(path, ranges)
+    _record("binary_image_bytechunks")
+    return result
+
+
+def binary_flat_sha256(path, ranges):
+    digest = getattr(_get_native(), "binary_flat_sha256", None)
+    if digest is None:
+        return None
+    result = digest(path, ranges)
+    _record("binary_flat_sha256")
+    return result
+
+
+def binary_dwarf_functions(path):
+    index = getattr(_get_native(), "binary_dwarf_functions", None)
+    if index is None:
+        return None
+    result = index(path)
+    if result is not None:
+        _record("binary_dwarf_functions")
+    return result
+
+
 def parse_metadata_files(paths, kind, *, ignore_errors=False):
 
     if kind not in ("contexts", "fs_config"):
@@ -183,13 +212,14 @@ def directory_entries(path, root, *, path_index=None, refresh=False, include_mag
                 is_dir = entry.is_dir(follow_symlinks=False)
                 info = None if is_dir else entry.stat(follow_symlinks=False)
                 size, stamp = (0, 0) if is_dir else (info.st_size, info.st_mtime_ns)
+                read_only = False if is_dir else (not os.access(entry.path, os.W_OK))
             except OSError:
-                is_dir, size, stamp = False, None, None
+                is_dir, size, stamp, read_only = False, None, None, False
             link = check_symlink(entry.path, root, target_cache=cache) if (
                 not is_dir and size is not None and size <= 512) else None
             magic = check_magic(entry.path) if (include_magic and not is_dir and entry.name.lower().endswith((".img", ".bin"))) else ""
             result.append(dict(name=entry.name, path=entry.path, is_dir=is_dir,
-                               size=size, mtime_ns=stamp, symlink=link, magic=magic))
+                               size=size, mtime_ns=stamp, symlink=link, magic=magic, read_only=read_only))
     return sorted(result, key=lambda entry: entry["name"])
 
 
@@ -379,21 +409,118 @@ def super_info(path, *, slot=0):
     return json.loads(fn(path, int(slot)))
 
 
-def super_extract(path, out_dir, *, partitions=None, slot=0, normalize=False):
+def super_extract(path, out_dir, *, partitions=None, slot=0, normalize=False, progress=None):
     path = os.path.normpath(os.fspath(path))
     out_dir = os.path.normpath(os.fspath(out_dir))
     fn = _require_native_fn("super_extract_json")
     _record("super_extract")
     sel = [str(p) for p in partitions] if partitions else None
-    return json.loads(fn(path, out_dir, sel, int(slot), bool(normalize)))
+    cb = _resolve_progress_cb(progress)
+    return json.loads(fn(path, out_dir, sel, int(slot), bool(normalize), cb))
 
 
-def super_unsparse(path, out_dir=None):
+def super_unsparse(path, out_dir=None, *, progress=None):
     path = os.path.normpath(os.fspath(path))
     out_arg = os.path.normpath(os.fspath(out_dir)) if out_dir is not None else None
     fn = _require_native_fn("super_unsparse")
     _record("super_unsparse")
-    return fn(path, out_arg)
+    cb = _resolve_progress_cb(progress)
+    return fn(path, out_arg, cb)
+
+
+def dtbo_inspect(path):
+    path = os.path.normpath(os.fspath(path))
+    fn = _require_native_fn("dtbo_inspect_json")
+    _record("dtbo_inspect")
+    return json.loads(fn(path))
+
+
+def dtbo_unpack(path, out_dir, *, decompile_dts=True, progress=None):
+    path = os.path.normpath(os.fspath(path))
+    out_dir = os.path.normpath(os.fspath(out_dir))
+    fn = _require_native_fn("dtbo_unpack_json")
+    _record("dtbo_unpack")
+    cb = _resolve_progress_cb(progress)
+    return json.loads(fn(path, out_dir, bool(decompile_dts), cb))
+
+
+def dtbo_pack(output_path, spec, *, progress=None):
+    output_path = os.path.normpath(os.fspath(output_path))
+    fn = _require_native_fn("dtbo_pack_json")
+    _record("dtbo_pack")
+    cb = _resolve_progress_cb(progress)
+    return json.loads(fn(output_path, json.dumps(spec), cb))
+
+
+def fdt_to_dts(dtb_path):
+    dtb_path = os.path.normpath(os.fspath(dtb_path))
+    fn = _require_native_fn("fdt_to_dts_text")
+    _record("fdt_to_dts")
+    return fn(dtb_path)
+
+
+def image_logical_size(path):
+    path = os.path.normpath(os.fspath(path))
+    fn = _require_native_fn("image_logical_size")
+    _record("image_logical_size")
+    return int(fn(path))
+
+
+def super_make(
+    output_path,
+    device_size,
+    groups,
+    partitions,
+    *,
+    metadata_size=65536,
+    metadata_slots=2,
+    block_size=4096,
+    alignment=1048576,
+    alignment_offset=0,
+    super_name="super",
+    sparse=False,
+    virtual_ab=False,
+    auto_slot_suffixing=False,
+    force_full_image=True,
+    progress=None,
+):
+    output_path = os.path.normpath(os.fspath(output_path))
+    fn = _require_native_fn("super_make_json")
+    _record("super_make")
+    cb = _resolve_progress_cb(progress)
+    groups_payload = [
+        {"name": str(g["name"]), "max_size": int(g["max_size"])}
+        for g in groups
+    ]
+    parts_payload = [
+        {
+            "name": str(p["name"]),
+            "attr": str(p.get("attr", "readonly")),
+            "size": int(p.get("size", 0)),
+            "group": str(p.get("group", "default")),
+            "image": os.path.normpath(os.fspath(p["image"])) if p.get("image") else None,
+        }
+        for p in partitions
+    ]
+    return json.loads(
+        fn(
+            output_path,
+            int(device_size),
+            json.dumps(groups_payload),
+            json.dumps(parts_payload),
+            int(metadata_size),
+            int(metadata_slots),
+            int(block_size),
+            int(alignment),
+            int(alignment_offset),
+            str(super_name),
+            bool(sparse),
+            bool(virtual_ab),
+            bool(auto_slot_suffixing),
+            bool(force_full_image),
+            cb,
+        )
+    )
 
 
 def ext_inspect(path):
@@ -403,11 +530,85 @@ def ext_inspect(path):
     return json.loads(fn(path))
 
 
-def ext_unpack(path):
+def _resolve_progress_cb(progress):
+    if progress is not None:
+        return progress
+    try:
+        from core.threader_control import get_progress_reporter
+        return get_progress_reporter()
+    except Exception:
+        return None
+
+
+def ext_unpack(path, *, progress=None):
     path = os.path.normpath(os.fspath(path))
     fn = _require_native_fn("ext_unpack")
     _record("ext_unpack")
-    return fn(path)
+    cb = _resolve_progress_cb(progress)
+    return fn(path, cb) if cb is not None else fn(path)
+
+
+def ext_open_reader(path):
+    """Open a persistent NativeExtReader handle for an EXT2/3/4 (or sparse) image."""
+    path = os.path.normpath(os.fspath(path))
+    cls = _require_native_fn("NativeExtReader")
+    _record("ext_open_reader")
+    return cls(path)
+
+
+def ext_open_bytes_reader(data):
+    """Open an in-memory NativeExtReader handle from raw/sparse bytes (e.g. APEX payloads)."""
+    cls = _require_native_fn("NativeExtReader")
+    _record("ext_open_bytes_reader")
+    return cls.from_bytes(bytes(data))
+
+
+def ext_usage(path):
+    """Compute space usage breakdown of an EXT2/3/4 image natively in Rust."""
+    path = os.path.normpath(os.fspath(path))
+    fn = _require_native_fn("ext_usage_json")
+    _record("ext_usage")
+    return json.loads(fn(path))
+
+
+def ext_edit_plan(path, internal_path, new_len):
+    """Plan an in-place EXT file write without mutating the image."""
+    path = os.path.normpath(os.fspath(path))
+    fn = _require_native_fn("ext_edit_plan_json")
+    _record("ext_edit_plan")
+    return json.loads(fn(path, str(internal_path), int(new_len)))
+
+
+def ext_edit_write(path, internal_path, data):
+    """Write file data directly in-place into an EXT image using Rust ext_cli."""
+    path = os.path.normpath(os.fspath(path))
+    fn = _require_native_fn("ext_edit_write")
+    _record("ext_edit_write")
+    return json.loads(fn(path, str(internal_path), bytes(data)))
+
+
+def ext_edit_chmod(path, internal_path, perm_octal):
+    """Update inode permission bits directly in-place in an EXT image."""
+    path = os.path.normpath(os.fspath(path))
+    fn = _require_native_fn("ext_edit_chmod")
+    _record("ext_edit_chmod")
+    return int(fn(path, str(internal_path), int(perm_octal)))
+
+
+def ext_edit_selinux(path, internal_path, new_ctx):
+    """Update security.selinux xattr directly in-place in an EXT image."""
+    path = os.path.normpath(os.fspath(path))
+    fn = _require_native_fn("ext_edit_selinux")
+    _record("ext_edit_selinux")
+    return fn(path, str(internal_path), str(new_ctx))
+
+
+def ext_edit_rm(path, internal_path, *, recursive=True):
+    """Remove (unlink) a file or directory directly in-place from an EXT image."""
+    path = os.path.normpath(os.fspath(path))
+    fn = _require_native_fn("ext_edit_rm")
+    _record("ext_edit_rm")
+    return json.loads(fn(path, str(internal_path), bool(recursive)))
 
 
 def ext_make_fs(
@@ -421,6 +622,7 @@ def ext_make_fs(
     block_size=4096,
     sparse=False,
     label=None,
+    progress=None,
 ):
     out_img = os.path.normpath(os.fspath(out_img))
     src_arg = os.path.normpath(os.fspath(src_dir)) if src_dir is not None else None
@@ -428,6 +630,7 @@ def ext_make_fs(
     fs_arg = os.path.normpath(os.fspath(fs_config)) if fs_config is not None else None
     fn = _require_native_fn("ext_make_fs")
     _record("ext_make_fs")
+    cb = _resolve_progress_cb(progress)
     return fn(
         out_img,
         src_arg,
@@ -438,23 +641,26 @@ def ext_make_fs(
         int(block_size),
         bool(sparse),
         label,
+        cb,
     )
 
 
-def sparse_img2simg(src_path, dst_path, *, block_size=4096):
+def sparse_img2simg(src_path, dst_path, *, block_size=4096, progress=None):
     src_path = os.path.normpath(os.fspath(src_path))
     dst_path = os.path.normpath(os.fspath(dst_path))
     fn = _require_native_fn("sparse_img2simg")
     _record("sparse_img2simg")
-    return fn(src_path, dst_path, int(block_size))
+    cb = _resolve_progress_cb(progress)
+    return fn(src_path, dst_path, int(block_size), cb) if cb is not None else fn(src_path, dst_path, int(block_size))
 
 
-def sparse_simg2img(src_path, dst_path):
+def sparse_simg2img(src_path, dst_path, *, progress=None):
     src_path = os.path.normpath(os.fspath(src_path))
     dst_path = os.path.normpath(os.fspath(dst_path))
     fn = _require_native_fn("sparse_simg2img")
     _record("sparse_simg2img")
-    return fn(src_path, dst_path)
+    cb = _resolve_progress_cb(progress)
+    return fn(src_path, dst_path, cb) if cb is not None else fn(src_path, dst_path)
 
 
 def pac_list(path):
@@ -621,10 +827,12 @@ def erofs_unpack(
     overwrite=True,
     threads=0,
     offset=None,
+    symlink_mode=None,
+    progress=None,
 ):
     """Unpack an EROFS image into an output directory.
 
-    Writes <part>_fs_config, <part>_file_contexts, <part>_fs_options, and <part>_build_info.
+    Writes <part>_fs_config, <part>_file_contexts, and <part>_fs_options.
     Returns dict: ExtractReport.
     """
     image = os.path.normpath(os.fspath(image))
@@ -632,6 +840,7 @@ def erofs_unpack(
     fn = _require_native_fn("erofs_unpack")
     _record("erofs_unpack")
     targs = [str(t) for t in targets] if targets else None
+    cb = _resolve_progress_cb(progress)
     return json.loads(
         fn(
             image,
@@ -644,6 +853,8 @@ def erofs_unpack(
             bool(overwrite),
             int(threads or 0),
             offset,
+            str(symlink_mode) if symlink_mode is not None else None,
+            cb,
         )
     )
 
@@ -668,6 +879,7 @@ def erofs_pack(
     all_root=None,
     enable_crc=None,
     threads=0,
+    progress=None,
 ):
     """Pack a directory into a standard Linux/Android EROFS image.
 
@@ -679,6 +891,7 @@ def erofs_pack(
     sx = os.path.normpath(os.fspath(file_contexts)) if file_contexts else None
     fn = _require_native_fn("erofs_pack")
     _record("erofs_pack")
+    cb = _resolve_progress_cb(progress)
     return json.loads(
         fn(
             source_dir,
@@ -699,6 +912,7 @@ def erofs_pack(
             bool(all_root) if all_root is not None else None,
             bool(enable_crc) if enable_crc is not None else None,
             int(threads or 0),
+            cb,
         )
     )
 
@@ -1178,6 +1392,287 @@ def platform_tools_version():
     fn = _require_native_fn("platform_tools_version_json")
     _record("platform_tools_version")
     return json.loads(fn())
+
+
+def render_markdown(text, *, path=None, theme=None):
+    """Parse and render Markdown into structured blocks via Rust rak_native."""
+    module = _get_native()
+    fn = getattr(module, "markdown_render_json", None) if module is not None else None
+    if fn is None:
+        if os.environ.get("RAK_NATIVE_BACKEND", "auto").lower() == "rust":
+            raise RuntimeError("Rust markdown_render_json unavailable. Run python tools/build_native.py")
+        lines = str(text or "").splitlines()
+        return {
+            "title": os.path.basename(os.fspath(path)) if path else "Markdown",
+            "blocks": [{"kind": "paragraph", "level": 0, "anchor": "", "text": str(text or ""),
+                        "html": str(text or ""), "language": "", "code": "", "url": "", "alt": "",
+                        "items": [], "headersHtml": [], "headersText": [], "alignments": [], "rows": []}] if text else [],
+            "headings": [],
+            "stats": {"headingsCount": 0, "words": len(str(text or "").split()), "lines": len(lines), "readMinutes": 1 if text else 0},
+        }
+    theme_json = json.dumps(theme) if theme else None
+    path_str = os.fspath(path) if path else None
+    _record("markdown_render")
+    return json.loads(fn(str(text or ""), path_str, theme_json))
+
+
+def render_markdown_file(path, *, theme=None):
+    """Read and render a Markdown file on disk via Rust rak_native."""
+    src = os.path.normpath(os.fspath(path))
+    module = _get_native()
+    fn = getattr(module, "markdown_render_file_json", None) if module is not None else None
+    if fn is None:
+        if os.environ.get("RAK_NATIVE_BACKEND", "auto").lower() == "rust":
+            raise RuntimeError("Rust markdown_render_file_json unavailable. Run python tools/build_native.py")
+        with open(src, "r", encoding="utf-8", errors="ignore") as f:
+            source = f.read()
+        return {"source": source, "document": render_markdown(source, path=src, theme=theme)}
+    theme_json = json.dumps(theme) if theme else None
+    _record("markdown_render_file")
+    return json.loads(fn(src, theme_json))
+
+
+# ── vdev full-firmware analyzer & boot simulator native primitives ──
+
+def vdev_probe_super(super_path, slot=0):
+    fn = _require_native_fn("vdev_probe_super_json")
+    _record("vdev_probe_super")
+    return json.loads(fn(os.path.normpath(os.fspath(super_path)), int(slot)))
+
+
+def vdev_super_open_erofs(super_path, partition, slot=0):
+    fn = _require_native_fn("vdev_super_open_erofs")
+    _record("vdev_super_open_erofs")
+    return fn(os.path.normpath(os.fspath(super_path)), str(partition), int(slot))
+
+
+def vdev_super_open_ext(super_path, partition, slot=0):
+    fn = _require_native_fn("vdev_super_open_ext")
+    _record("vdev_super_open_ext")
+    return fn(os.path.normpath(os.fspath(super_path)), str(partition), int(slot))
+
+
+def vdev_probe_zip(zip_path):
+    fn = _require_native_fn("vdev_probe_zip_json")
+    _record("vdev_probe_zip")
+    return json.loads(fn(os.path.normpath(os.fspath(zip_path))))
+
+
+def vdev_read_zip_entry_bytes(zip_path, entry_name):
+    fn = _require_native_fn("vdev_read_zip_entry_bytes")
+    _record("vdev_read_zip_entry_bytes")
+    return bytes(fn(os.path.normpath(os.fspath(zip_path)), str(entry_name)))
+
+
+def vdev_prepare_zip_images(zip_path, entries, cache_dir):
+    fn = _require_native_fn("vdev_prepare_zip_images_json")
+    _record("vdev_prepare_zip_images")
+    return json.loads(fn(
+        os.path.normpath(os.fspath(zip_path)),
+        [str(e) for e in entries],
+        os.path.normpath(os.fspath(cache_dir)),
+    ))
+
+
+def vdev_inspect_boot(path):
+    fn = _require_native_fn("vdev_inspect_boot_json")
+    _record("vdev_inspect_boot")
+    return json.loads(fn(os.path.normpath(os.fspath(path))))
+
+
+def vdev_inspect_boot_bytes(data):
+    fn = _require_native_fn("vdev_inspect_boot_bytes_json")
+    _record("vdev_inspect_boot_bytes")
+    return json.loads(fn(bytes(data)))
+
+
+def vdev_inspect_zip_boot(zip_path, entry_name, *, cache_dir=None):
+    fn = _require_native_fn("vdev_inspect_zip_boot_json")
+    _record("vdev_inspect_zip_boot")
+    cdir = os.path.normpath(os.fspath(cache_dir)) if cache_dir else None
+    return json.loads(fn(os.path.normpath(os.fspath(zip_path)), str(entry_name), cdir))
+
+
+def vdev_inspect_vbmeta(path):
+    fn = _require_native_fn("vdev_inspect_vbmeta_json")
+    _record("vdev_inspect_vbmeta")
+    return json.loads(fn(os.path.normpath(os.fspath(path))))
+
+
+def vdev_inspect_vbmeta_bytes(data):
+    fn = _require_native_fn("vdev_inspect_vbmeta_bytes_json")
+    _record("vdev_inspect_vbmeta_bytes")
+    return json.loads(fn(bytes(data)))
+
+
+def vdev_inspect_zip_vbmeta(zip_path, entry_name, *, cache_dir=None):
+    fn = _require_native_fn("vdev_inspect_zip_vbmeta_json")
+    _record("vdev_inspect_zip_vbmeta")
+    cdir = os.path.normpath(os.fspath(cache_dir)) if cache_dir else None
+    return json.loads(fn(os.path.normpath(os.fspath(zip_path)), str(entry_name), cdir))
+
+
+def vdev_inspect_dtbo(path):
+    fn = _require_native_fn("vdev_inspect_dtbo_json")
+    _record("vdev_inspect_dtbo")
+    return json.loads(fn(os.path.normpath(os.fspath(path))))
+
+
+def vdev_inspect_zip_dtbo(zip_path, entry_name, *, cache_dir=None):
+    fn = _require_native_fn("vdev_inspect_zip_dtbo_json")
+    _record("vdev_inspect_zip_dtbo")
+    cdir = os.path.normpath(os.fspath(cache_dir)) if cache_dir else None
+    return json.loads(fn(os.path.normpath(os.fspath(zip_path)), str(entry_name), cdir))
+
+
+def vdev_verify_avb_hash(path, image_size, hash_algo, salt_hex, expected_digest_hex, *, zip_entry=None):
+    fn = _require_native_fn("vdev_verify_avb_hash_json")
+    _record("vdev_verify_avb_hash")
+    return json.loads(fn(
+        os.path.normpath(os.fspath(path)),
+        int(image_size),
+        str(hash_algo),
+        str(salt_hex),
+        str(expected_digest_hex),
+        str(zip_entry) if zip_entry else None,
+    ))
+
+
+def vdev_verify_hashtree(img_path, image_size, salt_hex, data_block_size, hash_block_size,
+                         algorithm="sha256", expected_root_hex=""):
+    fn = _require_native_fn("vdev_verify_hashtree_json")
+    _record("vdev_verify_hashtree")
+    return json.loads(fn(
+        os.path.normpath(os.fspath(img_path)),
+        int(image_size),
+        str(salt_hex),
+        int(data_block_size),
+        int(hash_block_size),
+        str(algorithm),
+        str(expected_root_hex),
+    ))
+
+
+def vdev_scan_elfs(paths, *, with_symbols=False):
+    fn = _require_native_fn("vdev_scan_elfs_json")
+    _record("vdev_scan_elfs")
+    return json.loads(fn([os.path.normpath(os.fspath(p)) for p in paths], bool(with_symbols)))
+
+
+def vdev_scan_erofs_elfs(native_reader, paths, *, with_symbols=False):
+    fn = _require_native_fn("vdev_scan_erofs_elfs_json")
+    _record("vdev_scan_erofs_elfs")
+    return json.loads(fn(native_reader, [str(p) for p in paths], bool(with_symbols)))
+
+
+def vdev_scan_ext_elfs(native_reader, paths, *, with_symbols=False):
+    fn = _require_native_fn("vdev_scan_ext_elfs_json")
+    _record("vdev_scan_ext_elfs")
+    return json.loads(fn(native_reader, [str(p) for p in paths], bool(with_symbols)))
+
+
+def vdev_scan_elf_bytes(items, *, with_symbols=False):
+    fn = _require_native_fn("vdev_scan_elf_bytes_json")
+    _record("vdev_scan_elf_bytes")
+    return json.loads(fn([(str(p), bytes(b)) for p, b in items], bool(with_symbols)))
+
+
+def vdev_scan_ko_files(items):
+    fn = _require_native_fn("vdev_scan_ko_files_json")
+    _record("vdev_scan_ko_files")
+    return json.loads(fn([(str(vp), os.path.normpath(os.fspath(p))) for vp, p in items]))
+
+
+def vdev_scan_erofs_kos(native_reader, items):
+    fn = _require_native_fn("vdev_scan_erofs_kos_json")
+    _record("vdev_scan_erofs_kos")
+    return json.loads(fn(native_reader, [(str(vp), str(rel)) for vp, rel in items]))
+
+
+def vdev_scan_ext_kos(native_reader, items):
+    fn = _require_native_fn("vdev_scan_ext_kos_json")
+    _record("vdev_scan_ext_kos")
+    return json.loads(fn(native_reader, [(str(vp), str(rel)) for vp, rel in items]))
+
+
+def vdev_index_erofs_apexes(native_reader, items):
+    fn = _require_native_fn("vdev_index_erofs_apexes_json")
+    _record("vdev_index_erofs_apexes")
+    return json.loads(fn(native_reader, [(str(vp), str(rel)) for vp, rel in items]))
+
+
+def vdev_index_ext_apexes(native_reader, items):
+    fn = _require_native_fn("vdev_index_ext_apexes_json")
+    _record("vdev_index_ext_apexes")
+    return json.loads(fn(native_reader, [(str(vp), str(rel)) for vp, rel in items]))
+
+
+def vdev_index_file_apexes(items):
+    fn = _require_native_fn("vdev_index_file_apexes_json")
+    _record("vdev_index_file_apexes")
+    return json.loads(fn([(str(vp), os.path.normpath(os.fspath(p))) for vp, p in items]))
+
+
+def vdev_scan_apk_files(items):
+    fn = _require_native_fn("vdev_scan_apk_files_json")
+    _record("vdev_scan_apk_files")
+    return json.loads(fn([(str(vp), os.path.normpath(os.fspath(p))) for vp, p in items]))
+
+
+def vdev_scan_erofs_apks(native_reader, items):
+    fn = _require_native_fn("vdev_scan_erofs_apks_json")
+    _record("vdev_scan_erofs_apks")
+    return json.loads(fn(native_reader, [(str(vp), str(rel)) for vp, rel in items]))
+
+
+def vdev_scan_ext_apks(native_reader, items):
+    fn = _require_native_fn("vdev_scan_ext_apks_json")
+    _record("vdev_scan_ext_apks")
+    return json.loads(fn(native_reader, [(str(vp), str(rel)) for vp, rel in items]))
+
+
+def vdev_parse_classpath_pb(data):
+    fn = _require_native_fn("vdev_parse_classpath_pb_json")
+    _record("vdev_parse_classpath_pb")
+    return json.loads(fn(bytes(data)))
+
+
+def vdev_walk_erofs(native_reader):
+    fn = _require_native_fn("vdev_walk_erofs_json")
+    _record("vdev_walk_erofs")
+    return json.loads(fn(native_reader))
+
+
+def vdev_walk_ext(native_reader):
+    fn = _require_native_fn("vdev_walk_ext_json")
+    _record("vdev_walk_ext")
+    return json.loads(fn(native_reader))
+
+
+def vdev_read_erofs_paths(native_reader, paths):
+    fn = _require_native_fn("vdev_read_erofs_paths_json")
+    _record("vdev_read_erofs_paths")
+    return fn(native_reader, [str(p) for p in paths])
+
+
+def vdev_selinux_policy():
+    cls = _require_native_fn("NativeSelinuxPolicy")
+    _record("vdev_selinux_policy")
+    return cls()
+
+
+def vdev_dex_verifier():
+    cls = _require_native_fn("NativeDexVerifier")
+    _record("vdev_dex_verifier")
+    return cls()
+
+
+def vdev_parse_arsc_bytes(data):
+    fn = _require_native_fn("vdev_parse_arsc_bytes_json")
+    _record("vdev_parse_arsc_bytes")
+    return json.loads(fn(bytes(data)))
+
+
 
 
 

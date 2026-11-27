@@ -64,8 +64,15 @@ def run(ctx):
             f"All {len(by_name)} APEX package names are unique",
         ))
 
-    # ── 2) VNDK apex vs ro.vndk.version ──
+    # ── 2) VNDK apex vs ro.vndk.version / Android 15+ VNDK deprecation ──
     vndk = ctx.prop("ro.vndk.version")
+    board_api_raw = ctx.prop("ro.board.api_level") or ctx.prop("ro.vendor.api_level") or ""
+    try:
+        board_api = int(str(board_api_raw).strip() or 0)
+    except ValueError:
+        board_api = 0
+    sdk = int(ctx.profile.get("sdk") or 0)
+    vendor_present = ctx.vfs.is_dir("/vendor")
     vndk_names = [n for n in by_name if n.startswith("com.android.vndk.")]
     if vndk and vndk_names:
         wanted = f"com.android.vndk.v{vndk}"
@@ -85,12 +92,25 @@ def run(ctx):
                 "against the VNDK version actually shipped here.",
             ))
     elif vndk_names and not vndk:
-        findings.append(Finding(
-            KEY, "vndk-apex", INFO,
-            f"VNDK APEX present: {', '.join(sorted(vndk_names))}",
-            "ro.vndk.version is unknown (vendor not unpacked), so no comparison "
-            "was made.",
-        ))
+        if vendor_present and (board_api >= 202404 or sdk >= 35):
+            abi_note = f"ro.board.api_level={board_api}" if board_api >= 202404 else f"SDK {sdk}"
+            findings.append(Finding(
+                KEY, "vndk-apex-deprecated", PASS,
+                f"VNDK deprecated on Android {ctx.profile.get('release') or '15+'} vendor ABI ({abi_note})",
+                f"Legacy VNDK APEXes shipped for compatibility only: {', '.join(sorted(vndk_names))}.",
+            ))
+        elif vendor_present:
+            findings.append(Finding(
+                KEY, "vndk-apex", INFO,
+                f"VNDK APEX present: {', '.join(sorted(vndk_names))}",
+                "Vendor /vendor/build.prop does not set ro.vndk.version (likely VNDK-free / LL-NDK-only vendor).",
+            ))
+        else:
+            findings.append(Finding(
+                KEY, "vndk-apex", INFO,
+                f"VNDK APEX present: {', '.join(sorted(vndk_names))}",
+                "ro.vndk.version is unknown (vendor not mounted), so no comparison was made.",
+            ))
 
 
     init_model = ctx.shared.get("init", {}).get("model")

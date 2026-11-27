@@ -436,26 +436,15 @@ Item {
                         ? (popup.c.RED_LIGHT || "#f85149")
                         : (popup.lightTheme ? popup.c.FG : (popup.c.FG_MUTED || "#8b949e"))
                     contentItem: Item {
-                        Image {
-                            id: closeImg
+                        WorkspaceNativeIcon {
                             anchors.centerIn: parent
-                            width: 12; height: 12
-                            source: "image://icons/close_rounded?color=" + encodeURIComponent(closeBtn.closeIconColor)
-                            sourceSize: Qt.size(24, 24)
-                            smooth: true
+                            width: 12; height: 12; iconSize: 12
+                            iconKey: "close_rounded"
+                            strokeColor: closeBtn.closeIconColor
+                            isLight: popup.lightTheme
+                            hovered: closeBtn.visualHovered
+                            down: closeBtn.down
                             opacity: closeBtn.visualHovered ? 1.0 : (popup.lightTheme ? 0.9 : 0.75)
-                            visible: status === Image.Ready
-                        }
-
-                        RakLabel {
-                            anchors.centerIn: parent
-                            text: "✕"
-                            font.pixelSize: 11
-                            font.weight: Font.DemiBold
-                            color: closeBtn.closeIconColor
-                            opacity: closeBtn.visualHovered ? 1.0 : (popup.lightTheme ? 0.9 : 0.75)
-                            visible: closeImg.status !== Image.Ready
-                            transformed: closeBtn.transformed
                         }
                     }
                 }

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import QtQuick
 import QtQuick.Controls as C
+import "../motion.js" as Motion
 
 MorphPopup {
     id: popup
@@ -8,7 +9,9 @@ MorphPopup {
     readonly property var c: model.colors
     readonly property var s: model.strings
     property int portMode: 1
-    readonly property bool canCreate: name.text.trim().length > 0 && port1.text.trim().length > 0 && (portMode === 1 || port2.text.trim().length > 0)
+    property bool creating: false
+    property double createStartTime: 0
+    readonly property bool canCreate: !creating && name.text.trim().length > 0 && port1.text.trim().length > 0 && (portMode === 1 || port2.text.trim().length > 0)
     objectName: "createProjectPopup"
     popupType: C.Popup.Item
     width: Math.min(440, parent.width - 32)
@@ -29,6 +32,7 @@ MorphPopup {
         }
     }
     animationsEnabled: model.settings.animations
+    showOpenCaption: false
     morphOnClose: true
     trackReturnHover: true
     effectsEnabled: model.settings.effects!=="low"
@@ -37,10 +41,55 @@ MorphPopup {
     tintAlpha: 1-(1-72/255)*(1-120/255)
     backdropDim: 0
     panelBorder: model.panelBorder
-    closePolicy: C.Popup.CloseOnEscape | C.Popup.CloseOnPressOutside
+    closePolicy: popup.creating ? C.Popup.NoAutoClose : (C.Popup.CloseOnEscape | C.Popup.CloseOnPressOutside)
+    function finishCreate() {
+        if (!creating) {
+            close()
+            return
+        }
+        const elapsed = Date.now() - createStartTime
+        const minDuration = popup.animationsEnabled ? 800 : 0
+        const remaining = Math.max(0, minDuration - elapsed)
+        if (remaining > 0) {
+            closeDelayTimer.interval = remaining
+            closeDelayTimer.restart()
+        } else {
+            close()
+        }
+    }
+    Timer {
+        id: closeDelayTimer
+        repeat: false
+        onTriggered: popup.close()
+    }
+    Connections {
+        target: popup.model
+        function onPresentationRequested(command, data) {
+            if (command === "message" || command === "errorLog") {
+                if (popup.creating) {
+                    popup.creating = false
+                    closeDelayTimer.stop()
+                }
+            }
+        }
+    }
     onAboutToShow: {
+        creating = false
+        closeDelayTimer.stop()
         name.text = ""; port1.text = ""; port2.text = ""
         portMode = 1; scroll.contentY = 0
+    }
+    onAboutToHide: {
+        closeDelayTimer.stop()
+        creating = false
+    }
+    function contentProgress(start, span) {
+        if (!popup.animationsEnabled || !popup.opening) return 1
+        return Motion.spring(Motion.clamp((popup.progress - start) / span))
+    }
+    function contentOpacity(start, span) {
+        if (!popup.animationsEnabled || !popup.opening) return 1
+        return Motion.outCubic(Motion.clamp((popup.progress - start) / span))
     }
     component Label: RakLabel {
         height: 16; font.pixelSize: 11; font.weight: Font.DemiBold; color: popup.c.FG_MUTED
@@ -52,17 +101,35 @@ MorphPopup {
         labelColor: popup.c.FG; hintColor: popup.c.placeholder; selectionColor: popup.c.a35
     }
     component Card: RakCard {
+        property int cardIndex: 0
+        readonly property real startDelay: 0.02 + cardIndex * 0.03
+        readonly property real enterProgress: popup.contentProgress(startDelay, 1.0 - startDelay)
+        readonly property real fadeProgress: popup.contentOpacity(startDelay, 0.28)
         width: form.width; radius: 12; color: popup.c.popupCard; border.color: popup.c.b10
+        opacity: fadeProgress
+        transform: Translate {
+            x: (36 + cardIndex * 6) * (1 - enterProgress)
+            y: (36 + cardIndex * 8) * (1 - enterProgress)
+        }
     }
     Item {
         x: 1; y: 1; width: popup.width-2; height: popup.height-2
         Item {
             id: header
+            readonly property real enterProgress: popup.contentProgress(0.0, 1.0)
+            readonly property real fadeProgress: popup.contentOpacity(0.0, 0.26)
             width: parent.width; height: 56
+            opacity: fadeProgress
+            transform: Translate {
+                x: 34 * (1 - header.enterProgress)
+                y: 34 * (1 - header.enterProgress)
+            }
             RakLabel { x: 20; y: 16; height: 28; text: popup.s.hdr_new_project; color: popup.c.FG_BRIGHT; font.pixelSize: 17; font.weight: Font.Bold }
-            RakButton { objectName: "popupCloseProject"; x: parent.width - 44; y: 16; width: 28; height: 28; text: "\u2715"; font.pixelSize: 14; labelColor: popup.c.FG_MUTED; hoverLabelColor: popup.c.FG; hoverFillColor: popup.c.b10; onClicked: popup.close() }
         }
-        SmoothRectangle { y: header.height; width: parent.width; height: 1; color: popup.c.b07 }
+        SmoothRectangle {
+            y: header.height; width: parent.width; height: 1; color: popup.c.b07
+            opacity: header.fadeProgress
+        }
         Flickable {
             id: scroll
             objectName: "popupCreateScroll"
@@ -73,7 +140,9 @@ MorphPopup {
             Column {
                 id: form
                 x: 16; y: 14; width: scroll.width - 32; spacing: 12
+                enabled: !popup.creating
                 Card {
+                    cardIndex: 0
                     height: 191
                     Label { x: 18; y: 16; text: popup.s.lbl_project_name }
                     Field { id: name; objectName: "popupProjectName"; x: 18; y: 44; width: parent.width - 36; placeholderText: popup.s.placeholder_project_name }
@@ -86,6 +155,7 @@ MorphPopup {
                     }
                 }
                 Card {
+                    cardIndex: 1
                     height: port1.y + 38 + 18 + (popup.portMode === 2 ? 95 : 0)
                     Label { x: 18; y: 16; height: popup.portMode === 2 ? 20 : 22; text: popup.s.lbl_folder_names }
                     RakLabel { id: folderHint; x: 18; y: popup.portMode === 2 ? 48 : 50; width: parent.width - 36; height: Math.max(21, implicitHeight); text: popup.s.hint_folder_names; wrapMode: Text.WordWrap; font.pixelSize: 11; color: popup.c.FG_MUTED }
@@ -97,6 +167,7 @@ MorphPopup {
                     Field { id: port2; objectName: "popupPort2"; visible: popup.portMode === 2; x: 18; y: secondLabel.y + 32; width: parent.width - 36; placeholderText: popup.s.placeholder_ft2 }
                 }
                 Card {
+                    cardIndex: 2
                     height: 92
                     Label { x: 18; y: 16; text: popup.s.lbl_output_dir }
                     RakLabel { x: 18; y: 42; width: parent.width - 106; height: 32; text: popup.model.location; elide: Text.ElideRight; color: popup.c.FG_MUTED; font.pixelSize: 12 }
@@ -104,20 +175,36 @@ MorphPopup {
                 }
             }
         }
-        SmoothRectangle { anchors.bottom: footer.top; width: parent.width; height: 1; color: popup.c.b07 }
+        SmoothRectangle {
+            anchors.bottom: footer.top; width: parent.width; height: 1; color: popup.c.b07
+            opacity: footer.fadeProgress
+        }
         Item {
             id: footer
+            readonly property real enterProgress: popup.contentProgress(0.0, 1.0)
+            readonly property real fadeProgress: popup.contentOpacity(0.0, 0.26)
             anchors.bottom: parent.bottom; width: parent.width; height: 56
+            opacity: fadeProgress
+            transform: Translate {
+                x: 28 * (1 - footer.enterProgress)
+                y: 28 * (1 - footer.enterProgress)
+            }
             Row {
                 anchors.right: parent.right; anchors.rightMargin: 16; anchors.verticalCenter: parent.verticalCenter; spacing: 8
-                ActionButton { objectName: "popupBackProject"; width: 99; height: 34; colors: popup.c; text: popup.s.btn_back; iconSource: popup.model.icon("arrow_right", popup.c.BTN_SEC_FG || popup.c.FG); iconWidth: 15; iconHeight: 15; animatePress: popup.model.settings.animations; onClicked: popup.close() }
+                ActionButton { objectName: "popupBackProject"; width: 99; height: 34; colors: popup.c; text: popup.s.btn_back; enabled: !popup.creating; iconSource: popup.model.icon("arrow_right", popup.c.BTN_SEC_FG || popup.c.FG); iconWidth: 15; iconHeight: 15; animatePress: popup.model.settings.animations; onClicked: popup.close() }
                 ActionButton {
                     objectName: "popupConfirmProject"
                     width: 116; height: 34; colors: popup.c; primary: true
-                    text: popup.s.btn_confirm_project; enabled: popup.canCreate && !popup.model.busy
+                    text: popup.s.btn_confirm_project
+                    loading: popup.creating
+                    enabled: popup.canCreate && !popup.model.busy && !popup.creating
                     iconSource: popup.model.icon("check_white", enabled ? (popup.c.BTN_PRIMARY_FG || popup.c.FG_BRIGHT) : (popup.c.BTN_PRIMARY_DISABLED_FG || popup.c.a30)); iconWidth: 15; iconHeight: 15
                     animatePress: popup.model.settings.animations
-                    onClicked: popup.model.dispatch("createProject", {name: name.text.trim(), port1: port1.text.trim(), port2: popup.portMode === 2 ? port2.text.trim() : "", mode: popup.portMode})
+                    onClicked: {
+                        popup.createStartTime = Date.now()
+                        popup.creating = true
+                        popup.model.dispatch("createProject", {name: name.text.trim(), port1: port1.text.trim(), port2: popup.portMode === 2 ? port2.text.trim() : "", mode: popup.portMode})
+                    }
                 }
             }
         }

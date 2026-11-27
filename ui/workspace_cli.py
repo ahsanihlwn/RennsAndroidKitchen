@@ -38,14 +38,14 @@ class WorkspaceCli:
             candidate=os.path.normcase(other.view.canonical(row['path']))
             if candidate==key or descendants and candidate.startswith(key+os.sep):return row
         return None
-    def _enqueue(self,label,work):
+    def _enqueue(self,label,work,*,lane=None,targets=None):
         from ui.workspace_actions import operation
         def done(result):
             agent=getattr(self.session,'_agent',None)
             if agent and isinstance(result,str):
                 if isinstance(result,FileCommandOutput):agent.activity.touch_many(result.paths,'write')
                 elif '\n' not in result and '\r' not in result and os.path.isabs(result):agent.activity.touch(result,'write')
-        self.last_task=operation(self.session,label,work,done)
+        self.last_task=operation(self.session,label,work,done,lane=lane,targets=targets)
         if self.last_task is None:return False,OperationError('Kitchen task was not accepted; the workspace may be closing')
         return True,DispatchedCommand('dispatched '+label,self.last_task)
 
@@ -55,7 +55,7 @@ class WorkspaceCli:
             if not files.view.resolve(path)[0]:raise FileNotFoundError(path)
             files.edit_metadata(path,column,value)
             return path
-        return self._enqueue('Android '+('SELinux' if column==1 else 'permissions'),work)
+        return self._enqueue('Android '+('SELinux' if column==1 else 'permissions'),work,lane='light',targets=(path,))
     def kitchen(self,options):
         """Dispatch explicit tool operations without triggering GUI prompts."""
         try:
@@ -96,7 +96,8 @@ class WorkspaceCli:
                     result['path']=path
                     text=render(result,options.get('json',False));output(text+'\n')
                     return FileCommandOutput(text,result.get('outputs',()))
-            return self._enqueue('rak '+kind+' '+action+' '+path,work)
+            kitchen_targets=tuple(item for item in (path,options.get('to')) if item)
+            return self._enqueue('rak '+kind+' '+action+' '+path,work,lane='heavy',targets=kitchen_targets)
         except Exception as error:return False,failure_from_exception(error)
 
     @staticmethod
@@ -204,7 +205,7 @@ class WorkspaceCli:
                             if not physical:raise FileNotFoundError(path)
                             files.edit_metadata(path,2,options['mode']);output.append(path)
                 return FileCommandOutput('\n'.join(output),output)
-            return self._enqueue('rak '+command+' '+' '.join(paths),work)
+            return self._enqueue('rak '+command+' '+' '.join(paths),work,lane='light',targets=tuple(paths))
         except Exception as error:return False,failure_from_exception(error)
 
     def repack_output(self,options):
@@ -245,12 +246,14 @@ class WorkspaceCli:
             if not physical:raise FileNotFoundError(path)
             if action in ('rename','rename_force'):
                 name=validate_name(name)
-                return self._enqueue('Rename '+os.path.basename(path),lambda:files.rename(path,name,force=action=='rename_force'))
+                return self._enqueue('Rename '+os.path.basename(path),lambda:files.rename(path,name,force=action=='rename_force'),
+                                     lane='light',targets=(path,os.path.join(os.path.dirname(path),name)))
             if action in ('new_file','new_folder'):
                 name=validate_name(name);folder=path if os.path.isdir(physical) else os.path.dirname(path)
-                return self._enqueue('Create '+name,lambda:files.create(folder,name,folder=action=='new_folder'))
-            if action=='delete':return self._enqueue('Delete '+os.path.basename(path),lambda:files.delete(path))
-            if action=='duplicate':return self._enqueue('Duplicate '+os.path.basename(path),lambda:files.duplicate(path))
+                return self._enqueue('Create '+name,lambda:files.create(folder,name,folder=action=='new_folder'),
+                                     lane='light',targets=(os.path.join(folder,name),))
+            if action=='delete':return self._enqueue('Delete '+os.path.basename(path),lambda:files.delete(path),lane='light',targets=(path,))
+            if action=='duplicate':return self._enqueue('Duplicate '+os.path.basename(path),lambda:files.duplicate(path),lane='light',targets=(path,os.path.dirname(path)))
             if action in ('copy','cut'):
                 self.session._clipboard={'paths':[path],'base':files.base,'move':action=='cut'}
                 return True,'staged '+action
@@ -263,7 +266,7 @@ class WorkspaceCli:
                 badge=self.badge(path)
                 if action=='unpack':
                     from core.file_types import ARCHIVE_EXT
-                    action={'EROFS':'unpack_erofs','EXT2':'unpack_ext','EXT3':'unpack_ext','EXT4':'unpack_ext','SPARSE':'convert_sparse','SUPER':'unpack_super','PAYLOAD':'unpack_payload','BOOT':'unpack_boot','VNDRBOOT':'unpack_boot','DAT':'unpack_dat_to_image','DAT.BR':'unpack_dat_br_to_image','BR':'unpack_br_to_image','APK':'apktool_decompile'}.get(badge,'')
+                    action={'EROFS':'unpack_erofs','EXT2':'unpack_ext','EXT3':'unpack_ext','EXT4':'unpack_ext','SPARSE':'convert_sparse','SUPER':'unpack_super','PAYLOAD':'unpack_payload','BOOT':'unpack_boot','VNDRBOOT':'unpack_boot','DTBO':'unpack_dtbo','DAT':'unpack_dat_to_image','DAT.BR':'unpack_dat_br_to_image','BR':'unpack_br_to_image','APK':'apktool_decompile'}.get(badge,'')
                     if not action and path.lower().endswith(ARCHIVE_EXT):action='extract_to'
                     if not action:
                         from core.file_detection import identify
@@ -276,7 +279,7 @@ class WorkspaceCli:
                         relative=os.path.relpath(path,mirror_root)
                         if relative=='..' or relative.startswith('..'+os.sep):raise ValueError('Use rak apk build <original.apk> for this apktool folder')
                         return self.single('apktool_build',os.path.join(files.base,relative))
-                    else:action={'EROFS':'repack_erofs','EXT2':'repack_ext','EXT3':'repack_ext','EXT4':'repack_ext','BOOT':'repack_boot','VNDRBOOT':'repack_boot'}.get(badge,'')
+                    else:action={'EROFS':'repack_erofs','EXT2':'repack_ext','EXT3':'repack_ext','EXT4':'repack_ext','BOOT':'repack_boot','VNDRBOOT':'repack_boot','DTBO':'repack_dtbo'}.get(badge,'')
                 if not action:raise ValueError('Cannot determine a compatible kitchen action')
             if action in ('unpack_payload','extract_here','extract_to'):
                 kind='payload' if action=='unpack_payload' else 'archive'
@@ -380,6 +383,8 @@ class WorkspaceCli:
             finally:
                 if os.path.exists(temporary):os.remove(temporary)
             files._record(logical,physical)
+            from core import filesystem_map
+            filesystem_map.record_entry(files.base,logical,physical)
             if not existed:files.engine(logical).apply(relative)
             directory.reloadMetadata()
             if agent:agent.activity.touch(path,'write')

@@ -51,6 +51,8 @@ def apply(files,path,revision,content,*,max_bytes=MAX_BYTES,before_save=None):
             from main_ext.class_NeoBranchManager import _retry_fs_op
             _retry_fs_op(lambda:os.replace(temporary,target),target)
             files._record(logical,target)
+            from core import filesystem_map
+            filesystem_map.record_entry(files.base,logical,target)
         finally:
             if os.path.exists(temporary):os.remove(temporary)
     return read(files,path,max_bytes=max_bytes)[0]

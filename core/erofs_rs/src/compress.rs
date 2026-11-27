@@ -4,7 +4,9 @@
 //! LZ4 / LZ4HC (with 0-padding & partial decode), DEFLATE, MicroLZMA, ZSTD, Shifted, and Interlaced.
 
 use crate::error::{ErofsError, Result};
-use crate::format::{COMPR_ALG_DEFLATE, COMPR_ALG_LZ4, COMPR_ALG_LZMA, COMPR_ALG_ZSTD};
+use crate::format::{
+    COMPR_ALG_DEFLATE, COMPR_ALG_LZ4, COMPR_ALG_LZMA, COMPR_ALG_ZSTD, Z_PCLUSTER_MAX_DSIZE,
+};
 use flate2::Compression;
 use flate2::read::DeflateDecoder;
 use flate2::write::DeflateEncoder;
@@ -397,7 +399,12 @@ pub fn compress_fixed_output(
         CompressionAlg::Lz4 | CompressionAlg::Lz4Hc => {
             let hc = alg == CompressionAlg::Lz4Hc;
             let lvl = level.unwrap_or(if hc { 9 } else { 0 }).clamp(0, 12) as u32;
-            let (consumed, compressed) = lz4_compress_dest_size(input, pcluster_size, hc, lvl);
+            let max_in = input
+                .len()
+                .min(2000 * block_size)
+                .min(Z_PCLUSTER_MAX_DSIZE);
+            let (consumed, compressed) =
+                lz4_compress_dest_size(&input[..max_in], pcluster_size, hc, lvl);
             if consumed == 0 || compressed.is_empty() {
                 return Ok(None);
             }
@@ -419,8 +426,8 @@ pub fn compress_fixed_output(
             Ok(Some((consumed, out)))
         }
         CompressionAlg::Deflate | CompressionAlg::Zstd | CompressionAlg::Lzma => {
-            // Binary-search maximum input slice that fits in `pcluster_size`, bounded up to 8x pcluster_size.
-            let max_in = input.len().min(pcluster_size * 8);
+            // Binary-search maximum input slice that fits in `pcluster_size`, bounded up to 8x pcluster_size (max 1 MiB).
+            let max_in = input.len().min((pcluster_size * 8).min(1024 * 1024));
             let compress_once = |slice: &[u8]| -> Result<Vec<u8>> {
                 match alg {
                     CompressionAlg::Deflate => {
@@ -433,7 +440,11 @@ pub fn compress_fixed_output(
                     }
                     CompressionAlg::Zstd => {
                         let lvl = level.unwrap_or(3).clamp(1, 22);
-                        zstd::bulk::compress(slice, lvl)
+                        let mut comp = zstd::bulk::Compressor::new(lvl)
+                            .map_err(|e| ErofsError::Compression(e.to_string()))?;
+                        comp.set_parameter(zstd::zstd_safe::CParameter::WindowLog(20))
+                            .map_err(|e| ErofsError::Compression(e.to_string()))?;
+                        comp.compress(slice)
                             .map_err(|e| ErofsError::Compression(e.to_string()))
                     }
                     CompressionAlg::Lzma => compress_microlzma(slice, level.unwrap_or(6) as u32),
@@ -509,23 +520,25 @@ fn compress_microlzma(slice: &[u8], level: u32) -> Result<Vec<u8>> {
 }
 
 /// Clean-room LZ4 / LZ4HC fixed-size-output block encoder.
-/// Packs as many input bytes as possible such that the resulting valid LZ4 block
-/// fits strictly within `max_dst_size` bytes.
+/// Packs as many input bytes as possible such that the resulting strictly compliant LZ4 block
+/// (respecting `LASTLITERALS = 5` and `MFLIMIT = 12`) fits within `max_dst_size` bytes.
 fn lz4_compress_dest_size(
     src: &[u8],
     max_dst_size: usize,
     hc: bool,
     level: u32,
 ) -> (usize, Vec<u8>) {
-    if src.is_empty() || max_dst_size < 2 {
-        return (0, Vec::new());
-    }
-
     const HASH_BITS: usize = 15;
     const HASH_SIZE: usize = 1 << HASH_BITS;
     const WINDOW_SIZE: usize = 65535;
+    const WINDOW_MASK: usize = 0xFFFF;
     const MIN_MATCH: usize = 4;
+    const LASTLITERALS: usize = 5;
     const MFLIMIT: usize = 12;
+
+    if src.len() < LASTLITERALS || max_dst_size < 1 + LASTLITERALS {
+        return (0, Vec::new());
+    }
 
     let max_chain = if hc {
         match level {
@@ -545,7 +558,7 @@ fn lz4_compress_dest_size(
 
     let mut head = vec![u32::MAX; HASH_SIZE];
     let mut prev = if hc {
-        vec![u32::MAX; src.len().min(WINDOW_SIZE * 16 + 4096)]
+        vec![u32::MAX; 65536]
     } else {
         Vec::new()
     };
@@ -554,6 +567,7 @@ fn lz4_compress_dest_size(
     let mut anchor = 0usize;
     let mut ip = 0usize;
     let limit = src.len();
+    let match_limit = limit.saturating_sub(MFLIMIT);
 
     let extra_len_bytes = |n: usize| -> usize {
         if n < 15 { 0 } else { 1 + (n - 15) / 255 }
@@ -567,42 +581,49 @@ fn lz4_compress_dest_size(
         out.push(rem as u8);
     };
 
-    while ip + MFLIMIT <= limit {
+    while ip + MFLIMIT + MIN_MATCH <= limit {
         let h = hash4(src, ip);
         let mut best_len = 0usize;
         let mut best_off = 0usize;
 
         let mut cand = head[h];
         head[h] = ip as u32;
-        if hc && ip < prev.len() {
-            prev[ip] = cand;
+        if hc {
+            prev[ip & WINDOW_MASK] = cand;
         }
 
         let mut steps = 0usize;
         while cand != u32::MAX && steps < max_chain {
             let cpos = cand as usize;
-            let off = ip.saturating_sub(cpos);
+            if cpos >= ip {
+                break;
+            }
+            let off = ip - cpos;
             if off == 0 || off > WINDOW_SIZE {
                 break;
             }
             if src[cpos..cpos + 4] == src[ip..ip + 4] {
                 let mut mlen = 4usize;
-                let max_m = limit - ip;
+                let max_m = match_limit.saturating_sub(ip);
                 while mlen < max_m && src[cpos + mlen] == src[ip + mlen] {
                     mlen += 1;
                 }
                 if mlen > best_len {
                     best_len = mlen;
                     best_off = off;
-                    if best_len >= 128 {
+                    if best_len >= 256 {
                         break;
                     }
                 }
             }
-            if !hc || cpos >= prev.len() {
+            if !hc {
                 break;
             }
-            cand = prev[cpos];
+            let next_cand = prev[cpos & WINDOW_MASK];
+            if next_cand != u32::MAX && (next_cand as usize) >= cpos {
+                break;
+            }
+            cand = next_cand;
             steps += 1;
         }
 
@@ -611,9 +632,9 @@ fn lz4_compress_dest_size(
             let match_extra = best_len - MIN_MATCH;
             let seq_bytes =
                 1 + extra_len_bytes(lit_len) + lit_len + 2 + extra_len_bytes(match_extra);
-            // Leave room for a trailing last-literal token (at least 1 byte if we stop after match,
-            // or ensure we don't overflow max_dst_size when finalizing).
-            if dst.len() + seq_bytes + 1 > max_dst_size {
+            // Reserve room so even after any match, the final literals-only tail keeps >= MFLIMIT (12) bytes,
+            // satisfying liblz4's end-of-block guard (cpy <= oend - MFLIMIT and ip <= iend - 8).
+            if dst.len() + seq_bytes + 1 + MFLIMIT > max_dst_size {
                 break;
             }
 
@@ -629,14 +650,11 @@ fn lz4_compress_dest_size(
                 write_len_ext(&mut dst, match_extra - 15);
             }
 
-            // Insert intermediate positions for HC
             if hc {
                 let end_fill = (ip + best_len).min(limit.saturating_sub(4));
                 for k in (ip + 1)..end_fill {
                     let hk = hash4(src, k);
-                    if k < prev.len() {
-                        prev[k] = head[hk];
-                    }
+                    prev[k & WINDOW_MASK] = head[hk];
                     head[hk] = k as u32;
                 }
             }
@@ -645,7 +663,6 @@ fn lz4_compress_dest_size(
             anchor = ip;
         } else {
             ip += 1;
-            // If pending literals already approach remaining destination space, stop early.
             let pending = ip - anchor;
             if dst.len() + 1 + extra_len_bytes(pending) + pending >= max_dst_size {
                 break;
@@ -653,28 +670,28 @@ fn lz4_compress_dest_size(
         }
     }
 
-    // Emit final literals up to whatever fits in `max_dst_size`.
+    // Final sequence MUST consist of >= min_tail literal bytes with no match
+    // (12 bytes when at least one match was emitted, 5 bytes for literals-only blocks).
+    let min_tail = if dst.is_empty() { LASTLITERALS } else { MFLIMIT };
     let rem_src = limit - anchor;
     let rem_dst = max_dst_size.saturating_sub(dst.len());
-    if rem_src > 0 && rem_dst >= 2 {
-        // Find max literal count `take` such that 1 + extra_len_bytes(take) + take <= rem_dst
-        let mut take = rem_src.min(rem_dst - 1);
-        while take > 0 && 1 + extra_len_bytes(take) + take > rem_dst {
-            take -= 1;
-        }
-        if take > 0 {
-            let tok = (take.min(15) as u8) << 4;
-            dst.push(tok);
-            if take >= 15 {
-                write_len_ext(&mut dst, take - 15);
-            }
-            dst.extend_from_slice(&src[anchor..anchor + take]);
-            anchor += take;
-        }
-    } else if rem_src == 0 && !dst.is_empty() && rem_dst >= 1 {
-        // Last sequence in LZ4 MUST end with literals (even 0-byte literal token if ended on a match).
-        dst.push(0u8);
+    if rem_src < min_tail || rem_dst < 1 + min_tail {
+        return (0, Vec::new());
     }
+    let mut take = rem_src.min(rem_dst - 1);
+    while take > 0 && 1 + extra_len_bytes(take) + take > rem_dst {
+        take -= 1;
+    }
+    if take < min_tail {
+        return (0, Vec::new());
+    }
+    let tok = (take.min(15) as u8) << 4;
+    dst.push(tok);
+    if take >= 15 {
+        write_len_ext(&mut dst, take - 15);
+    }
+    dst.extend_from_slice(&src[anchor..anchor + take]);
+    anchor += take;
 
     (anchor, dst)
 }
@@ -683,20 +700,141 @@ fn lz4_compress_dest_size(
 mod tests {
     use super::*;
 
+    fn verify_strict_lz4(src: &[u8], max_dst: usize, hc: bool) {
+        let (consumed, c) = lz4_compress_dest_size(src, max_dst, hc, if hc { 9 } else { 0 });
+        if src.len() < 5 || max_dst < 6 {
+            assert_eq!(consumed, 0);
+            assert!(c.is_empty());
+            return;
+        }
+        assert!(consumed >= 5 && consumed <= src.len());
+        assert!(c.len() <= max_dst);
+
+        let mut out = vec![0u8; consumed];
+        let n = lz4_flex::block::decompress_into(&c, &mut out)
+            .expect("lz4_flex strict block decoder rejected output");
+        assert_eq!(n, consumed);
+        assert_eq!(&out[..], &src[..consumed]);
+
+        let dec2 = lz4_decompress_block(&c, consumed, false).unwrap();
+        assert_eq!(dec2, src[..consumed]);
+
+        // Structural liblz4 end-of-block compliance check
+        let mut ip = 0usize;
+        let mut op = 0usize;
+        let mut saw_match = false;
+        while ip < c.len() {
+            let tok = c[ip];
+            ip += 1;
+            let mut lit_len = (tok >> 4) as usize;
+            if lit_len == 15 {
+                loop {
+                    let b = c[ip] as usize;
+                    ip += 1;
+                    lit_len += b;
+                    if b != 255 {
+                        break;
+                    }
+                }
+            }
+            ip += lit_len;
+            op += lit_len;
+            if ip == c.len() {
+                assert_eq!(op, consumed);
+                assert!(lit_len >= 5, "final literals {lit_len} < 5");
+                if saw_match {
+                    assert!(
+                        lit_len >= 12,
+                        "final literals {lit_len} < MFLIMIT (12) after match"
+                    );
+                }
+                break;
+            }
+            assert!(
+                op + 12 <= consumed,
+                "match op_after_literals={op} too close to consumed={consumed}"
+            );
+            assert!(
+                ip + 8 <= c.len(),
+                "match ip_after_literals={ip} too close to c.len()={}",
+                c.len()
+            );
+            saw_match = true;
+            ip += 2;
+            let mut mlen = ((tok & 0x0F) as usize) + 4;
+            if (tok & 0x0F) == 15 {
+                loop {
+                    let b = c[ip] as usize;
+                    ip += 1;
+                    mlen += b;
+                    if b != 255 {
+                        break;
+                    }
+                }
+            }
+            op += mlen;
+            assert!(
+                op + 5 <= consumed,
+                "match end op={op} too close to consumed={consumed}"
+            );
+        }
+        assert!(op == consumed && ip == c.len());
+    }
+
     #[test]
     fn lz4_roundtrip_fixed_output() {
         let mut data = Vec::new();
         for i in 0..300 {
-            data.extend_from_slice(format!("hello erofs-rs block {i:04} repetitive data! ").as_bytes());
+            data.extend_from_slice(
+                format!("hello erofs-rs block {i:04} repetitive data! ").as_bytes(),
+            );
         }
         let (consumed, c) = lz4_compress_dest_size(&data, 4096, true, 9);
         assert!(consumed > 4096);
         assert!(c.len() <= 4096);
-        let dec = lz4_decompress_block(&c, consumed, false).unwrap();
-        assert_eq!(dec, data[..consumed]);
+        let mut strict = vec![0u8; consumed];
+        assert_eq!(
+            lz4_flex::block::decompress_into(&c, &mut strict).unwrap(),
+            consumed
+        );
+        assert_eq!(strict, data[..consumed]);
 
-        // Also test partial decoding
         let part = lz4_decompress_block(&c, 1234, true).unwrap();
         assert_eq!(part, data[..1234]);
+    }
+
+    #[test]
+    fn lz4_strict_spec_all_edge_cases() {
+        for len in [0usize, 1, 4, 5, 11, 12, 13, 64, 4095, 4096, 4097, 8193] {
+            let pat: Vec<u8> = (0..len).map(|i| ((i / 3) as u8).wrapping_mul(7)).collect();
+            for &hc in &[false, true] {
+                for &max_dst in &[64usize, 256, 4096, 8192, 16384] {
+                    verify_strict_lz4(&pat, max_dst, hc);
+                }
+            }
+        }
+
+        // Pseudo-random incompressible payload + repetitive payload + tail
+        let mut mixed = vec![0u8; 32768];
+        let mut rng = 0x1234_5678_9ABC_DEF0u64;
+        for b in &mut mixed[..16384] {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            *b = (rng & 0xFF) as u8;
+        }
+        for (i, b) in mixed[16384..].iter_mut().enumerate() {
+            *b = b"ABCDEFGHIJ"[i % 10];
+        }
+        for &hc in &[false, true] {
+            for &max_dst in &[64usize, 256, 4096, 8192, 16384] {
+                verify_strict_lz4(&mixed, max_dst, hc);
+            }
+        }
+
+        // Large all-zero buffer capped cleanly
+        let zeros = vec![0u8; 2 * 1024 * 1024];
+        verify_strict_lz4(&zeros[..zeros.len().min(2000 * 4096)], 16384, true);
+        verify_strict_lz4(&zeros, 4096, false);
     }
 }

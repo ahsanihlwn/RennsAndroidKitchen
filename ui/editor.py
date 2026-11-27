@@ -68,18 +68,24 @@ class EditorSession(QObject):
             self.activeChanged.emit()
 
     @Slot(str, result=bool)
-    def openFile(self, path):
-        self._current_path = path
+    @Slot(str, bool, result=bool)
+    def openFile(self, path, read_only=False):
         self.prepare()
         key, tab = self._bridge._find_tab(path)
         if tab and tab.get('virtual'):
+            self._current_path = path
+            if read_only and not tab.get('read_only'):
+                self._bridge.set_read_only(key, True)
             self._bridge._active = key
             self.currentPathChanged.emit()
             self.openFileRequested.emit(key)
             return True
+        result = self._bridge.open_file(path, read_only=bool(read_only))
+        if not result:
+            return False
+        self._current_path = path
         self.currentPathChanged.emit()
         self.openFileRequested.emit(path)
-        result = self._bridge.open_file(path)
         return result
 
     @Slot(str)

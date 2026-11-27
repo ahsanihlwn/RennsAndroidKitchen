@@ -74,6 +74,7 @@ DialogWindow {
             RakButton {
                 id: locBtn
                 anchors.fill: parent; visible: !modelData.header
+                animatePress: false
                 leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
                 cornerRadius: 6
                 fillColor: active ? dialog.c.a15 : "transparent"
@@ -114,6 +115,7 @@ DialogWindow {
                 ? dialog.backend.selectedPaths.indexOf(modelData.path) >= 0
                 : dialog.backend.selected===modelData.path
             objectName: "renxecFile"+index; width: files.width; height: 30; cornerRadius: 6
+            animatePress: false
             leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
             fillColor: chosen ? dialog.c.a15 : "transparent"
             hoverFillColor: chosen ? dialog.c.a15 : dialog.c.b05

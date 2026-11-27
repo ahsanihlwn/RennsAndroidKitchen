@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::env;
 use std::fs;
+use std::ops::Deref;
 use std::path::Path;
 
 use memchr::memmem;
@@ -12,7 +13,7 @@ use sha2::{Sha256, Sha512};
 
 use crate::compress::{compress_bytes, decompress_bytes};
 use crate::cpio::{CpioArchive, CpioEntry};
-use crate::dtb::find_embedded_dtb_offset;
+use crate::dtb::{DtbMetadata, extract_dtb_metadata, find_embedded_dtb_offset};
 use crate::format::*;
 
 pub const HEADER_FILE: &str = "header";
@@ -703,8 +704,23 @@ struct V4Meta {
     merged_sha256: String,
 }
 
+enum BootBacking {
+    Mmap(Mmap),
+    Owned(Vec<u8>),
+}
+
+impl Deref for BootBacking {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            BootBacking::Mmap(m) => m,
+            BootBacking::Owned(v) => v,
+        }
+    }
+}
+
 struct ParsedBootImage {
-    _mmap: Mmap,
+    _backing: BootBacking,
     hdr: DynHeader,
     flags: BootFlags,
     hdr_file_offset: usize,
@@ -734,12 +750,12 @@ impl ParsedBootImage {
         if r.1 == 0 {
             &[]
         } else {
-            &self._mmap[r.0..r.0 + r.1]
+            &self._backing[r.0..r.0 + r.1]
         }
     }
 
     fn raw(&self) -> &[u8] {
-        &self._mmap
+        &self._backing
     }
 }
 
@@ -747,7 +763,15 @@ fn parse_boot_image(path: &str) -> Result<ParsedBootImage, String> {
     eprintln!("Parsing image: [{path}]");
     let file = fs::File::open(path).map_err(|e| format!("Failed opening [{path}]: {e}"))?;
     let mmap = unsafe { Mmap::map(&file) }.map_err(|e| format!("Failed mapping [{path}]: {e}"))?;
-    let data: &[u8] = &mmap;
+    parse_boot_backing(BootBacking::Mmap(mmap), path)
+}
+
+fn parse_boot_bytes(data: Vec<u8>, label: &str) -> Result<ParsedBootImage, String> {
+    parse_boot_backing(BootBacking::Owned(data), label)
+}
+
+fn parse_boot_backing(backing: BootBacking, label: &str) -> Result<ParsedBootImage, String> {
+    let data: &[u8] = &backing;
 
     let mut flags = BootFlags::default();
     let mut pos = 0usize;
@@ -783,7 +807,7 @@ fn parse_boot_image(path: &str) -> Result<ParsedBootImage, String> {
         }
     }
 
-    let mut base_off = found_addr.ok_or_else(|| format!("No valid boot magic found in [{path}]"))?;
+    let mut base_off = found_addr.ok_or_else(|| format!("No valid boot magic found in [{label}]"))?;
     let is_vendor = found_type == Format::AospVendor;
     let mut hdr = if is_vendor {
         eprintln!("VENDOR_BOOT_HDR");
@@ -866,16 +890,18 @@ fn parse_boot_image(path: &str) -> Result<ParsedBootImage, String> {
     let bootconfig_range = take_block(&mut off, hdr.bootconfig_size());
 
     let mut v4_entries = Vec::new();
-    if hdr.kind == HeaderKind::VndV4 && hdr.vendor_ramdisk_table_entry_num() > 0 {
-        let entry_num = hdr.vendor_ramdisk_table_entry_num() as usize;
-        let tbl = &data[v4_table_range.0..v4_table_range.0 + v4_table_range.1];
-        for i in 0..entry_num {
-            let start = i * VENDOR_RAMDISK_TABLE_ENTRY_SIZE;
-            if start + VENDOR_RAMDISK_TABLE_ENTRY_SIZE <= tbl.len() {
-                v4_entries.push(VendorRamdiskTableEntry::parse(
-                    i,
-                    &tbl[start..start + VENDOR_RAMDISK_TABLE_ENTRY_SIZE],
-                ));
+    if hdr.kind == HeaderKind::VndV4 {
+        if hdr.vendor_ramdisk_table_entry_num() > 0 {
+            let entry_num = hdr.vendor_ramdisk_table_entry_num() as usize;
+            let tbl = &data[v4_table_range.0..v4_table_range.0 + v4_table_range.1];
+            for i in 0..entry_num {
+                let start = i * VENDOR_RAMDISK_TABLE_ENTRY_SIZE;
+                if start + VENDOR_RAMDISK_TABLE_ENTRY_SIZE <= tbl.len() {
+                    v4_entries.push(VendorRamdiskTableEntry::parse(
+                        i,
+                        &tbl[start..start + VENDOR_RAMDISK_TABLE_ENTRY_SIZE],
+                    ));
+                }
             }
         }
     } else {
@@ -1032,13 +1058,23 @@ fn parse_boot_image(path: &str) -> Result<ParsedBootImage, String> {
                     flags.avb = true;
                     avb_footer_offset = Some(footer_off);
                     vbmeta_range = Some((abs_vb_off, vb_sz));
+                    if hdr.kind == HeaderKind::V4
+                        && !hdr.is_vendor()
+                        && hdr.signature_size() == 0
+                        && ignore_size == 0
+                        && abs_vb_off > off
+                        && abs_vb_off - off <= 65536
+                        && data[off..].starts_with(AVB_MAGIC)
+                    {
+                        ignore_size = abs_vb_off - off;
+                    }
                 }
             }
         }
     }
 
     Ok(ParsedBootImage {
-        _mmap: mmap,
+        _backing: backing,
         hdr,
         flags,
         hdr_file_offset: base_off,
@@ -1127,6 +1163,122 @@ impl ParsedBootImage {
             has_avb: self.flags.avb,
         }
     }
+}
+
+pub struct ExtractedRamdisk {
+    pub name: String,
+    pub ramdisk_type: u32,
+    pub format: String,
+    pub archive: CpioArchive,
+}
+
+pub struct BootContents {
+    pub header: BootHeaderInfo,
+    pub bootconfig: String,
+    pub kernel_bytes: Vec<u8>,
+    pub dtb_meta: DtbMetadata,
+    pub kernel_dtb_meta: DtbMetadata,
+    pub ramdisks: Vec<ExtractedRamdisk>,
+    pub vbmeta_bytes: Option<Vec<u8>>,
+}
+
+fn extract_boot_contents(boot: ParsedBootImage) -> Result<BootContents, String> {
+    let header = boot.header_info();
+    let bootconfig = if boot.bootconfig_range.1 > 0 {
+        String::from_utf8_lossy(boot.slice(boot.bootconfig_range))
+            .trim_end_matches('\0')
+            .to_string()
+    } else {
+        String::new()
+    };
+
+    let kernel_bytes = if boot.kernel_range.1 > 0 {
+        let kslice = boot.slice(boot.kernel_range);
+        if boot.k_fmt.is_compressed() {
+            decompress_bytes(boot.k_fmt, kslice).unwrap_or_else(|_| kslice.to_vec())
+        } else {
+            kslice.to_vec()
+        }
+    } else {
+        Vec::new()
+    };
+
+    let dtb_meta = if boot.dtb_range.1 > 0 {
+        extract_dtb_metadata(boot.slice(boot.dtb_range))
+    } else {
+        DtbMetadata::default()
+    };
+    let kernel_dtb_meta = if boot.kernel_dtb_range.1 > 0 {
+        extract_dtb_metadata(boot.slice(boot.kernel_dtb_range))
+    } else {
+        DtbMetadata::default()
+    };
+
+    let mut ramdisks = Vec::new();
+    if boot.ramdisk_range.1 > 0 {
+        let r_base = boot.slice(boot.ramdisk_range);
+        if !boot.v4_entries.is_empty() {
+            for entry in &boot.v4_entries {
+                let s = entry.ramdisk_offset as usize;
+                let e = s.saturating_add(entry.ramdisk_size as usize).min(r_base.len());
+                if s >= e {
+                    continue;
+                }
+                let frag = &r_base[s..e];
+                let fmt = detect_format_lg(frag);
+                let raw = if fmt.is_compressed() {
+                    decompress_bytes(fmt, frag).unwrap_or_default()
+                } else {
+                    frag.to_vec()
+                };
+                if let Ok(archive) = CpioArchive::from_bytes(&raw) {
+                    ramdisks.push(ExtractedRamdisk {
+                        name: entry.ramdisk_name.clone(),
+                        ramdisk_type: entry.ramdisk_type,
+                        format: fmt.name().to_string(),
+                        archive,
+                    });
+                }
+            }
+        } else {
+            let fmt = boot.r_fmt;
+            let raw = if fmt.is_compressed() {
+                decompress_bytes(fmt, r_base).unwrap_or_default()
+            } else {
+                r_base.to_vec()
+            };
+            if let Ok(archive) = CpioArchive::from_bytes(&raw) {
+                ramdisks.push(ExtractedRamdisk {
+                    name: String::from("ramdisk"),
+                    ramdisk_type: 1,
+                    format: fmt.name().to_string(),
+                    archive,
+                });
+            }
+        }
+    }
+
+    let vbmeta_bytes = boot.vbmeta_range.map(|r| boot.slice(r).to_vec());
+
+    Ok(BootContents {
+        header,
+        bootconfig,
+        kernel_bytes,
+        dtb_meta,
+        kernel_dtb_meta,
+        ramdisks,
+        vbmeta_bytes,
+    })
+}
+
+pub fn inspect_boot_contents_bytes(data: Vec<u8>) -> Result<BootContents, String> {
+    let boot = parse_boot_bytes(data, "<memory>")?;
+    extract_boot_contents(boot)
+}
+
+pub fn inspect_boot_contents_file(path: &str) -> Result<BootContents, String> {
+    let boot = parse_boot_image(path)?;
+    extract_boot_contents(boot)
 }
 
 pub fn inspect_boot_image(image: &str) -> Result<BootHeaderInfo, String> {
@@ -1342,7 +1494,7 @@ pub fn cmd_repack(src_img: &str, out_img: &str, skip_comp: bool) -> Result<(), S
     let boot = parse_boot_image(src_img)?;
     eprintln!("Repack to image: [{out_img}]");
 
-    if boot.hdr.kind == HeaderKind::VndV4 && !boot.v4_entries.is_empty() {
+    if boot.hdr.kind == HeaderKind::VndV4 {
         return repack_vendor_boot_v4(&boot, src_img, out_img, skip_comp);
     }
 
@@ -1406,12 +1558,12 @@ pub fn cmd_repack(src_img: &str, out_img: &str, skip_comp: bool) -> Result<(), S
 
         if boot.flags.zimage_kernel {
             let orig_k_sz = boot.hdr.kernel_size();
-            if written_sz > orig_k_sz {
+            if (!skip_comp && written_sz + 4 > orig_k_sz) || (skip_comp && written_sz > orig_k_sz) {
                 eprintln!("! Recompressed kernel is too large, using original kernel");
                 out.truncate(out.len() - written_sz as usize);
                 out.extend_from_slice(boot.slice(boot.kernel_range));
             } else if !skip_comp {
-                let pad_zeros = (orig_k_sz - written_sz).saturating_sub(4) as usize;
+                let pad_zeros = (orig_k_sz - written_sz - 4) as usize;
                 out.resize(out.len() + pad_zeros, 0);
                 out.extend_from_slice(&(kdata.len() as u32).to_le_bytes());
             }
@@ -1712,33 +1864,42 @@ fn repack_vendor_boot_v4(
 
     let comp_pieces = build_v4_ramdisk_pieces(boot, v4_meta.as_ref(), skip_comp)?;
 
-    let mut total_ramdisk_sz = 0u32;
-    let mut updated_entries = Vec::with_capacity(boot.v4_entries.len());
-    for (entry, comp) in boot.v4_entries.iter().zip(comp_pieces.iter()) {
-        updated_entries.push(VendorRamdiskTableEntry {
-            index: entry.index,
-            ramdisk_size: comp.len() as u32,
-            ramdisk_offset: total_ramdisk_sz,
-            ramdisk_type: entry.ramdisk_type,
-            ramdisk_name: entry.ramdisk_name.clone(),
-            board_id: entry.board_id,
-        });
-        total_ramdisk_sz += comp.len() as u32;
-    }
+    let (total_ramdisk_sz, updated_entries, ramdisks_unchanged) = if boot.v4_entries.is_empty() {
+        let single_sz = comp_pieces.first().map_or(0, |p| p.len() as u32);
+        let unchanged = comp_pieces
+            .first()
+            .map_or(boot.ramdisk_range.1 == 0, |p| p.as_slice() == boot.slice(boot.ramdisk_range));
+        (single_sz, Vec::new(), unchanged)
+    } else {
+        let mut total_sz = 0u32;
+        let mut entries = Vec::with_capacity(boot.v4_entries.len());
+        for (entry, comp) in boot.v4_entries.iter().zip(comp_pieces.iter()) {
+            entries.push(VendorRamdiskTableEntry {
+                index: entry.index,
+                ramdisk_size: comp.len() as u32,
+                ramdisk_offset: total_sz,
+                ramdisk_type: entry.ramdisk_type,
+                ramdisk_name: entry.ramdisk_name.clone(),
+                board_id: entry.board_id,
+            });
+            total_sz += comp.len() as u32;
+        }
+        let unchanged = boot
+            .v4_entries
+            .iter()
+            .zip(comp_pieces.iter())
+            .all(|(orig, piece)| {
+                let s = boot.ramdisk_range.0 + orig.ramdisk_offset as usize;
+                let e = s + orig.ramdisk_size as usize;
+                piece.as_slice() == &boot.raw()[s..e]
+            });
+        (total_sz, entries, unchanged)
+    };
 
     // Fast path: if everything is byte-identical to original image, copy directly
     let hdr_unchanged = hdr.raw == boot.hdr.raw;
     let dtb_unchanged = dtb_bytes == boot.slice(boot.dtb_range);
     let bc_unchanged = bc_bytes == boot.slice(boot.bootconfig_range);
-    let ramdisks_unchanged = boot
-        .v4_entries
-        .iter()
-        .zip(comp_pieces.iter())
-        .all(|(orig, piece)| {
-            let s = boot.ramdisk_range.0 + orig.ramdisk_offset as usize;
-            let e = s + orig.ramdisk_size as usize;
-            piece.as_slice() == &boot.raw()[s..e]
-        });
 
     if hdr_unchanged && dtb_unchanged && bc_unchanged && ramdisks_unchanged && !patch_vbmeta {
         fs::copy(src_img, out_img)
@@ -1860,6 +2021,21 @@ fn build_v4_ramdisk_pieces(
     let rbase = boot.ramdisk_range.0;
     let raw = boot.raw();
     let count = boot.v4_entries.len();
+
+    if count == 0 {
+        if Path::new(RAMDISK_FILE).exists() {
+            let rdata = fs::read(RAMDISK_FILE)
+                .map_err(|e| format!("Failed reading [{RAMDISK_FILE}]: {e}"))?;
+            if !skip_comp
+                && !detect_format(&rdata).is_compressed_any()
+                && boot.r_fmt.is_compressed()
+            {
+                return Ok(vec![compress_bytes(boot.r_fmt, &rdata)?]);
+            }
+            return Ok(vec![rdata]);
+        }
+        return Ok(Vec::new());
+    }
 
     if count == 1 {
         let orig_entry = &boot.v4_entries[0];

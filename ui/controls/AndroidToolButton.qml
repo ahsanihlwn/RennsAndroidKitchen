@@ -10,10 +10,10 @@ RakButton {
     implicitWidth: Math.ceil(textMetrics.advanceWidth)+20
     font.pixelSize: 10; font.weight: selected?Font.DemiBold:Font.Normal
     leftPadding: 10; rightPadding: 10; cornerRadius: 5
-    fillColor: selected?colors.a12:"transparent"
+    fillColor: selected?colors.a14:"transparent"
     hoverFillColor: danger?"#20e95761":colors.b06
     downFillColor: danger?"#30e95761":colors.a18
-    edgeColor: selected?colors.a30:colors.b10
+    edgeColor: selected?colors.a30:colors.b08
     hoverEdgeColor: danger?"#80e95761":colors.a35
     labelColor: danger?colors.RED_STATUS:selected?colors.accent_hex:colors.FG2
     disabledLabelColor: colors.FG3

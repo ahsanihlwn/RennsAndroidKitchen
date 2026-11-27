@@ -34,6 +34,7 @@ typedef struct {
 
 Core *term_new(const char *program, const char *const *argv, const char *cwd, int cols, int rows,
                int scrollback, TermCallback cb, void *user);
+Core *term_new_log(int cols, int rows, int scrollback, TermCallback cb, void *user);
 void term_free(Core *);
 void term_str_free(char *);
 void term_resize(Core *, int cols, int rows, int cell_w, int cell_h);
@@ -43,6 +44,7 @@ int term_snapshot(Core *, CCell *cells, size_t cap, CInfo *info);
 size_t term_cell_extra(Core *, int col, int row, uint32_t *out, size_t cap);
 void term_write(Core *, const uint8_t *data, size_t len);
 void term_feed(Core *, const uint8_t *data, size_t len);
+void term_set_pty_mute(Core *, int muted, const char *marker);
 void term_paste(Core *, const char *utf8);
 void term_focus(Core *, int focused);
 int term_key(Core *, int key, uint32_t base, const char *text, uint32_t mods, int event);

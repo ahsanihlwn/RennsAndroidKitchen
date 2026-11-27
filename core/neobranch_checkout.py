@@ -390,4 +390,9 @@ def create(manager, root, name, color, *, progress=None):
         state['checkout_snapshots'][_key(name)] = state['checkout_snapshots']['source']
         manager._write_state(root, state)
         switch(manager, root, name,progress=progress)
+        try:
+            from core import filesystem_map
+            filesystem_map.clone_branch_map(manager.tree_base, root, None, name)
+        except Exception:
+            pass
         return info

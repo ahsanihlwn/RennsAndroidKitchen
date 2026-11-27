@@ -5,7 +5,9 @@
 //! and optional SHA-256 xattr inode digest checks.
 
 use crate::error::Result;
+use crate::format::read_u32_le;
 use crate::reader::ErofsImage;
+use crate::xattr::{split_xattr_name, xattr_name_filter_bit};
 use rayon::prelude::*;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -140,6 +142,73 @@ pub fn verify_image(
                             .push(format!("decompress/read {}: {e}", n.path));
                     }
                 }
+            }
+        } else if inode.is_symlink() {
+            match img.read_inode_bytes(&inode) {
+                Ok(raw) => {
+                    if raw.len() as u64 != inode.size {
+                        errors.lock().unwrap().push(format!(
+                            "symlink size mismatch {}: decoded {} != inode {}",
+                            n.path,
+                            raw.len(),
+                            inode.size
+                        ));
+                    }
+                }
+                Err(e) => {
+                    errors
+                        .lock()
+                        .unwrap()
+                        .push(format!("symlink read {}: {e}", n.path));
+                }
+            }
+            if let Err(e) = img.read_symlink(&inode) {
+                errors
+                    .lock()
+                    .unwrap()
+                    .push(format!("symlink decode {}: {e}", n.path));
+            }
+        }
+
+        match img.read_xattrs(&inode) {
+            Ok(xattrs) => {
+                if img.sb.has_xattr_filter()
+                    && !img.sb.has_xattr_prefixes()
+                    && !inode.in_metabox
+                    && inode.xattr_icount > 0
+                    && inode.xattr_size >= 12
+                {
+                    match img.source.read_vec(inode.xattr_offset, 4) {
+                        Ok(nf_raw) => {
+                            let h_nf = read_u32_le(&nf_raw, 0);
+                            let mut expected_nf = u32::MAX;
+                            for xa in &xattrs {
+                                if let Some((nidx, suffix)) = split_xattr_name(&xa.name) {
+                                    expected_nf &=
+                                        !xattr_name_filter_bit(nidx, suffix.as_bytes());
+                                }
+                            }
+                            if (h_nf & !expected_nf) != 0 {
+                                errors.lock().unwrap().push(format!(
+                                    "xattr h_name_filter mismatch {}: header={h_nf:#010x} missing bits for expected={expected_nf:#010x}",
+                                    n.path
+                                ));
+                            }
+                        }
+                        Err(e) => {
+                            errors
+                                .lock()
+                                .unwrap()
+                                .push(format!("xattr header read {}: {e}", n.path));
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                errors
+                    .lock()
+                    .unwrap()
+                    .push(format!("xattr decode {}: {e}", n.path));
             }
         }
     };

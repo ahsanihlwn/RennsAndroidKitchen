@@ -6,7 +6,7 @@ use erofs_rs::compress::CompressionAlg;
 use erofs_rs::edit::{
     WriteMode, unlink_path, usage_report, write_path_data, write_path_mode, write_path_selinux,
 };
-use erofs_rs::extract::{ExtractOptions, extract_image};
+use erofs_rs::extract::{ExtractOptions, SymlinkMode, extract_image};
 use erofs_rs::mount_index::MountRegistry;
 use erofs_rs::pack::{PackOptions, pack_directory};
 use erofs_rs::reader::ErofsImage;
@@ -175,6 +175,7 @@ fn unpack_direct_edit_and_compact_workflow() {
             write_configs: true,
             overwrite: true,
             verify_digest: false,
+            symlink_mode: SymlinkMode::Auto,
             threads: 2,
             quiet: true,
         },
@@ -183,9 +184,12 @@ fn unpack_direct_edit_and_compact_workflow() {
     assert!(ex_rep.errors.is_empty());
     assert_eq!(ex_rep.files_extracted, 4);
     let fc_text = fs::read_to_string(ex_rep.fs_config.unwrap()).unwrap();
-    assert!(fc_text.contains("/bin/tool 0 2000 0755 capabilities=0x1000001400"));
+    assert!(fc_text.contains("product/bin/tool 0 2000 0755 capabilities=0x1000001400"));
     let sx_text = fs::read_to_string(ex_rep.file_contexts.unwrap()).unwrap();
-    assert!(sx_text.contains("/etc/build\\.prop u:object_r:unique_prop_context:s0"));
+    assert!(sx_text.contains("/product/etc/build\\.prop u:object_r:unique_prop_context:s0"));
+    let fo_text = fs::read_to_string(ex_rep.fs_options.unwrap()).unwrap();
+    assert!(fo_text.contains("-zlz4 "), "unexpected fs_options: {fo_text}");
+    assert!(fo_text.contains("-T 1700000000"), "unexpected fs_options: {fo_text}");
     drop(img);
 
     // 2. Direct in-place inline edit (shrink small.txt)
@@ -265,6 +269,205 @@ fn unpack_direct_edit_and_compact_workflow() {
     assert!(resolved.exists);
     assert_eq!(resolved.target_image.as_deref(), Some("product.img"));
     assert_eq!(resolved.target_internal_path.as_deref(), Some("etc/build.prop"));
+
+    let _ = fs::remove_dir_all(&base);
+}
+
+fn create_test_symlink(link_path: &Path, target: &str) {
+    #[cfg(windows)]
+    {
+        let mut data = Vec::from(&b"!<symlink>\xff\xfe"[..]);
+        for u in target.encode_utf16() {
+            data.extend_from_slice(&u.to_le_bytes());
+        }
+        data.extend_from_slice(&[0u8, 0u8]);
+        fs::write(link_path, &data).unwrap();
+        let status = std::process::Command::new("attrib")
+            .arg("+S")
+            .arg(link_path)
+            .status()
+            .expect("attrib +S failed");
+        assert!(status.success());
+    }
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link_path).unwrap();
+    }
+}
+
+#[test]
+fn roundtrip_symlinks_hardlinks_sar_configs_and_large_zero_pclusters() {
+    let base = make_temp_dir("sar_hardlink_zero");
+    let src = base.join("src");
+    fs::create_dir_all(src.join("system/bin")).unwrap();
+    fs::create_dir_all(src.join("system/app/App+One(v1)")).unwrap();
+    fs::create_dir_all(src.join("lost+found")).unwrap();
+
+    fs::write(src.join("system/bin/run-as"), b"run-as-binary-payload").unwrap();
+    fs::hard_link(
+        src.join("system/bin/run-as"),
+        src.join("system/bin/run-as-hardlink"),
+    )
+    .unwrap();
+    create_test_symlink(&src.join("system/bin/sh"), "/system/bin/toybox");
+    fs::write(src.join("system/app/App+One(v1)/App.apk"), b"apk-content").unwrap();
+
+    let zeros_2m = vec![0u8; 2 * 1024 * 1024];
+    fs::write(src.join("big_zeros.bin"), &zeros_2m).unwrap();
+
+    let fs_cfg = base.join("system_fs_config");
+    fs::write(
+        &fs_cfg,
+        "/ 0 0 0755\n\
+         system 0 0 0755\n\
+         system/system 0 0 0755\n\
+         system/bin 0 2000 0755\n\
+         system/bin/run-as 0 0 0644\n\
+         system/system/bin 0 2000 0755\n\
+         system/system/bin/run-as 0 2000 0750 capabilities=0xc0\n\
+         system/system/bin/run-as-hardlink 0 2000 0750 capabilities=0xc0\n\
+         system/system/bin/sh 0 2000 0755\n",
+    )
+    .unwrap();
+
+    let file_ctx = base.join("system_file_contexts");
+    fs::write(
+        &file_ctx,
+        "/ u:object_r:rootfs:s0\n\
+         /system/system/app(/.*)? u:object_r:system_file:s0\n\
+         /system/bin/run-as u:object_r:wrong_unprefixed:s0\n\
+         /system/system/bin/.* u:object_r:bin_wildcard:s0\n\
+         /system/system/bin/run-as u:object_r:first_match:s0\n\
+         /system/system/bin/run-as u:object_r:runas_final:s0\n\
+         /system/bin/.* u:object_r:late_unprefixed_wildcard:s0\n",
+    )
+    .unwrap();
+
+    // Test 2 MiB zeros + metadata across high-ratio pcluster compressors
+    for (alg, pc, lvl) in [
+        (CompressionAlg::Lz4Hc, 16384, Some(9)),
+        (CompressionAlg::Zstd, 8192, Some(19)),
+        (CompressionAlg::Deflate, 8192, None),
+        (CompressionAlg::Lzma, 8192, None),
+    ] {
+        let img_path = base.join(format!("sar_{}.img", alg.name()));
+        pack_directory(&PackOptions {
+            source_dir: src.clone(),
+            output_image: img_path.clone(),
+            algorithm: alg,
+            level: lvl,
+            pcluster_size: pc,
+            mount_point: "/system".into(),
+            fs_config: Some(fs_cfg.clone()),
+            file_contexts: Some(file_ctx.clone()),
+            timestamp: Some(1_700_000_000),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let img = ErofsImage::open(&img_path, 0).unwrap();
+        let vrep = verify_image(&img, true, false, 2).unwrap();
+        assert!(vrep.ok, "verify failed for {}: {:?}", alg.name(), vrep.errors);
+
+        let (zread, _) = img.read_path("/big_zeros.bin").unwrap();
+        assert_eq!(zread.len(), zeros_2m.len());
+        assert!(zread.iter().all(|&b| b == 0), "non-zero byte in {}", alg.name());
+
+        let run_as = img.lookup("/system/bin/run-as").unwrap();
+        let run_as_hl = img.lookup("/system/bin/run-as-hardlink").unwrap();
+        let run_as_node = img
+            .build_node("/system/bin/run-as".into(), &run_as)
+            .unwrap();
+        assert_eq!(run_as.nid, run_as_hl.nid);
+        assert_eq!(run_as.nlink, 2);
+        assert_eq!(run_as_node.capabilities, Some(0xc0));
+        assert_eq!(run_as.mode & 0o7777, 0o750);
+        assert_eq!(
+            run_as_node.selinux.as_deref(),
+            Some("u:object_r:runas_final:s0")
+        );
+
+        let sh = img.lookup("/system/bin/sh").unwrap();
+        assert!(sh.is_symlink());
+        assert_eq!(img.read_symlink(&sh).unwrap(), "/system/bin/toybox");
+    }
+
+    // Unpack the LZ4HC 16K image using Cygwin symlink mode & repack the unpacked tree
+    let lz4hc_img = base.join("sar_lz4hc.img");
+    let unpack_out = base.join("unpacked_sar");
+    let img = ErofsImage::open(&lz4hc_img, 0).unwrap();
+    let ex_rep = extract_image(
+        &img,
+        &ExtractOptions {
+            out_dir: unpack_out,
+            image_base_name: "system".into(),
+            targets: Vec::new(),
+            recursive: true,
+            config_only: false,
+            write_configs: true,
+            overwrite: true,
+            verify_digest: false,
+            symlink_mode: SymlinkMode::Cygwin,
+            threads: 2,
+            quiet: true,
+        },
+    )
+    .unwrap();
+    assert!(ex_rep.errors.is_empty(), "unpack errors: {:?}", ex_rep.errors);
+    assert_eq!(ex_rep.symlinks_created, 1);
+    assert_eq!(ex_rep.symlinks_skipped, 0);
+    assert!(ex_rep.hardlinks_created >= 1);
+
+    let gen_ctx = fs::read_to_string(ex_rep.file_contexts.as_ref().unwrap()).unwrap();
+    assert!(gen_ctx.contains(r"App\+One\(v1\)"), "unescaped regex in: {gen_ctx}");
+    let gen_opts = fs::read_to_string(ex_rep.fs_options.as_ref().unwrap()).unwrap();
+    assert!(gen_opts.contains("-zlz4 -C 16384"), "unexpected fs_options: {gen_opts}");
+
+    // Also confirm uncompressed image omits -z in fs_options
+    let raw_img = base.join("sar_none.img");
+    pack_directory(&PackOptions {
+        source_dir: PathBuf::from(&ex_rep.extract_dir),
+        output_image: raw_img.clone(),
+        algorithm: CompressionAlg::None,
+        pcluster_size: 4096,
+        fs_config: ex_rep.fs_config.as_ref().map(PathBuf::from),
+        file_contexts: ex_rep.file_contexts.as_ref().map(PathBuf::from),
+        timestamp: Some(1_700_000_000),
+        ..Default::default()
+    })
+    .unwrap();
+    let raw_opened = ErofsImage::open(&raw_img, 0).unwrap();
+    let raw_vrep = verify_image(&raw_opened, true, false, 2).unwrap();
+    assert!(raw_vrep.ok, "repack verify failed: {:?}", raw_vrep.errors);
+    let raw_run_as = raw_opened.lookup("/system/bin/run-as").unwrap();
+    let raw_run_as_node = raw_opened
+        .build_node("/system/bin/run-as".into(), &raw_run_as)
+        .unwrap();
+    assert_eq!(raw_run_as_node.capabilities, Some(0xc0));
+    assert_eq!(raw_opened.lookup("/system/bin/run-as-hardlink").unwrap().nid, raw_run_as.nid);
+    let raw_sh = raw_opened.lookup("/system/bin/sh").unwrap();
+    assert_eq!(raw_opened.read_symlink(&raw_sh).unwrap(), "/system/bin/toybox");
+
+    let raw_unpack = base.join("unpacked_raw/system");
+    let raw_ex = extract_image(
+        &raw_opened,
+        &ExtractOptions {
+            out_dir: raw_unpack,
+            image_base_name: "system".into(),
+            targets: Vec::new(),
+            recursive: true,
+            config_only: true,
+            write_configs: true,
+            overwrite: true,
+            verify_digest: false,
+            symlink_mode: SymlinkMode::Auto,
+            threads: 1,
+            quiet: true,
+        },
+    )
+    .unwrap();
+    let raw_opts = fs::read_to_string(raw_ex.fs_options.unwrap()).unwrap();
+    assert!(!raw_opts.contains("-z"), "uncompressed fs_options had -z: {raw_opts}");
 
     let _ = fs::remove_dir_all(&base);
 }

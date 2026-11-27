@@ -16,7 +16,10 @@ pub mod pattern;
 
 // Re-export the most commonly used entry points at the crate root so callers
 // don't need to reach into sub-modules.
-pub use bootimg::{BootHeaderInfo, cmd_repack, cmd_split, cmd_unpack, inspect_boot_image};
+pub use bootimg::{
+    BootContents, BootHeaderInfo, ExtractedRamdisk, cmd_repack, cmd_split, cmd_unpack,
+    inspect_boot_contents_bytes, inspect_boot_contents_file, inspect_boot_image,
+};
 pub use bootimg::{
     BOOTCONFIG_FILE, DTB_FILE, EXTRA_FILE, HEADER_FILE, KER_DTB_FILE, KERNEL_FILE, NEW_BOOT,
     RAMDISK_FILE, RECV_DTBO_FILE, SECOND_FILE, V4_META_FILE,
@@ -26,6 +29,8 @@ pub use compress::{
     decompress_lz4_legacy,
 };
 pub use cpio::{CpioArchive, CpioEntry, cmd_cpio};
-pub use dtb::cmd_dtb;
+pub use dtb::{
+    DtbFstabEntry, DtbMetadata, DtboFdtMeta, cmd_dtb, extract_dtb_metadata, extract_dtbo_fdt_meta,
+};
 pub use format::{Format, detect_format, detect_format_lg};
 pub use hexpatch::cmd_hexpatch;

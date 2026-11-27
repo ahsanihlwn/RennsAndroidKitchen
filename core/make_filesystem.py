@@ -24,6 +24,8 @@ def make_filesystem(folder_path, fs_type, mount_point=None):
     os.makedirs(config_dir, exist_ok=True)
 
 
+    from core.threader_control import report_progress
+    report_progress(4, "Generating fs_config")
     from main_ext.class_FilesystemBuilder import FilesystemBuilder
     builder = FilesystemBuilder(project_base, folder_path, forced_fs_type=fs_type)
     try:
@@ -48,6 +50,7 @@ def make_filesystem(folder_path, fs_type, mount_point=None):
             return False, f"Gagal set mount-point: {e}"
 
 
+    report_progress(12, "Scanning SELinux contexts")
     try:
         from core.context_patcher import ContextPatcher
         patcher = ContextPatcher(project_base)

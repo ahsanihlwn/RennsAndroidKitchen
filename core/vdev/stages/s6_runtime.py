@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: MPL-2.0
 from __future__ import annotations
 
+import io
+import posixpath
+import struct
+import zipfile
+
 from core.vdev.report import Finding, BLOCKER, WARN, INFO, PASS
 
 KEY = "runtime"
@@ -25,6 +30,198 @@ _ZYGOTE_BINARIES = {
     "zygote32_64": ("/system/bin/app_process32", "/system/bin/app_process64"),
     "zygote64_32": ("/system/bin/app_process64", "/system/bin/app_process32"),
 }
+
+
+def _parse_vdex_checksums(raw: bytes) -> tuple[list[int] | None, bool]:
+    """Return (checksum_list, has_embedded_dex_section) from Android vdex027 / vdex021 header."""
+    if not raw or len(raw) < 28 or raw[:4] != b"vdex":
+        return None, False
+    ver = raw[4:8]
+    try:
+        if ver.startswith(b"027"):
+            nsec = struct.unpack_from("<I", raw, 8)[0]
+            if nsec == 0 or 12 + nsec * 12 > len(raw):
+                return None, False
+            crcs = None
+            has_dex_sec = False
+            for i in range(nsec):
+                kind, off, sz = struct.unpack_from("<III", raw, 12 + i * 12)
+                if kind == 0 and sz >= 4 and (sz % 4 == 0) and off + sz <= len(raw):
+                    crcs = list(struct.unpack_from(f"<{sz // 4}I", raw, off))
+                elif kind == 1 and sz > 0:
+                    has_dex_sec = True
+            return crcs, has_dex_sec
+        if ver.startswith((b"021", b"019", b"015")):
+            ndex = struct.unpack_from("<I", raw, 12)[0]
+            if ndex == 0 or ndex > 128 or 28 + ndex * 4 > len(raw):
+                return None, False
+            crcs = list(struct.unpack_from(f"<{ndex}I", raw, 28))
+            return crcs, True
+    except struct.error:
+        return None, False
+    return None, False
+
+
+def _jar_dex_zip_crcs(raw: bytes) -> list[int] | None:
+    """Read ZIP entry CRC-32 for classes*.dex (matches ART VDEX kChecksumSection)."""
+    if not raw or len(raw) < 22:
+        return None
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+            dex_names = [
+                n for n in zf.namelist()
+                if n.startswith("classes") and n.endswith(".dex") and "/" not in n
+            ]
+            if not dex_names:
+                return []
+            def _dex_key(name: str):
+                mid = name[len("classes"):-len(".dex")]
+                return (0, 0) if not mid else (1, int(mid) if mid.isdigit() else 9999)
+            dex_names.sort(key=_dex_key)
+            return [zf.getinfo(n).CRC for n in dex_names]
+    except Exception:
+        return None
+
+
+def _audit_art_oat_vdex(vfs, findings) -> dict:
+    """Verify companion .vdex/.odex DEX checksums against framework JARs and critical priv-apps.
+
+    Catches the #1 ROM porting/modding bootloop: patching classes.dex inside services.jar,
+    framework.jar, or SystemUI.apk while leaving stale precompiled oat/*.vdex/.odex behind.
+    """
+    pairs = []  # (companion_vpath, vdex_vpath, is_critical)
+    missing_vdex_for_odex = []
+    boot_images = []
+
+    # 1) Boot image artifacts under /system/framework/<abi>/boot-*.vdex|.art
+    for abi in ("arm64", "arm"):
+        fdir = f"/system/framework/{abi}"
+        if not vfs.is_dir(fdir):
+            continue
+        for nm in sorted(vfs.listdir(fdir)):
+            if nm.endswith(".art"):
+                boot_images.append(f"{fdir}/{nm}")
+            elif nm.startswith("boot-") and nm.endswith(".vdex"):
+                jar_stem = nm[len("boot-"):-len(".vdex")]
+                cand_jar = f"/system/framework/{jar_stem}.jar"
+                if vfs.is_file(cand_jar):
+                    pairs.append((cand_jar, f"{fdir}/{nm}", True))
+
+    # 2) Framework oat/*.vdex + *.odex across system / system_ext / product
+    for fbase in ("/system/framework", "/system_ext/framework", "/product/framework"):
+        oat_root = f"{fbase}/oat"
+        if not vfs.is_dir(oat_root):
+            continue
+        for abi in ("arm64", "arm"):
+            adir = f"{oat_root}/{abi}"
+            if not vfs.is_dir(adir):
+                continue
+            entries = set(vfs.listdir(adir))
+            for nm in sorted(entries):
+                if nm.endswith(".odex"):
+                    vd = nm[:-5] + ".vdex"
+                    if vd not in entries:
+                        missing_vdex_for_odex.append(f"{adir}/{nm}")
+                elif nm.endswith(".vdex"):
+                    stem = nm[:-5]
+                    cand_jar = f"{fbase}/{stem}.jar"
+                    if vfs.is_file(cand_jar):
+                        pairs.append((cand_jar, f"{adir}/{nm}", True))
+
+    # 3) Critical priv-app oat/*.vdex (SystemUI, Settings, Launcher, Telecom, Framework plugins)
+    _CRIT_PRIV = ("systemui", "settings", "launcher", "telecom", "telephony", "keyguard")
+    for pbase in ("/system/priv-app", "/system_ext/priv-app", "/product/priv-app"):
+        if not vfs.is_dir(pbase):
+            continue
+        for app_dir in sorted(vfs.listdir(pbase)):
+            if not any(tok in app_dir.lower() for tok in _CRIT_PRIV):
+                continue
+            oat_root = f"{pbase}/{app_dir}/oat"
+            if not vfs.is_dir(oat_root):
+                continue
+            for abi in ("arm64", "arm"):
+                adir = f"{oat_root}/{abi}"
+                if not vfs.is_dir(adir):
+                    continue
+                entries = set(vfs.listdir(adir))
+                for nm in sorted(entries):
+                    if nm.endswith(".odex"):
+                        vd = nm[:-5] + ".vdex"
+                        if vd not in entries:
+                            missing_vdex_for_odex.append(f"{adir}/{nm}")
+                    elif nm.endswith(".vdex"):
+                        stem = nm[:-5]
+                        cand_apk = f"{pbase}/{app_dir}/{stem}.apk"
+                        if vfs.is_file(cand_apk):
+                            is_crit = "systemui" in app_dir.lower()
+                            pairs.append((cand_apk, f"{adir}/{nm}", is_crit))
+
+    checked = 0
+    stripped_ok = 0
+    mismatches = []  # (comp_vp, vdex_vp, is_crit, detail)
+    seen_pairs = set()
+    for comp_vp, vdex_vp, is_crit in pairs:
+        if (comp_vp, vdex_vp) in seen_pairs:
+            continue
+        seen_pairs.add((comp_vp, vdex_vp))
+        vdex_raw = vfs.read_bytes(vdex_vp)
+        vcrcs, has_dex_sec = _parse_vdex_checksums(vdex_raw or b"")
+        if vcrcs is None:
+            continue
+        comp_raw = vfs.read_bytes(comp_vp)
+        jcrcs = _jar_dex_zip_crcs(comp_raw or b"")
+        if jcrcs is None:
+            continue
+        checked += 1
+        if len(jcrcs) == 0:
+            # Dexpreopt-stripped JAR/APK: DEX lives inside the .vdex/.odex only (normal on stock ROMs)
+            if has_dex_sec or vfs.is_file(vdex_vp[:-5] + ".odex"):
+                stripped_ok += 1
+            continue
+        if jcrcs != vcrcs:
+            mismatches.append((
+                comp_vp, vdex_vp, is_crit,
+                f"{comp_vp} DEX CRCs {[hex(c) for c in jcrcs]} != {vdex_vp} {[hex(c) for c in vcrcs]}",
+            ))
+
+    if mismatches:
+        crit_mm = [m for m in mismatches if m[2]]
+        sev = BLOCKER if crit_mm else WARN
+        findings.append(Finding(
+            KEY, "art-vdex-checksum-mismatch", sev,
+            f"{len(mismatches)} stale ART .vdex/.odex checksum mismatch(es) detected",
+            "; ".join(m[3] for m in mismatches)
+            + ". ART rejects stale precompiled oat/vdex whose checksums differ from classes*.dex "
+              "(classic bootloop after patching services.jar / framework.jar / SystemUI.apk without removing oat/).",
+            "Delete the stale oat/ (.odex/.vdex) directory for the modified JAR/APK or re-run dex2oat.",
+            mismatches[0][1],
+        ))
+    elif checked:
+        findings.append(Finding(
+            KEY, "art-vdex-ok", PASS,
+            f"ART .vdex/.odex checksums coherent across {checked} core JAR/APK pair(s)",
+            f"Verified DEX ZIP CRC-32 tables against companion .vdex headers"
+            + (f" ({stripped_ok} dexpreopt-stripped)" if stripped_ok else "")
+            + (f" · {len(boot_images)} boot .art image(s)" if boot_images else "") + ".",
+        ))
+
+    if missing_vdex_for_odex:
+        findings.append(Finding(
+            KEY, "art-odex-missing-vdex", WARN,
+            f"{len(missing_vdex_for_odex)} .odex file(s) missing companion .vdex",
+            ", ".join(missing_vdex_for_odex)
+            + ". Modern ART requires paired .odex + .vdex files.",
+            "Remove the orphaned .odex file or restore its matching .vdex.",
+            missing_vdex_for_odex[0],
+        ))
+
+    return {
+        "vdex_checked": checked,
+        "vdex_stripped_ok": stripped_ok,
+        "vdex_mismatches": [m[3] for m in mismatches],
+        "missing_vdex_for_odex": missing_vdex_for_odex,
+        "boot_images": boot_images,
+    }
 
 
 def _provided_by_apex(ctx, name):
@@ -165,5 +362,13 @@ def run(ctx):
             findings.append(Finding(
                 KEY, "framework", PASS, f"{len(jars)} jar(s) in /system/framework",
             ))
+
+    # ── ART .vdex / .odex / boot-*.art companion checksum integrity ──
+    art_info = _audit_art_oat_vdex(vfs, findings)
+    ctx.shared["runtime"] = {
+        "zygote": zygote or "",
+        "apex_count": len(apex_files) + len(apex_dirs),
+        "art_oat": art_info,
+    }
 
     return findings

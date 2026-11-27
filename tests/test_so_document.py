@@ -72,6 +72,10 @@ class SoDocumentTests(unittest.TestCase):
         self.document.filterPaths('libnative.so');self.assertEqual(self.document.paths.rowCount(),3)
         paths=[];self.document.pathRequested.connect(paths.append);self.document.openPath(2)
         self.assertEqual(paths,['system/lib64/libnative.so'])
+        self.wait(lambda:not self.document.busy and not self.document.pathXrefs.get('loading',True))
+        self.assertTrue(self.document.pathXrefs['locations'])
+        self.assertIn('/system/lib64/libnative.so',self.document.pathXrefs['summary_text'])
+        self.assertIn('system/lib64/libnative.so',self.document.pathXrefs['agent_prompt'])
         self.document.filterStrings(paths[0]);self.assertIn('[path?] /system/lib64/libnative.so',self.document.stringsText)
         self.assertNotIn('config.xml',self.document.stringsText)
         self.document.filterPaths('PNG image');self.assertEqual(self.document.paths.rowCount(),2)
@@ -109,8 +113,23 @@ class SoDocumentTests(unittest.TestCase):
         self.assertFalse(self.document.ready);self.assertEqual(self.document.symbols.rowCount(),0);self.assertFalse(self.messages)
 
     def test_invalid_elf_is_reported_and_missing_file_never_created(self):
+        from core.error_reporting import register_error_presenter, unregister_error_presenter
+        from PySide6.QtCore import QObject, Signal
+        class Presenter(QObject):
+            fatalRequested = Signal(str)
+            operationErrorRequested = Signal(str)
+            def __init__(self):
+                super().__init__(); self._closing = False; self.fatals = []; self.operations = []
+                self.fatalRequested.connect(self.fatals.append)
+                self.operationErrorRequested.connect(self.operations.append)
+        presenter = Presenter()
+        register_error_presenter(presenter); self.addCleanup(unregister_error_presenter, presenter)
         self.path.write_bytes(b'not an elf');self.document.load(str(self.path));self.wait(lambda:not self.document.busy)
-        self.assertFalse(self.document.ready);self.assertTrue(self.messages);self.assertIn('Error:',self.document.status)
+        self.app.processEvents()
+        self.assertFalse(self.document.ready);self.assertFalse(self.messages)
+        self.assertFalse(presenter.operations);self.assertFalse(presenter.fatals)
+        self.assertIn('Error:',self.document.status);self.assertNotIn('Traceback',self.document.status)
+        self.assertIn('Unsupported binary format',self.document.overview)
         missing=self.path.with_name('missing.so');self.document.load(str(missing))
         self.assertIn('Not found',self.document.status);self.assertFalse(missing.exists())
 
@@ -119,8 +138,8 @@ class SoDocumentTests(unittest.TestCase):
         def analyze(session,address=None):
             if address is None:return {'functions':[{'address':'1000','name':'check_config','size':6}]}
             return {'function':{'address':'1000','name':'check_config','signature':'int check_config(void)'},'pseudocode':'return 42;',
-                    'instructions':[{'address':'1000','text':'RET'}],'references':[{'from':'1000','to':'2000','type':'CALL'}],
-                    'callers':[],'callees':[]}
+                    'instructions':[{'address':'1000','text':'RET'}],'references':[{'from':'1000','to':'2000','type':'CALL','to_name':'printf','string_value':'/system/lib64/libnative.so'}],
+                    'callers':[],'callees':[],'blocks':[{'address':'1000','destinations':[]}]}
         with patch.object(binary_session,'storage_root',return_value=Path(self.temporary.name)/'sessions'), \
              patch.object(binary_session.BinarySession,'analyze',analyze):
             self.load();self.document.analyzeGhidra();self.wait(lambda:not self.document.busy)
@@ -128,6 +147,9 @@ class SoDocumentTests(unittest.TestCase):
             self.document.inspectFunction(0);self.wait(lambda:not self.document.busy)
             self.assertEqual(self.document.functionDetail['pseudocode'],'return 42;')
             self.assertIn('1000 → 2000',self.document.functionDetail['referencesText'])
+            self.assertIn('[printf]',self.document.functionDetail['referencesText'])
+            self.assertEqual(len(self.document.functionDetail['blocks']),1)
+            self.assertIn('check_config',self.document.functionDetail['reaPrompt'])
             saved=[];self.document.annotationSaved.connect(lambda *args:saved.append(args))
             self.document.annotate('1000','read_config','user evidence',0);self.wait(lambda:not self.document.busy)
             self.assertEqual(saved,[('1000',1)])

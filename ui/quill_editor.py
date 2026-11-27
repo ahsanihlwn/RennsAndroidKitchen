@@ -1,17 +1,21 @@
 # SPDX-License-Identifier: MPL-2.0
 """Qt Quick integration for Quill's Python-hosted Rust editor."""
 import hashlib
+import math
 import os
+import time
 import weakref
 
 from PySide6.QtCore import Property, QObject, QPointF, QRectF, Qt, Signal, Slot
 from PySide6.QtGui import QColor, QFontMetricsF, QKeySequence, QPainter, QTextCharFormat, QTextLayout
+from shiboken6 import isValid as _qt_is_valid
 from quill_native._engine import Document
 from quill_native.editor import NativeEditor as QuillEditor, utf16_length
 
 
 class NativeEditor(QuillEditor):
     sessionChanged = Signal()
+    smoothScrollingChanged = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -21,6 +25,12 @@ class NativeEditor(QuillEditor):
         self._virtual_read_only = {}
         self._virtual_saved_hashes = {}
         self._virtual_dirty_cache = {}
+        self._animations_enabled = True
+        self._smooth_active = False
+        self._scroll_dir = 0
+        self._driven_by_frame = False
+        self._last_wheel_at = 0.0
+        self._wheel_streak = 0
         # PySide can lose bound-method connections made during QML type
         # construction. Route them through plain callables so timers and
         # geometry/focus notifications continue to reach the Python host.
@@ -31,7 +41,7 @@ class NativeEditor(QuillEditor):
 
             def invoke():
                 instance = editor()
-                if instance is not None:
+                if instance is not None and _qt_is_valid(instance):
                     getattr(instance, method)()
 
             signal.connect(invoke)
@@ -67,6 +77,136 @@ class NativeEditor(QuillEditor):
     @Property(bool, notify=QuillEditor.stateChanged)
     def readOnly(self):
         return bool(self._read_only)
+
+    @Property(bool, notify=smoothScrollingChanged)
+    def smoothScrolling(self):
+        return bool(self._smooth_active)
+
+    @Property(bool, notify=sessionChanged)
+    def animationsEnabled(self):
+        return bool(self._animations_enabled)
+
+    @animationsEnabled.setter
+    def animationsEnabled(self, value):
+        enabled = bool(value)
+        if enabled == self._animations_enabled:
+            return
+        self._animations_enabled = enabled
+        if not enabled and self._smooth_active:
+            self._set_smooth_active(False)
+            self._set_scroll_y_immediate(self._target_scroll_y)
+
+    def _set_smooth_active(self, active):
+        active = bool(active)
+        if active == self._smooth_active:
+            return
+        self._smooth_active = active
+        if not active:
+            self._smooth_timer.stop()
+            self._scroll_dir = 0
+            self._wheel_streak = 0
+        self.smoothScrollingChanged.emit()
+
+    def _set_scroll_y_immediate(self, value):
+        max_scroll = max(0.0, self.totalHeight - self.height())
+        clamped = max(0.0, min(float(value), max_scroll))
+        if abs(clamped - self._scroll_y) > 0.1:
+            self._scroll_y = clamped
+            self.viewportChanged.emit()
+            self._prepare(trigger_update=True)
+
+    def _step_smooth_scroll(self, elapsed):
+        max_scroll = max(0.0, self.totalHeight - self.height())
+        self._target_scroll_y = max(0.0, min(float(self._target_scroll_y), max_scroll))
+        remaining = self._target_scroll_y - self._scroll_y
+        if abs(remaining) < 0.35:
+            self._set_scroll_y_immediate(self._target_scroll_y)
+            self._set_smooth_active(False)
+            return
+        max_speed = 16000.0
+        decay = 1.0 - math.exp(-elapsed / 0.038)
+        distance = min(abs(remaining), max_speed * elapsed, max(abs(remaining) * decay, 1.8))
+        self._set_scroll_y_immediate(self._scroll_y + math.copysign(distance, remaining))
+
+    @Slot(float)
+    def advanceScroll(self, frame_time):
+        if not self._smooth_active:
+            return
+        self._driven_by_frame = True
+        if self._smooth_timer.isActive():
+            self._smooth_timer.stop()
+        elapsed = max(0.001, min(0.032, float(frame_time)))
+        self._step_smooth_scroll(elapsed)
+
+    def _animate_smooth_scroll(self):
+        if self._driven_by_frame or not self._smooth_active:
+            self._smooth_timer.stop()
+            return
+        now = time.monotonic()
+        elapsed = max(0.001, min(0.032, now - self._last_scroll_time))
+        self._last_scroll_time = now
+        self._step_smooth_scroll(elapsed)
+
+    def wheelEvent(self, event):
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.zoom(1 if event.angleDelta().y() > 0 else -1)
+            event.accept()
+            return
+        pixel = event.pixelDelta()
+        if not pixel.isNull():
+            self._set_smooth_active(False)
+            self._target_scroll_y = max(0.0, min(max(0.0, self.totalHeight - self.height()), self._scroll_y - pixel.y()))
+            self._set_scroll_y_immediate(self._target_scroll_y)
+            self.scrollX -= pixel.x()
+            event.accept()
+            return
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            self.scrollX -= event.angleDelta().y() / 120.0 * 96.0
+            event.accept()
+            return
+        notches = -event.angleDelta().y() / 120.0
+        if notches:
+            row_step = max(self._line_height * 4.5, 90.0)
+            max_scroll = max(0.0, self.totalHeight - self.height())
+            if not self._animations_enabled:
+                self._set_smooth_active(False)
+                self._target_scroll_y = max(0.0, min(max_scroll, self._scroll_y + notches * row_step))
+                self._set_scroll_y_immediate(self._target_scroll_y)
+            else:
+                now = time.monotonic()
+                was_active = self._smooth_active
+                next_dir = 1 if notches > 0 else -1
+                dt = now - self._last_wheel_at
+                same_burst = next_dir == self._scroll_dir and dt <= 0.16
+                if next_dir != self._scroll_dir or not was_active:
+                    self._target_scroll_y = self._scroll_y
+                self._wheel_streak = min(8, self._wheel_streak + 1) if same_burst else 0
+                burst_mult = min(2.2, 1.0 + self._wheel_streak * 0.18) if same_burst else 1.0
+                self._scroll_dir = next_dir
+                self._last_wheel_at = now
+                max_pending = 3600.0
+                pending = max(-max_pending, min(max_pending, self._target_scroll_y - self._scroll_y + notches * row_step * burst_mult))
+                self._target_scroll_y = max(0.0, min(max_scroll, self._scroll_y + pending))
+                self._set_smooth_active(abs(self._target_scroll_y - self._scroll_y) > 0.1)
+                if self._smooth_active:
+                    # Step immediately when starting or separated by >=10ms; bursts within one frame queue into FrameAnimation.
+                    if not was_active or (now - self._last_scroll_time) >= 0.010:
+                        self._last_scroll_time = now
+                        self._step_smooth_scroll(0.012)
+                    if self._smooth_active and not self._driven_by_frame and not self._smooth_timer.isActive():
+                        self._smooth_timer.setInterval(8)
+                        self._smooth_timer.start()
+        if event.angleDelta().x():
+            self.scrollX -= event.angleDelta().x() / 120.0 * 96.0
+        event.accept()
+
+    def mousePressEvent(self, event):
+        self._set_smooth_active(False)
+        super().mousePressEvent(event)
+
+    def _reset(self, path="", scroll_state=None):
+        self._set_smooth_active(False)
+        super()._reset(path, scroll_state=scroll_state)
 
     @Property(bool, notify=QuillEditor.stateChanged)
     def dirty(self):
@@ -147,13 +287,45 @@ class NativeEditor(QuillEditor):
             self._session_connections.append((signal, handler))
 
         bind(bridge.fileLoaded, "_on_bridge_file_loaded")
+        bind(bridge.fileReloaded, "_on_bridge_file_reloaded")
+        bind(bridge.readOnlyChanged, "_on_bridge_read_only_changed")
         bind(bridge.documentChanged, "_on_bridge_document_changed")
         bind(bridge.documentSaved, "_on_bridge_document_saved")
         bind(bridge.documentSaveFailed, "_on_bridge_document_save_failed")
 
+    def _on_bridge_file_reloaded(self, filepath, content):
+        norm = os.path.normpath(filepath) if not self._is_virtual_scheme(filepath) else filepath
+        cache_key = self._virtual_cache_key(norm)
+        self._docs.pop(cache_key, None)
+        if self._path and os.path.normcase(os.path.normpath(self._path)) == os.path.normcase(norm):
+            found = self._virtual_tab(filepath)
+            if found is not None:
+                self._load_virtual_tab(found[0], found[1], force_reload=True)
+            else:
+                bridge = self._bridge()
+                _, tab = bridge._find_tab(norm) if bridge is not None else (None, None)
+                self._read_only = bool(tab.get("read_only", False)) if tab else False
+                super().loadPath(norm)
+                self.stateChanged.emit()
+
+    def _on_bridge_read_only_changed(self, filepath, read_only):
+        found = self._virtual_tab(filepath)
+        norm = found[0] if found else (os.path.normpath(filepath) if not self._is_virtual_scheme(filepath) else filepath)
+        cache_key = self._virtual_cache_key(norm)
+        self._virtual_read_only[cache_key] = bool(read_only)
+        if self._path and os.path.normcase(os.path.normpath(self._path)) == os.path.normcase(norm):
+            self._read_only = bool(read_only)
+            self.stateChanged.emit()
+
     def _on_bridge_file_loaded(self, filepath, content, _lang, _icon, read_only):
         found = self._virtual_tab(filepath)
         if found is None:
+            norm = os.path.normpath(filepath) if not self._is_virtual_scheme(filepath) else filepath
+            if self._path and os.path.normcase(os.path.normpath(self._path)) == os.path.normcase(norm):
+                locked = bool(read_only)
+                if self._read_only != locked:
+                    self._read_only = locked
+                    self.stateChanged.emit()
             return
         norm_path, tab = found
         cache_key = self._virtual_cache_key(norm_path)
@@ -231,8 +403,11 @@ class NativeEditor(QuillEditor):
             return
         if self._path and self._is_virtual_path(self._path):
             self._save_current_scroll_state()
-        self._read_only = False
+        bridge = self._bridge()
+        _, tab = bridge._find_tab(path) if bridge is not None else (None, None)
+        self._read_only = bool(tab.get("read_only", False)) if tab else False
         super().loadPath(path)
+        self.stateChanged.emit()
 
     @Slot(str)
     def closeFile(self, path):
@@ -257,10 +432,10 @@ class NativeEditor(QuillEditor):
 
     @Slot(result=bool)
     def saveCurrent(self):
+        if self._read_only:
+            self.errorOccurred.emit("This document is read-only")
+            return False
         if self._is_virtual_path(self._path):
-            if self._read_only:
-                self.errorOccurred.emit("This document is read-only")
-                return False
             bridge = self._bridge()
             if bridge is not None:
                 bridge.save_file(self._path, self.getText())

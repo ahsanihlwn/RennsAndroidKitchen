@@ -8,7 +8,7 @@ from services.async_jobs import AsyncJobs
 
 class WorkspaceTransfers(QObject):
     def __init__(self,workspace):
-        super().__init__(workspace);self.workspace=workspace;self._jobs=AsyncJobs(self,limit=1)
+        super().__init__(workspace);self.workspace=workspace;self._jobs=AsyncJobs(self,limit=None)
         self._plan=None;self._after=None;self._serial=0;self._temporary=[]
 
     def start(self,base,sources,directory,*,move=False,after=None,resources=(),duplicate_in_place=False,drag=False):
@@ -32,12 +32,19 @@ class WorkspaceTransfers(QObject):
         after,self._after=self._after,None
         if decisions.get('__cancel__'):return
         from ui.workspace_actions import operation
-        operation(self.workspace,'Move' if plan.move else 'Copy',lambda:plan.execute(decisions),after)
+        transfer_targets=tuple(dict.fromkeys(
+            [*(item['source'] for item in plan.items),
+             *(item['target'] for item in plan.items),
+             *(src for _f,src,_t in plan.merged)]
+        ))
+        operation(self.workspace,'Move' if plan.move else 'Copy',lambda:plan.execute(decisions),after,
+                  lane='light',targets=transfer_targets)
 
     @Slot(int,str,'QVariantMap',bool)
     def dropInto(self,tree_id,directory,data,move):
         destination=self.workspace.tree if tree_id==0 else self.workspace.secondTreeModel
         if self.workspace.mounts.reference(directory,resolve=False):return
+        if hasattr(self.workspace,'isPathLocked') and self.workspace.isPathLocked(directory):return
         if data.get('mounted'):
             from core.workspace_files import WorkspaceFiles
             WorkspaceFiles(destination.base).logical(directory,allow_root=True)

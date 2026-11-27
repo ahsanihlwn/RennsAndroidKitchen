@@ -19,16 +19,22 @@ Item {
     property string loadingActionKey: ""
     signal historyRequested(var target)
 
-    property var actions: [
-        {key: "settings", icon: "settings", tip: "Project settings"},
-        {key: "layout", icon: "tree_mode", tip: "Toggle Layout / Split View"},
-        {key: "terminal", icon: "terminal", tip: "Terminal"},
-        {key: "android", icon: "android_tools", tip: "Android Tools"},
-        {key: "import", icon: "import", tip: "Import files"}
-    ].concat(workspace.agentChat && workspace.agentChat.available ? [{key: "agentInbox", icon: "agent", tip: workspace.agentChat.opened ? "Minimize agent" : "Agent chat"}] : []).concat(workspace.privateFeatures && workspace.privateFeatures.allowed ? [
-        {key: "automation", icon: "automation", tip: "Automation"},
-        {key: "compare", icon: "compare", tip: "Compare FileSystem"}
-    ] : [])
+    // Keep model metadata static so toggling Agent or refreshing chat/features
+    // never destroys and recreates sidebar button delegates mid-click.
+    readonly property var actions: [
+        {key: "settings", icon: "settings", tip: "Project settings", scope: "always"},
+        {key: "layout", icon: "tree_mode", tip: "Toggle Layout / Split View", scope: "always"},
+        {key: "terminal", icon: "terminal", tip: "Terminal", scope: "always"},
+        {key: "android", icon: "android_tools", tip: "Android Tools", scope: "always"},
+        {key: "bootAnalyzer", icon: "boot_analyzer", tip: "Boot Analyzer", scope: "always"},
+        {key: "import", icon: "import", tip: "Import files", scope: "always"},
+        {key: "agentInbox", icon: "agent", tip: "Agent chat", scope: "agent"},
+        {key: "automation", icon: "automation", tip: "Automation", scope: "private"},
+        {key: "compare", icon: "compare", tip: "Compare FileSystem", scope: "private"}
+    ]
+    readonly property int visibleActionCount: 6
+        + ((workspace.agentChat && workspace.agentChat.available) ? 1 : 0)
+        + ((workspace.privateFeatures && workspace.privateFeatures.allowed) ? 2 : 0)
 
     implicitWidth: 48
     width: 48
@@ -78,11 +84,20 @@ Item {
             id: actionRepeater
             model: sidePanel.actions
             delegate: WorkspaceIconButton {
+                id: sideActionBtn
                 required property var modelData
+                readonly property bool isAgentAction: modelData.scope === "agent"
+                readonly property bool isPrivateAction: modelData.scope === "private"
+                readonly property bool agentActive: isAgentAction && !!(sidePanel.workspace.agentChat && (sidePanel.workspace.agentChat.running || sidePanel.workspace.agentChat.busy))
                 objectName: "workspaceSideAction_" + modelData.key
+                visible: isAgentAction
+                    ? !!(sidePanel.workspace.agentChat && sidePanel.workspace.agentChat.available)
+                    : (isPrivateAction ? !!(sidePanel.workspace.privateFeatures && sidePanel.workspace.privateFeatures.allowed) : true)
                 preferences: sidePanel.preferences
                 iconKey: modelData.icon
-                toolTip: (modelData.key === "layout" && sidePanel.workspace) ? sidePanel.workspace.layoutLabel : modelData.tip
+                toolTip: (modelData.key === "layout" && sidePanel.workspace)
+                    ? sidePanel.workspace.layoutLabel
+                    : (isAgentAction && sidePanel.workspace && sidePanel.workspace.agentChat && sidePanel.workspace.agentChat.opened ? "Minimize agent" : modelData.tip)
                 implicitWidth: 34
                 implicitHeight: 34
                 iconWidth: 18
@@ -92,7 +107,25 @@ Item {
                 layoutMode: (sidePanel.workspace && sidePanel.workspace.layoutMode !== undefined) ? sidePanel.workspace.layoutMode : 2
                 enabled: modelData.key !== "layout" || sidePanel.workspace.prepared
                 loading: sidePanel.loadingActionKey === modelData.key
-                fillColor: (modelData.key === "agentInbox" && sidePanel.workspace.agentChat && sidePanel.workspace.agentChat.opened) ? sidePanel.c.b12 : "transparent"
+                aiActive: sideActionBtn.agentActive
+                aiColored: sideActionBtn.agentActive
+                aiGlow: sideActionBtn.agentActive
+                fillColor: sideActionBtn.agentActive
+                    ? Qt.rgba(0.573, 0.475, 0.933, sidePanel.c.is_light ? 0.12 : 0.16)
+                    : ((isAgentAction && sidePanel.workspace.agentChat && sidePanel.workspace.agentChat.opened) ? sidePanel.c.b12 : "transparent")
+                edgeColor: sideActionBtn.agentActive ? Qt.rgba(0.573, 0.475, 0.933, 0.34) : "transparent"
+
+                // Subtle AI rainbow glow matching file-touch highlight when Agent is operating
+                AgentRainbowShadow {
+                    objectName: sideActionBtn.isAgentAction ? "workspaceAgentButtonRainbow" : ""
+                    anchors.fill: parent
+                    z: -1
+                    radius: sideActionBtn.cornerRadius
+                    shadowSpread: 7
+                    shadowOpacity: 0.72
+                    active: sideActionBtn.agentActive
+                    animated: sidePanel.anims
+                }
 
                 // Unread notification pip for agent inbox
                 SmoothRectangle {
@@ -115,7 +148,7 @@ Item {
         // FLEXIBLE SPACER (pushes loading/status indicator and profile to bottom)
         Item {
             width: parent.width
-            height: Math.max(8, sidePanel.height - (50 + sidePanel.actions.length * 40 + (sidePanel.hasProfile ? 48 : 0) + 46))
+            height: Math.max(8, sidePanel.height - (50 + sidePanel.visibleActionCount * 40 + (sidePanel.hasProfile ? 48 : 0) + 46))
         }
 
         // =====================================================================
@@ -124,6 +157,7 @@ Item {
         RakButton {
             id: statusButton
             objectName: "workspaceSideStatusButton"
+            focusPolicy: Qt.NoFocus
             width: 34
             height: 34
             implicitWidth: 34
@@ -134,10 +168,12 @@ Item {
             hoverFillColor: sidePanel.c.b08
             downFillColor: sidePanel.c.b12
             edgeColor: "transparent"
-            hoverEdgeColor: sidePanel.c.b12
+            hoverEdgeColor: sidePanel.c.b10
             animatePress: sidePanel.anims
             anchors.horizontalCenter: parent.horizontalCenter
-            toolTip: (sidePanel.workspace.status && sidePanel.workspace.status.length > 0)
+            toolTip: (sidePanel.workspace.statusProgress >= 0)
+                ? (sidePanel.workspace.status + "\n" + sidePanel.workspace.statusProgress + "%" + (sidePanel.workspace.statusStage ? " · " + sidePanel.workspace.statusStage : ""))
+                : (sidePanel.workspace.status && sidePanel.workspace.status.length > 0)
                 ? sidePanel.workspace.status
                 : (statusButton.isActive ? "Loading..." : "Task History / Activity")
             onClicked: { resetPressFeedback(); sidePanel.historyRequested(statusButton) }
@@ -197,7 +233,47 @@ Item {
                     accent: sidePanel.c.accent_hex
                     thickness: 2.2
                     inset: 2.2
-                    spinning: statusButton.activeProgress > 0.05 && sidePanel.anims
+                    spinning: statusButton.activeProgress > 0.05
+                    visible: sidePanel.workspace.statusProgress < 0
+                }
+                Shape {
+                    id: progressRing
+                    anchors.centerIn: parent
+                    width: 24; height: 24
+                    visible: sidePanel.workspace.statusProgress >= 0
+                    preferredRendererType: Shape.CurveRenderer
+                    antialiasing: true
+                    readonly property color accentCol: sidePanel.c.accent_hex
+                    ShapePath {
+                        strokeColor: Qt.rgba(progressRing.accentCol.r, progressRing.accentCol.g, progressRing.accentCol.b, 0.22)
+                        strokeWidth: 2.3
+                        capStyle: ShapePath.RoundCap
+                        fillColor: "transparent"
+                        PathAngleArc { centerX: 12; centerY: 12; radiusX: 9.8; radiusY: 9.8; startAngle: 0; sweepAngle: 360 }
+                    }
+                    ShapePath {
+                        strokeColor: progressRing.accentCol
+                        strokeWidth: 2.3
+                        capStyle: ShapePath.RoundCap
+                        fillColor: "transparent"
+                        PathAngleArc {
+                            centerX: 12; centerY: 12; radiusX: 9.8; radiusY: 9.8
+                            startAngle: -90
+                            sweepAngle: 360 * Math.max(0, Math.min(100, sidePanel.workspace.statusProgress)) / 100
+                            Behavior on sweepAngle { NumberAnimation { duration: 180; easing.type: Easing.OutCubic } }
+                        }
+                    }
+                }
+                RakLabel {
+                    anchors.centerIn: parent
+                    visible: sidePanel.workspace.statusProgress >= 0
+                    transformed: true
+                    text: sidePanel.workspace.statusProgress
+                    font.pixelSize: 8
+                    font.weight: Font.DemiBold
+                    color: sidePanel.c.FG_BRIGHT
+                    verticalAlignment: Text.AlignVCenter
+                    horizontalAlignment: Text.AlignHCenter
                 }
             }
 
@@ -298,15 +374,17 @@ Item {
 
                 SmoothRectangle {
                     id: statusLoadingThumb
-                    width: 9
+                    readonly property bool determinate: sidePanel.workspace.statusProgress >= 0
+                    width: determinate ? Math.max(height, statusLoadingTrack.width * sidePanel.workspace.statusProgress / 100) : 9
                     height: parent.height
                     radius: height / 2
                     color: sidePanel.c.accent_hex
-                    x: sidePanel.anims ? 0 : (parent.width - width) / 2
+                    x: 0
+                    Behavior on width { enabled: statusLoadingThumb.determinate; NumberAnimation { duration: 180 } }
 
                     SequentialAnimation on x {
                         loops: Animation.Infinite
-                        running: statusLoadingTrack.visible && sidePanel.anims
+                        running: statusLoadingTrack.visible && !statusLoadingThumb.determinate
                         NumberAnimation {
                             from: 0
                             to: Math.max(0, statusLoadingTrack.width - statusLoadingThumb.width)
@@ -330,6 +408,7 @@ Item {
         RakButton {
             id: profileBox
             objectName: "workspaceSideProfile"
+            focusPolicy: Qt.NoFocus
             visible: sidePanel.hasProfile
             width: 34
             height: 34

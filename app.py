@@ -69,6 +69,9 @@ except Exception:
     logging.exception("Could not pause the garbage collector for startup")
 
 
+_startup_cache_cleaned = [False]
+
+
 def _end_startup_import_window():
     """Resume the GC and restore the stock __import__ once startup is done.
 
@@ -86,6 +89,13 @@ def _end_startup_import_window():
             _release_import_gate()
         except Exception:
             logging.exception("Could not release the startup import gate")
+    if not _startup_cache_cleaned[0]:
+        _startup_cache_cleaned[0] = True
+        try:
+            from core.vdev.qemu_runner import cleanup_vdev_ephemeral_caches
+            cleanup_vdev_ephemeral_caches(include_extracted=True, async_run=True)
+        except Exception:
+            pass
 
 
 # Fallback for spawn children and startup paths that never emit startup_revealed.
@@ -155,6 +165,10 @@ if __name__ == "__main__":
     _EARLY_APP.setQuitOnLastWindowClosed(False)
     from core.error_reporting import install_error_reporter
     install_error_reporter()
+    from core.app_paths import ensure_app_layout
+    ensure_app_layout()
+    from ui.application import run_launcher
+    raise SystemExit(run_launcher(_EARLY_APP, on_ready=_end_startup_import_window))
 
 from core.app_paths import (
     APP_ROOT,

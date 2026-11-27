@@ -374,6 +374,8 @@ class DependencyWindow(QDialog):
             self.spinner.stop()
 
         self.manager = DependencyManager(allow_remote=False)
+        if not self.manager.registry and hasattr(self.manager, "load_bundled_registry"):
+            self.manager.registry = self.manager.load_bundled_registry()
         packages = self.manager.list_packages()
 
         self._clear_layout(self.list_layout)

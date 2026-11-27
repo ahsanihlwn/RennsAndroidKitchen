@@ -649,6 +649,97 @@ def _node_from_erofs_dict(d: dict, *, strip_root_slash: bool = True) -> Node:
     )
 
 
+def _translate_ext_error(exc: Exception, internal_path: str = "") -> Exception:
+    msg = str(exc)
+    low = msg.lower()
+    if "write in-place tidak didukung untuk sparse" in low:
+        return NotImplementedError(msg)
+    if "path not found:" in low:
+        return FileNotFoundError(internal_path or msg)
+    if "is a directory:" in low:
+        return IsADirectoryError(internal_path or msg)
+    if any(tok in low for tok in (
+        "bukan file reguler", "bukan direktori", "inline_data",
+        "metadata_csum", "journal", "htree", "kapasitas blok",
+        "hole di rentang tulis", "folder tidak kosong", "root image",
+        "slot lama", "security.selinux tidak ditemukan", "magic",
+    )):
+        return ValueError(msg)
+    return exc
+
+
+def _node_from_ext_dict(d: dict) -> Node:
+    return Node(
+        path=str(d.get("path", "")).strip("/"),
+        is_dir=bool(d.get("is_dir")),
+        size=int(d.get("size", 0)),
+        ino=int(d.get("ino", 2)),
+        mode=int(d.get("mode", 0)),
+        is_link=bool(d.get("is_link")),
+        target=d.get("target") or None,
+        selinux=d.get("selinux") or None,
+    )
+
+
+class _NativeExtHandle:
+    """Thin adapter around rak_native.NativeExtReader for EXT2/3/4 mount/browse/read."""
+
+    def __init__(self, native_reader):
+        self._native = native_reader
+        self.f = _CloseProxy(self)
+
+    @property
+    def root_ino(self) -> int:
+        return int(self._native.root_ino)
+
+    @property
+    def block_size(self) -> int:
+        return int(self._native.block_size)
+
+    @property
+    def has_64bit(self) -> bool:
+        return bool(self._native.has_64bit)
+
+    def walk(self):
+        raw_nodes = json.loads(self._native.walk_json())
+        return [
+            _node_from_ext_dict(item)
+            for item in raw_nodes
+            if item.get("path", "") not in ("", "/")
+        ]
+
+    def children(self, ino: int):
+        return json.loads(self._native.children_json(int(ino)))
+
+    def stat_ino(self, ino: int) -> Node:
+        return _node_from_ext_dict(
+            json.loads(self._native.stat_ino_json(int(ino)))
+        )
+
+    def stat_path(self, internal_path: str) -> Node:
+        return _node_from_ext_dict(
+            json.loads(self._native.stat_path_json(str(internal_path)))
+        )
+
+    def read_file(self, ino: int) -> bytes:
+        return bytes(self._native.read_file(int(ino)))
+
+    def read_path(self, internal_path: str) -> bytes:
+        return bytes(self._native.read_path(str(internal_path)))
+
+    def open_file(self, ino: int):
+        return io.BytesIO(self.read_file(ino))
+
+    def close(self):
+        native = getattr(self, "_native", None)
+        if native is not None:
+            native.close()
+
+
+def _use_python_ext_backend() -> bool:
+    return os.environ.get("RAK_NATIVE_BACKEND", "auto").lower() == "python"
+
+
 class _NativeErofsHandle:
     """Thin adapter around rak_native.NativeErofsReader for mount/browse/read."""
 
@@ -766,12 +857,18 @@ def open_reader(path, writable=False):
         if fs == "EROFS":
             from core import native_backend
             return (fs, _NativeErofsHandle(native_backend.erofs_open_reader(path)))
+        if not _use_python_ext_backend():
+            from core import native_backend
+            return (fs, _NativeExtHandle(native_backend.ext_open_reader(path)))
         from core.sparse_reader import SparseReader
         f = SparseReader(path)
         return (fs, ExtReader(f))
     if fs == "EROFS":
         from core import native_backend
         return (fs, _NativeErofsHandle(native_backend.erofs_open_reader(path)))
+    if not _use_python_ext_backend():
+        from core import native_backend
+        return (fs, _NativeExtHandle(native_backend.ext_open_reader(path)))
     f = open(path, 'r+b' if writable else 'rb')
     return (fs, ExtReader(f))
 
@@ -829,8 +926,10 @@ def is_text_filename(name: str) -> bool:
 def _root_node(fs, reader):
     """The directory walkers deliberately omit the filesystem root itself."""
     if fs == "EXT":
-        mode, size, _flags, _blocks, raw = reader._read_inode(2)
-        return Node("", True, size, 2, mode, selinux=reader._inode_selinux(raw))
+        if hasattr(reader, "_read_inode"):
+            mode, size, _flags, _blocks, raw = reader._read_inode(2)
+            return Node("", True, size, 2, mode, selinux=reader._inode_selinux(raw))
+        return reader.stat_ino(getattr(reader, "root_ino", 2))
     info = reader.stat_nid(reader.root_nid)
     return _node_from_erofs_dict(info, strip_root_slash=True)
 
@@ -852,6 +951,12 @@ def resolve_node(path, internal_path):
         except Exception as exc:
             _close(r)
             raise _translate_erofs_error(exc, internal_path) from exc
+    if isinstance(r, _NativeExtHandle):
+        try:
+            return r, r.stat_path("/" + internal_path)
+        except Exception as exc:
+            _close(r)
+            raise _translate_ext_error(exc, internal_path) from exc
     for n in r.walk():
         if n.path == internal_path:
             return r, n
@@ -887,6 +992,12 @@ def read_path(path, internal_path):
                 return r.read_path(norm), node
             except Exception as exc:
                 raise _translate_erofs_error(exc, internal_path) from exc
+        if isinstance(r, _NativeExtHandle):
+            try:
+                norm = "/" + internal_path.strip("/").replace("\\", "/")
+                return r.read_path(norm), node
+            except Exception as exc:
+                raise _translate_ext_error(exc, internal_path) from exc
         return r.read_file(node.ino), node
     finally:
         try:
@@ -1110,6 +1221,20 @@ def _preflight_write_path_data_unlocked(path, internal_path, new_data,
         out["grow"] = int(plan.get("grow_bytes", 0))
         return out
 
+    if not _use_python_ext_backend():
+        if not norm:
+            raise IsADirectoryError(internal_path)
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        try:
+            plan = native_backend.ext_edit_plan(path, norm, len(new_data))
+        except Exception as exc:
+            raise _translate_ext_error(exc, norm) from exc
+        out = dict(plan)
+        out["grow"] = int(plan.get("grow_bytes", 0))
+        return out
+
     fs, r, node = _resolve_writable(path, internal_path)
     try:
         if node.is_dir or node.is_link:
@@ -1171,6 +1296,18 @@ def _write_path_data_unlocked(path, internal_path, new_data: bytes,
             raise _translate_erofs_error(exc, norm) from exc
         return int(res["new_size"])
 
+    if not _use_python_ext_backend():
+        if not norm:
+            raise IsADirectoryError(internal_path)
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        try:
+            res = native_backend.ext_edit_write(path, norm, new_data)
+        except Exception as exc:
+            raise _translate_ext_error(exc, norm) from exc
+        return int(res["new_size"])
+
     fs, r, node = _resolve_writable(path, internal_path)
     try:
         if node.is_dir or node.is_link:
@@ -1195,6 +1332,17 @@ def plan_path_write(path, internal_path, new_len):
 
     internal_path = internal_path.strip("/").replace("\\", "/")
     fs = detect_fs(path)
+    if fs == "EXT" and not _use_python_ext_backend():
+        if not internal_path:
+            raise IsADirectoryError(internal_path)
+        from core import native_backend
+        try:
+            plan = native_backend.ext_edit_plan(path, internal_path, int(new_len))
+        except Exception as exc:
+            raise _translate_ext_error(exc, internal_path) from exc
+        out = dict(plan)
+        out["grow"] = int(plan.get("grow_bytes", 0))
+        return out
     if fs != "EROFS":
         return None
     if not internal_path:
@@ -1233,6 +1381,15 @@ def _set_perm_unlocked(path, internal_path, perm_octal):
         except Exception as exc:
             raise _translate_erofs_error(exc, norm) from exc
 
+    if not _use_python_ext_backend():
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        try:
+            return native_backend.ext_edit_chmod(path, norm, perm_octal)
+        except Exception as exc:
+            raise _translate_ext_error(exc, norm) from exc
+
     fs, r, node = _resolve_writable(path, internal_path)
     try:
         return r.write_mode(node.ino, perm_octal)
@@ -1261,6 +1418,15 @@ def _set_selinux_unlocked(path, internal_path, new_ctx):
             return native_backend.erofs_edit_selinux(path, erofs_path, new_ctx)
         except Exception as exc:
             raise _translate_erofs_error(exc, norm) from exc
+
+    if not _use_python_ext_backend():
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        try:
+            return native_backend.ext_edit_selinux(path, norm, new_ctx)
+        except Exception as exc:
+            raise _translate_ext_error(exc, norm) from exc
 
     fs, r, node = _resolve_writable(path, internal_path)
     try:
@@ -1352,6 +1518,15 @@ def _delete_path_unlocked(path, internal_path, recursive=True):
             "grew_bytes": int(res.get("grew_bytes", 0)),
         }
 
+    if not _use_python_ext_backend():
+        if _is_sparse_file(path):
+            raise NotImplementedError("write in-place tidak didukung untuk sparse")
+        from core import native_backend
+        try:
+            return native_backend.ext_edit_rm(path, internal_path, recursive=bool(recursive))
+        except Exception as exc:
+            raise _translate_ext_error(exc, internal_path) from exc
+
     fs, r = open_reader(path, writable=True)
     try:
         return _delete_path_ext(r, internal_path, recursive)
@@ -1381,6 +1556,13 @@ def usage_report(path, progress=None):
         rep.setdefault("used_bytes", data_bytes + meta_bytes)
         rep.setdefault("links", int(rep.get("symlinks", 0)))
         return rep
+
+    if not _use_python_ext_backend():
+        from core import native_backend
+        try:
+            return native_backend.ext_usage(path)
+        except Exception as exc:
+            raise _translate_ext_error(exc) from exc
 
 
     r = None

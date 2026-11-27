@@ -485,13 +485,18 @@ class ControllerTests(unittest.TestCase):
         self.chat._protocol_event({'type':'ready'})
         self.assertEqual(sum(m.get('method')=='turn/start' for m in transport.sent),1)
 
-    def test_switch_provider_starts_connection_without_sending_the_draft(self):
-        self.chat.setDraft('Keep this draft')
+    def test_switch_provider_clears_draft_and_starts_connection_without_sending(self):
+        self.chat.setDraft('Stuck draft text')
         with patch.object(self.chat,'_load_agy_models'):self.chat.selectProvider('agy')
         self.assertEqual(self.chat.state,'connecting');self.assertFalse(self.chat.running)
-        self.assertEqual(self.chat.draft,'Keep this draft')
+        self.assertEqual(self.chat.draft,'')
         self.assertEqual(self.chat._transport.sent,[])
         self.assertFalse(self.agent.inbox.store.snapshot()['messages'])
+        # Also clear draft when switching away from an existing conversation.
+        self.chat._append('u1','user','Hello')
+        self.chat.setDraft('Leftover text')
+        self.chat.selectProvider('codex')
+        self.assertEqual(self.chat.draft,'')
 
     def test_streamed_text_is_replaced_by_authoritative_final_text(self):
         self.connected();self.send()
@@ -1016,6 +1021,283 @@ class ControllerTests(unittest.TestCase):
         with patch.object(self.chat._jobs, 'submit', side_effect=lambda name, fn, p, done, **kw: done(True, sample_models)):
             self.chat._load_agy_models(provider)
         self.assertEqual(chat['model'], '')
+
+    def test_codex_lazy_thread_probe_skips_thread_start_and_falls_back_on_prompt(self):
+        sent = []; events = []
+        p = CodexProtocol(sent.append, events.append, os.path.abspath('.'), '', lazy_thread=True)
+        p.start()
+        init_req = next(r for r in sent if r.get('method') == 'initialize')
+        p.receive({'id': init_req['id'], 'result': {}})
+        self.assertFalse(any(r.get('method') == 'thread/start' for r in sent))
+        self.assertTrue(any(e['type'] == 'ready' for e in events))
+        p.refresh_limits()
+        self.assertEqual(sent[-1]['method'], 'account/rateLimits/read')
+        self.assertFalse(any(r.get('method') == 'thread/start' for r in sent))
+        p.prompt('hello')
+        thread_req = next(r for r in sent if r.get('method') == 'thread/start')
+        p.receive({'id': thread_req['id'], 'result': {'thread': {'id': 'lazy-thread'}, 'model': 'm1', 'sandbox': {'type': 'workspaceWrite'}}})
+        turn_req = next(r for r in sent if r.get('method') == 'turn/start')
+        self.assertEqual(turn_req['params']['threadId'], 'lazy-thread')
+
+    def test_acp_probe_session_load_error_falls_back_to_session_new(self):
+        sent = []; events = []
+        p = AcpProtocol(sent.append, events.append, os.path.abspath('.'), '', session='stale-probe')
+        p.start()
+        init_req = next(r for r in sent if r.get('method') == 'initialize')
+        p.receive({'id': init_req['id'], 'result': {'agentCapabilities': {'loadSession': True}}})
+        load_req = next(r for r in sent if r.get('method') == 'session/load')
+        p.receive({'id': load_req['id'], 'error': {'code': -32000, 'message': 'Session not found'}})
+        self.assertTrue(any(r.get('method') == 'session/new' for r in sent))
+        self.assertFalse(any(e['type'] == 'error' for e in events))
+
+    def test_opening_real_providers_uses_probe_folder_until_send(self):
+        probe_dir = Path(self.temp.name) / 'agent_probe'
+        with patch('core.agent_chat_store.probe_folder', return_value=probe_dir), \
+             patch('ui.agent_chat.probe_folder', return_value=probe_dir), \
+             patch('core.agent_chat_store.probe_log_path', side_effect=lambda p, op, s='.json': probe_dir / 'logs' / f'{p}_{op}{s}'), \
+             patch('ui.agent_chat.probe_log_path', side_effect=lambda p, op, s='.json': probe_dir / 'logs' / f'{p}_{op}{s}'):
+            probe_dir.mkdir(parents=True, exist_ok=True)
+            self.chat._providers = [
+                {'id': 'codex', 'label': 'Codex', 'protocol': 'codex', 'argv': ['codex']},
+                {'id': 'claude', 'label': 'Claude Code', 'protocol': 'claude', 'argv': ['claude']},
+                {'id': 'opencode', 'label': 'OpenCode', 'protocol': 'acp', 'argv': ['opencode']},
+                {'id': 'agy', 'label': 'Antigravity', 'protocol': 'agy', 'argv': ['agy']},
+            ]
+            # 1. Codex show() uses probe_dir, empty instructions, lazy_thread=True
+            self.chat._provider = 'codex'
+            self.chat.show()
+            self.assertTrue(self.chat._probe_mode)
+            self.assertEqual(Path(self.chat._transport.cwd), probe_dir)
+            self.assertTrue(self.chat._protocol.lazy_thread)
+            self.assertEqual(self.chat._protocol.instructions, '')
+            self.assertEqual(self.chat._chat()['session'], '')
+
+            # 2. Claude selectProvider uses probe_dir and --no-session-persistence without --append-system-prompt
+            self.chat.selectProvider('claude')
+            self.assertTrue(self.chat._probe_mode)
+            self.assertEqual(Path(self.chat._transport.cwd), probe_dir)
+            self.assertIn('--no-session-persistence', self.chat._transport.argv)
+            self.assertNotIn('--append-system-prompt', self.chat._transport.argv)
+
+            # 3. OpenCode selectProvider uses probe_dir and persists/reuses single probe session
+            self.chat.selectProvider('opencode')
+            self.assertTrue(self.chat._probe_mode)
+            self.assertEqual(Path(self.chat._transport.cwd), probe_dir)
+            self.chat._protocol_event({'type': 'session', 'session': 'ses_probe_1', 'model': 'm1'})
+            self.assertEqual(self.chat._chat()['session'], '')
+            from core.agent_chat_store import get_probe_session
+            self.assertEqual(get_probe_session('opencode'), 'ses_probe_1')
+
+            # 4. AGY selectProvider does not spawn stream --new-project until send()
+            with patch.object(self.chat, '_load_agy_models') as load_models:
+                self.chat.selectProvider('agy')
+            load_models.assert_called_once()
+            self.assertTrue(self.chat._probe_mode)
+            self.assertIsNone(self.chat._transport)
+            self.assertEqual(self.chat.state, 'ready')
+
+            # 5. Sending a real message transitions from probe to real workspace with GUIDANCE
+            with patch.object(self.chat, '_load_agy_models'):
+                self.chat.setDraft('Halo')
+                self.assertTrue(self.chat.send())
+            self.assertFalse(self.chat._probe_mode)
+            self.assertIsNotNone(self.chat._transport)
+            self.assertEqual(self.chat._transport.cwd, self.owner.project)
+            self.assertIn('--new-project', self.chat._transport.argv)
+
+    def test_refresh_usage_uses_probe_folder_and_claude_no_session_persistence(self):
+        probe_dir = Path(self.temp.name) / 'agent_probe'
+        probe_dir.mkdir(parents=True, exist_ok=True)
+        with patch('core.agent_chat_store.probe_folder', return_value=probe_dir), \
+             patch('ui.agent_chat.probe_folder', return_value=probe_dir), \
+             patch('core.agent_chat_store.probe_log_path', side_effect=lambda p, op, s='.json': probe_dir / 'logs' / f'{p}_{op}{s}'), \
+             patch('ui.agent_chat.probe_log_path', side_effect=lambda p, op, s='.json': probe_dir / 'logs' / f'{p}_{op}{s}'):
+            self.chat._providers = [
+                {'id': 'claude', 'label': 'Claude Code', 'protocol': 'claude', 'argv': ['claude']},
+            ]
+            self.chat._provider = 'claude'
+            self.chat._create_chat()
+            self.chat._chat()['session'] = 'real-user-session'
+            captured = []
+            with patch.object(self.chat, '_metadata_query', side_effect=lambda name, prov, args, cb, **kw: captured.append((name, args, kw))):
+                self.chat.refreshUsage()
+            self.assertEqual(len(captured), 1)
+            _, args, kw = captured[0]
+            self.assertIn('--no-session-persistence', args)
+            self.assertNotIn('--resume', args)
+            self.assertEqual(Path(kw['cwd']), probe_dir)
+
+    def test_second_turn_and_reopen_recapture_selection_and_clear_is_respected(self):
+        self.connected()
+        self.send('first')
+        self.chat._protocol_event({'type':'done','status':'completed','answer':'Done 1'})
+        self.assertIsNone(self.chat._data.get('attachment'))
+        self.assertFalse(self.chat.attachments)
+        # Subsequent turn captures newly selected context instead of sending {}.
+        self.agent.inbox.context={'paths':['logical/b.rc'],'documents':[{'path':'logical/b.rc','revision':'r2','unsaved':False,'content':'new content'}]}
+        self.send('second')
+        req2=self.agent.inbox.store.get(self.chat._request_id)
+        self.assertEqual(req2['context']['paths'],['logical/b.rc'])
+        self.chat._protocol_event({'type':'done','status':'completed','answer':'Done 2'})
+        # Explicit clear applies only to the current draft, then resets after send.
+        self.chat.show()
+        self.assertEqual(len(self.chat.attachments),1)
+        self.chat.clearAttachments()
+        self.assertFalse(self.chat.attachments)
+        self.send('third without attachment')
+        req3=self.agent.inbox.store.get(self.chat._request_id)
+        self.assertEqual(req3['context']['paths'],[])
+        self.chat._protocol_event({'type':'done','status':'completed','answer':'Done 3'})
+        # Reopening with an empty draft captures fresh selection again.
+        self.agent.inbox.context={'paths':['logical/c.rc'],'documents':[]}
+        self.chat.show()
+        self.assertEqual([a['path'] for a in self.chat.attachments],['logical/c.rc'])
+
+    def test_legacy_empty_dict_attachment_normalizes_to_none_on_load(self):
+        self.chat._data['attachment']={}
+        self.chat._save()
+        reloaded=WorkspaceAgentChat(self.agent)
+        self.addCleanup(reloaded.close)
+        self.assertIsNone(reloaded._data.get('attachment'))
+
+    def test_empty_auto_snapshot_recaptures_when_selection_arrives_before_send(self):
+        self.agent.inbox.context={'paths':[],'documents':[]}
+        self.chat.show()
+        self.chat.setDraft('Jelaskan file yang dipilih')
+        self.agent.inbox.context={'paths':['logical/php.php'],'documents':[]}
+        self.connected()
+        self.assertTrue(self.chat.send())
+        req=self.agent.inbox.store.get(self.chat._request_id)
+        self.assertEqual(req['context']['paths'],['logical/php.php'])
+
+    def test_switching_providers_back_and_forth_resets_backend_state_and_probe_is_nonblocking(self):
+        self.chat._providers=[
+            {'id':'opencode','label':'OpenCode','protocol':'acp','argv':['opencode']},
+            {'id':'claude','label':'Claude','protocol':'claude','argv':['claude']},
+        ]
+        self.chat._provider='opencode'
+        self.chat._create_chat()
+        self.chat._models=[{'id':'nemo3','label':'NEMO3'}]
+        self.chat._modes=[{'id':'plan','label':'Plan'}]
+        self.chat._commands=[{'name':'compact','description':'compact'}]
+        self.chat._policy='Old policy'
+        self.chat._error='Old error'
+        self.chat.setDraft('Leftover draft')
+        self.chat.selectProvider('claude')
+        self.assertEqual(self.chat.draft,'')
+        self.assertEqual(self.chat.models,[{'id':'','label':'Automatic'}])
+        self.assertEqual(self.chat.modes,[])
+        self.assertEqual(self.chat.commands,self.chat.commands[:len(self.chat.commands)])
+        self.assertEqual(self.chat.policy,'')
+        self.assertEqual(self.chat.error,'')
+        # Probe ("sesi tumbal") must not mark chat busy or pollute transcript on probe exit.
+        self.assertTrue(self.chat._probe_mode)
+        self.assertFalse(self.chat.busy)
+        self.chat._receive(self.chat._generation,('exit',1))
+        self.assertFalse(self.chat._probe_mode)
+        self.assertEqual(self.chat.state,'idle')
+        self.assertEqual(self.chat.messages.snapshot(),[])
+        # Switching back to opencode works cleanly.
+        self.chat.selectProvider('opencode')
+        self.assertEqual(self.chat.provider,'opencode')
+        self.assertTrue(self.chat._probe_mode)
+
+    def test_send_while_working_steers_codex_and_falls_back_on_error(self):
+        self.connected()
+        self.chat._protocol.session='session'
+        self.send('First task')
+        self.chat._protocol_event({'type':'turn_started','turn':'turn-1'})
+        self.chat._protocol.turn='turn-1'
+        self.chat.setDraft('Focus on php.php instead')
+        self.assertTrue(self.chat.send())
+        self.assertEqual(self.chat.draft,'')
+        steer=next(m for m in self.chat._transport.sent if m.get('method')=='turn/steer')
+        self.assertEqual(steer['params']['expectedTurnId'],'turn-1')
+        self.assertIn('Focus on php.php instead',steer['params']['input'][0]['text'])
+        # Trailing status row remains at the bottom below the steered user bubble.
+        self.assertEqual(self.chat.messages.snapshot()[-1]['role'],'status')
+        # If turn/steer returns an error, it falls back to queueing/starting a follow-up turn.
+        self.chat._protocol.receive({'jsonrpc':'2.0','id':steer['id'],'error':{'code':-32600,'message':'no active turn'}})
+        self.assertEqual(len(self.chat._queued_turns),1)
+        self.chat._protocol_event({'type':'done','status':'completed','answer':'Done 1'})
+        starts=[m for m in self.chat._transport.sent if m.get('method')=='turn/start']
+        self.assertEqual(len(starts),2)
+        self.assertIn('Focus on php.php instead',starts[1]['params']['input'][0]['text'])
+
+    def test_send_while_working_steers_claude_and_queues_acp(self):
+        # Claude steers mid-turn directly via stream-json user message.
+        self.chat._providers=[
+            {'id':'claude','label':'Claude','protocol':'claude','argv':['claude']},
+            {'id':'opencode','label':'OpenCode','protocol':'acp','argv':['opencode']},
+        ]
+        self.chat._provider='claude';self.chat._create_chat()
+        self.chat.connectBackend()
+        self.chat._protocol.session='ses-1';self.chat._protocol_event({'type':'ready'})
+        self.send('First claude')
+        self.chat.setDraft('Steer claude')
+        self.assertTrue(self.chat.send())
+        user_msgs=[m for m in self.chat._transport.sent if m.get('type')=='user']
+        self.assertEqual(len(user_msgs),2)
+        self.assertIn('Steer claude',user_msgs[1]['message']['content'])
+        self.chat._protocol_event({'type':'done','status':'completed','answer':'Claude done'})
+
+        # OpenCode (ACP) queues mid-turn sends and dispatches automatically after done.
+        self.chat.selectProvider('opencode')
+        self.chat._disconnect()
+        self.chat.connectBackend()
+        self.chat._protocol.session='acp-1';self.chat._protocol_event({'type':'ready'})
+        self.send('First acp')
+        self.chat.setDraft('Queued acp')
+        self.assertTrue(self.chat.send())
+        self.assertEqual(self.chat.draft,'')
+        prompts=[m for m in self.chat._transport.sent if m.get('method')=='session/prompt']
+        self.assertEqual(len(prompts),1)
+        self.chat._protocol_event({'type':'done','status':'completed','answer':'ACP 1 done'})
+        prompts=[m for m in self.chat._transport.sent if m.get('method')=='session/prompt']
+        self.assertEqual(len(prompts),2)
+        self.assertIn('Queued acp',prompts[1]['params']['prompt'][0]['text'])
+
+    def test_provider_switch_locks_model_picker_and_send_until_ready(self):
+        self.chat._providers=[
+            {'id':'codex','label':'Codex','protocol':'codex','argv':['codex']},
+            {'id':'claude','label':'Claude','protocol':'claude','argv':['claude']},
+            {'id':'agy','label':'AGY','protocol':'agy','argv':['agy']},
+        ]
+        self.chat._provider='codex';self.chat._create_chat()
+        # Switching to claude enters connecting probe -> modelsLoading is True
+        self.chat.selectProvider('claude')
+        self.assertTrue(self.chat.modelsLoading)
+        self.chat._models=[{'id':'claude-sonnet','label':'Sonnet'}]
+        self.chat.selectModel('claude-sonnet')
+        self.assertEqual(self.chat.model,'')
+        self.chat.setDraft('Should not send while switching')
+        self.assertFalse(self.chat.send())
+        self.assertEqual(self.chat.draft,'Should not send while switching')
+        # Handshake ready unlocks both model selection and send
+        self.chat._protocol_event({'type':'ready'})
+        self.assertFalse(self.chat.modelsLoading)
+        self.chat.selectModel('claude-sonnet')
+        self.assertEqual(self.chat.model,'claude-sonnet')
+        self.assertTrue(self.chat.send())
+
+        # Switching to AGY keeps modelsLoading True while catalog job is pending
+        self.chat._disconnect();self.chat._state='idle';self.chat._request_id=''
+        captured=[]
+        with patch.object(self.chat._jobs,'submit',side_effect=lambda *a,**kw:captured.append(a)):
+            self.chat.selectProvider('agy')
+        self.assertTrue(self.chat.modelsLoading)
+        self.chat._models=[{'id':'gemini-4','label':'Gemini 4'}]
+        self.chat.selectModel('gemini-4')
+        self.assertEqual(self.chat.model,'')
+        self.chat.setDraft('Wait for agy models')
+        self.assertFalse(self.chat.send())
+        # Completing catalog probe unlocks AGY
+        done_cb=captured[0][3]
+        done_cb(True,[{'id':'gemini-4','label':'Gemini 4'}])
+        self.assertFalse(self.chat.modelsLoading)
+        self.chat.selectModel('gemini-4')
+        self.assertEqual(self.chat.model,'gemini-4')
+        self.assertTrue(self.chat.send())
 
 
 if __name__=='__main__':unittest.main()

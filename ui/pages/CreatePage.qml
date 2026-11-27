@@ -7,14 +7,12 @@ Item {
     required property var model
     readonly property var c: model.colors
     readonly property var s: model.strings
+    property var presentationMotion: null
+    readonly property real headingOpacity: presentationMotion ? presentationMotion.headerOpacity(page) : 1
+    readonly property real headingOffsetY: presentationMotion ? presentationMotion.headerOffsetY(page) : 0
     property alias footer: footer
     readonly property var identityItem: footer.identityItem
     function identityEndpoint(host) { return footer.identityEndpoint(host) }
-    function revealBands() {
-        let bands=[]
-        for (let i=0;i<5;++i) bands.push({top:Math.round(height*i/5),bottom:Math.round(height*(i+1)/5)})
-        return bands
-    }
     property int portMode: 1
     readonly property bool canCreate: name.text.trim().length > 0 && port1.text.trim().length > 0 && (portMode === 1 || port2.text.trim().length > 0)
     component SectionLabel: RakLabel {
@@ -27,11 +25,17 @@ Item {
         labelColor: page.c.FG; hintColor: page.c.placeholder; selectionColor: page.c.a35
     }
     component Card: RakCard {
+        property int cardIndex: 0
         width: form.width; color: page.c.BG2; border.color: page.c.b08; radius: 12
+        opacity: page.presentationMotion ? page.presentationMotion.itemOpacity(page, cardIndex) : 1
+        transform: Translate { y: page.presentationMotion ? page.presentationMotion.itemOffsetY(page, cardIndex) : 0 }
     }
+    SmoothRectangle { anchors.fill: parent; color: page.c.BG }
     RakLabel {
         x: 36; y: 32; height: 31; text: page.s.hdr_new_project
         font.pixelSize: 22; font.weight: Font.DemiBold; color: page.c.FG
+        opacity: page.headingOpacity
+        transform: Translate { y: page.headingOffsetY }
     }
     Flickable {
         objectName: "createScroll"
@@ -42,6 +46,7 @@ Item {
             x: 16; y: 8; width: parent.width - 32; spacing: 24
             Card {
                 objectName: "projectInfoCard"
+                cardIndex: 0
                 height: 201
                 SectionLabel { x: 18; y: 16; text: page.s.lbl_project_name }
                 Field { id: name; objectName: "projectName"; x: 18; y: 46; width: parent.width - 36; placeholderText: page.s.placeholder_project_name }
@@ -69,6 +74,7 @@ Item {
             }
             Card {
                 objectName: "portsCard"
+                cardIndex: 1
                 height: page.portMode === 2 ? 278 : 181
                 SectionLabel { x: 18; y: 16; text: page.s.lbl_folder_names }
                 RakLabel { x: 18; y: 46; height: 16; text: page.s.hint_folder_names; color: page.c.FG_MUTED; font.pixelSize: 11 }
@@ -80,6 +86,7 @@ Item {
                 Field { id: port2; objectName: "port2Name"; visible: page.portMode === 2; x: 18; y: 222; width: parent.width - 36; placeholderText: page.s.placeholder_ft2 }
             }
             Card {
+                cardIndex: 2
                 height: 92
                 SectionLabel { x: 18; y: 16; text: page.s.lbl_output_dir }
                 RakLabel { x: 18; y: 42; width: parent.width - 101; height: 32; text: page.model.location; color: page.c.FG_MUTED; font.pixelSize: 12; elide: Text.ElideRight }
@@ -95,6 +102,7 @@ Item {
     PageFooter {
         id: footer
         width: parent.width; anchors.bottom: parent.bottom; model: page.model
+        transform: Translate { y: page.presentationMotion ? page.presentationMotion.footerOffsetY(page) : 0 }
         ActionButton {
             objectName: "createBackButton"
             actionVisible: page.model.hasProjects
@@ -111,8 +119,10 @@ Item {
         }
         ActionButton {
             objectName: "confirmProjectButton"
-            width: 116; height: 32; colors: page.c; primary: true; enabled: page.canCreate
+            width: 116; height: 32; colors: page.c; primary: true
             text: page.s.btn_confirm_project
+            loading: page.model.busy
+            enabled: page.canCreate && !page.model.busy
             iconSource: page.model.icon("check_white", enabled ? (page.c.BTN_PRIMARY_FG || page.c.FG_BRIGHT) : (page.c.BTN_PRIMARY_DISABLED_FG || page.c.a30)); iconWidth: 15; iconHeight: 15
             animatePress: page.model.settings.animations
             onClicked: page.model.dispatch("createProject", {"name": name.text.trim(), "port1": port1.text.trim(), "port2": page.portMode === 2 ? port2.text.trim() : "", "mode": page.portMode})

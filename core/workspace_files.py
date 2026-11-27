@@ -96,7 +96,10 @@ class WorkspaceFiles:
         else:
             with open(physical,"xb"): pass
         self._record(target,physical)
-        if not self.branch(target)[3]: self.engine(target).apply(os.path.relpath(target,self.base).replace(os.sep,"/"))
+        if not self.branch(target)[3]:
+            self.engine(target).apply(os.path.relpath(target,self.base).replace(os.sep,"/"))
+        from core import filesystem_map
+        filesystem_map.record_entry(self.base,target,physical)
         return target
 
     def delete(self, path, *, keep_metadata=False):
@@ -114,6 +117,8 @@ class WorkspaceFiles:
             if os.path.islink(logical) or not os.path.isdir(logical): os.remove(logical)
             else: shutil.rmtree(logical)
             if not keep_metadata:self.engine(path).delete_paths(rel)
+        from core import filesystem_map
+        filesystem_map.record_delete(self.base,logical)
 
     def rename(self, path, name, *, force=False):
         logical, rel, root, branch = self.branch(path)
@@ -142,6 +147,8 @@ class WorkspaceFiles:
             except Exception:
                 if physical_checkout:os.rename(target,source)
                 raise
+            from core import filesystem_map
+            filesystem_map.record_rename(self.base,logical,destination,target)
         else:
             os.rename(source,destination)
             try:
@@ -152,6 +159,8 @@ class WorkspaceFiles:
             except Exception:
                 os.rename(destination,source)
                 raise
+            from core import filesystem_map
+            filesystem_map.record_rename(self.base,logical,destination,destination)
         return destination
 
     def duplicate(self, path):
@@ -280,6 +289,10 @@ class WorkspaceFiles:
             if not renamed:_remove_path(source_write)
             for path in identity:path.unlink()
         if backup_dir:_remove_path(backup_dir)
+        from core import filesystem_map
+        filesystem_map.record_entry(self.base,destination,target)
+        if move:
+            filesystem_map.record_delete(source_files.base,source_logical)
         return destination
 
     def _can_move_payload(self,logical,physical,origin):

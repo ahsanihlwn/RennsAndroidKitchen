@@ -4,15 +4,20 @@ import QtQuick
 Item {
     id: skeleton
     required property var uiModel
+    property bool revealing: false
     readonly property var c: uiModel.colors
     readonly property bool anims: uiModel && uiModel.settings ? uiModel.settings.animations : true
     readonly property bool isLight: !!(c && c.is_light)
+    readonly property bool showProfile: !!(uiModel && uiModel.privateEnabled && uiModel.profile && uiModel.profile.name)
+    readonly property string targetPage: (uiModel && uiModel.page) ? uiModel.page : "projects"
+    readonly property int driveCount: (uiModel && uiModel.driveRows && uiModel.driveRows.length > 0) ? uiModel.driveRows.length : 3
+    readonly property int projectCount: (uiModel && uiModel.projects && uiModel.projects.length > 0) ? uiModel.projects.length : 5
 
     // Single shared breathing phase so all placeholder bones pulse in sync cleanly.
     property real phase: 0.0
     SequentialAnimation on phase {
         loops: Animation.Infinite
-        running: skeleton.visible && skeleton.opacity > 0.01 && skeleton.anims
+        running: skeleton.visible && !skeleton.revealing && skeleton.opacity > 0.01
         NumberAnimation { from: 0.0; to: 1.0; duration: 750; easing.type: Easing.InOutSine }
         NumberAnimation { from: 1.0; to: 0.0; duration: 750; easing.type: Easing.InOutSine }
     }
@@ -41,11 +46,13 @@ Item {
         border.color: skeleton.c.b08
         border.width: 1
 
-        // Top account profile row (y: 12, h: 44, avatar: 34x34)
+        // Top account profile row (only when profile is enabled, matching AppSidebar.qml)
         Item {
+            id: topProfileSkeleton
             x: 8; y: 12
             width: parent.width - 16
-            height: 44
+            height: skeleton.showProfile ? 44 : 28
+            visible: skeleton.showProfile
 
             SmoothRectangle {
                 x: 5; y: 5
@@ -66,14 +73,18 @@ Item {
 
         // Divider under account (y: 64)
         SmoothRectangle {
+            id: divProfileSkeleton
+            visible: skeleton.showProfile
             x: 8; y: 64
-            width: parent.width - 16; height: 1
+            width: parent.width - 16; height: visible ? 1 : 0
             color: skeleton.c.b06
         }
 
-        // Navigation items (Projects & Settings) (y: 73, h: 40)
+        // Navigation items (Projects & Settings) (y matches AppSidebar.qml: 73 with profile, 48 without)
         Column {
-            x: 8; y: 73
+            id: navColumnSkeleton
+            x: 8
+            y: skeleton.showProfile ? 73 : 48
             width: parent.width - 16
             spacing: 5
 
@@ -120,23 +131,28 @@ Item {
             }
         }
 
-        // Divider before drives (y: 166)
+        // Divider before drives
         SmoothRectangle {
-            x: 8; y: 166
+            id: divDrivesSkeleton
+            x: 8
+            y: navColumnSkeleton.y + navColumnSkeleton.height + 8
             width: parent.width - 16; height: 1
             color: skeleton.c.b06
         }
 
-        // Drives storage skeleton rows (y: 175, h: 44, spacing: 5)
+        // Drives storage skeleton rows (h: 44, spacing: 5)
         Column {
-            x: 8; y: 175
+            x: 8
+            y: divDrivesSkeleton.y + 9
             width: parent.width - 16
             spacing: 5
 
             Repeater {
-                model: 3
+                model: skeleton.driveCount
                 delegate: Item {
                     required property int index
+                    readonly property var driveRow: (skeleton.uiModel && skeleton.uiModel.driveRows && index < skeleton.uiModel.driveRows.length) ? skeleton.uiModel.driveRows[index] : null
+                    readonly property real fillFraction: driveRow ? Math.max(0.05, Math.min(1.0, driveRow.fraction)) : (index === 0 ? 0.76 : index === 1 ? 0.64 : 0.40)
                     width: parent.width; height: 44
 
                     // Disk icon placeholder
@@ -165,7 +181,7 @@ Item {
                         color: skeleton.c.b08
 
                         SmoothRectangle {
-                            width: parent.width * (index === 0 ? 0.76 : index === 1 ? 0.64 : 0.40)
+                            width: parent.width * fillFraction
                             height: parent.height; radius: parent.radius
                             color: skeleton.boneSoftColor
                         }
@@ -191,6 +207,7 @@ Item {
 
     // Right ProjectsPage skeleton (x: 244)
     Item {
+        visible: skeleton.targetPage !== "create"
         x: sidebarSkeleton.x + sidebarSkeleton.width
         y: 0
         width: Math.max(0, parent.width - x)
@@ -283,7 +300,7 @@ Item {
             spacing: 8
 
             Repeater {
-                model: Math.max(1, Math.min(7, Math.floor(parent.height / 74)))
+                model: Math.max(1, Math.min(skeleton.projectCount, Math.floor(parent.height / 74)))
                 delegate: SmoothRectangle {
                     required property int index
                     width: parent.width
@@ -292,7 +309,6 @@ Item {
                     color: skeleton.c.BG2
                     border.color: skeleton.c.b07
                     border.width: 1
-                    opacity: Math.max(0.35, 1.0 - index * 0.11)
 
                     // Folder icon placeholder
                     SmoothRectangle {
@@ -334,14 +350,14 @@ Item {
                     // More button placeholder
                     SmoothRectangle {
                         anchors.right: parent.right; anchors.rightMargin: 63
-                        y: 19; width: 24; height: 28; radius: 6
+                        y: 18; width: 24; height: 28; radius: 6
                         color: skeleton.boneSoftColor
                     }
 
                     // Open arrow button placeholder
                     SmoothRectangle {
                         anchors.right: parent.right; anchors.rightMargin: 29
-                        y: 19; width: 28; height: 28; radius: 8
+                        y: 18; width: 28; height: 28; radius: 8
                         color: skeleton.boneSoftColor
                     }
                 }
@@ -359,16 +375,39 @@ Item {
                 spacing: 12
 
                 SmoothRectangle {
-                    width: 95; height: 32; radius: 8
+                    width: 95; height: 32; radius: 7
                     color: skeleton.boneSoftColor
                     border.color: skeleton.c.b08
                     border.width: 1
                 }
                 SmoothRectangle {
-                    width: 121; height: 32; radius: 8
+                    width: 121; height: 32; radius: 7
                     color: skeleton.c.a35 || skeleton.boneColor
                 }
             }
+        }
+    }
+
+    // Right CreatePage skeleton when first-run has no projects
+    Item {
+        visible: skeleton.targetPage === "create"
+        x: sidebarSkeleton.x + sidebarSkeleton.width
+        y: 0
+        width: Math.max(0, parent.width - x)
+        height: parent.height
+
+        SmoothRectangle {
+            x: 36; y: 36
+            width: 160; height: 22; radius: 7
+            color: skeleton.boneColor
+        }
+        Column {
+            x: 36; y: 85
+            width: Math.max(0, parent.width - 72)
+            spacing: 24
+            SmoothRectangle { width: parent.width; height: 201; radius: 12; color: skeleton.c.BG2; border.color: skeleton.c.b08; border.width: 1 }
+            SmoothRectangle { width: parent.width; height: 181; radius: 12; color: skeleton.c.BG2; border.color: skeleton.c.b08; border.width: 1 }
+            SmoothRectangle { width: parent.width; height: 92; radius: 12; color: skeleton.c.BG2; border.color: skeleton.c.b08; border.width: 1 }
         }
     }
 }

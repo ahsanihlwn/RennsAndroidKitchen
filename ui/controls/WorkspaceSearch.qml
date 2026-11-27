@@ -67,7 +67,7 @@ C.Popup {
                 toolTip: "Clear search"; onClicked: {input.clear();input.forceActiveFocus()}
             }
         }
-        Spinner { x: 0; y: 49; width: 12; height: 12; thickness: 1.5; inset: 2; accent: popup.c.accent_hex; visible: popup.workspace.search.busy; spinning: visible && popup.animationsEnabled }
+        Spinner { x: 0; y: 49; width: 12; height: 12; thickness: 1.5; inset: 2; accent: popup.c.accent_hex; visible: popup.workspace.search.busy; spinning: visible }
         RakLabel {
             objectName: "workspaceSearchStatus"; x: popup.workspace.search.busy?19:0; y: 45; width: parent.width-x; height: 20
             font.pixelSize: 10; color: popup.c.FG_MUTED

@@ -80,8 +80,8 @@ struct Dentry {
     size: u64,
     file_type: u8,
     mode: u16,
-    uid: u16,
-    gid: u16,
+    uid: u32,
+    gid: u32,
     mtime: u32,
     secon: Option<String>,
     capabilities: u64,
@@ -577,12 +577,16 @@ impl Ext4State {
         Ok(inode_num)
     }
 
-    fn inode_set_permissions(&mut self, inode_num: u32, mode: u16, uid: u16, gid: u16, mtime: u32) {
+    fn inode_set_permissions(&mut self, inode_num: u32, mode: u16, uid: u32, gid: u32, mtime: u32) {
         self.with_inode_mut(inode_num, |inode_buf| {
             let cur_mode = read_u16_le(inode_buf, inode_off::I_MODE);
             write_u16_le(inode_buf, inode_off::I_MODE, cur_mode | mode);
-            write_u16_le(inode_buf, inode_off::I_UID, uid);
-            write_u16_le(inode_buf, inode_off::I_GID, gid);
+            write_u16_le(inode_buf, inode_off::I_UID, uid as u16);
+            write_u16_le(inode_buf, inode_off::I_GID, gid as u16);
+            if inode_buf.len() >= 128 {
+                write_u16_le(inode_buf, inode_off::L_I_UID_HIGH, (uid >> 16) as u16);
+                write_u16_le(inode_buf, inode_off::L_I_GID_HIGH, (gid >> 16) as u16);
+            }
             write_u32_le(inode_buf, inode_off::I_MTIME, mtime);
             write_u32_le(inode_buf, inode_off::I_ATIME, mtime);
             write_u32_le(inode_buf, inode_off::I_CTIME, mtime);
@@ -697,6 +701,7 @@ impl Ext4State {
         dir_inode: u32,
         fs_config: &FsConfigProvider,
         sehnd: Option<&FileContexts>,
+        tracker: &mut (usize, usize, u8, &mut dyn FnMut(u8, &str)),
     ) -> Result<u32, String> {
         let mut dentries: Vec<Dentry> = Vec::new();
         let mut dirs = 0u32;
@@ -743,8 +748,10 @@ impl Ext4State {
                         &mut mode,
                         &mut capabilities,
                     );
+                    mode &= 0o7777;
+                } else {
+                    mode &= MODE_PERM_MASK;
                 }
-                mode &= MODE_PERM_MASK;
 
                 let secon = if let Some(se) = sehnd {
                     let ctx = se.lookup(&entry_path, st.st_mode);
@@ -785,8 +792,8 @@ impl Ext4State {
                     size: st.size,
                     file_type,
                     mode: mode as u16,
-                    uid: uid as u16,
-                    gid: gid as u16,
+                    uid,
+                    gid,
                     mtime,
                     secon,
                     capabilities,
@@ -798,7 +805,7 @@ impl Ext4State {
         if dir_inode == 0 && !has_lost_and_found {
             let lf_path = format!("{}lost+found", dir_path);
             let lf_secon = if let Some(se) = sehnd {
-                let ctx = se.lookup(&lf_path, 0o700);
+                let ctx = se.lookup(&lf_path, S_IFDIR | 0o700);
                 if ctx.is_none() {
                     self.fail_or_warn(&format!("cannot lookup security context for {}", lf_path))?;
                 }
@@ -848,6 +855,7 @@ impl Ext4State {
                         inode,
                         fs_config,
                         sehnd,
+                        tracker,
                     )?
                 }
                 EXT4_FT_SYMLINK => {
@@ -864,6 +872,12 @@ impl Ext4State {
             self.inode_set_permissions(entry_inode, d.mode, d.uid, d.gid, d.mtime);
             self.set_inode_selinux(entry_inode, d.secon.as_deref())?;
             self.set_inode_capabilities(entry_inode, d.capabilities)?;
+            tracker.0 += 1;
+            let pct = 10 + ((tracker.0 * 46) / tracker.1.max(1)).min(46) as u8;
+            if pct > tracker.2 {
+                tracker.2 = pct;
+                (tracker.3)(pct, "Building EXT4 tree");
+            }
         }
 
         Ok(inode)
@@ -918,6 +932,23 @@ pub enum OutputTarget {
     Stdout,
 }
 
+fn count_dir_entries(path: &Path) -> usize {
+    let Ok(names) = scandir_sorted(path) else {
+        return 1;
+    };
+    let mut total = 0usize;
+    for name in names {
+        total += 1;
+        let child = path.join(name);
+        if let Ok(meta) = std::fs::symlink_metadata(&child) {
+            if meta.is_dir() {
+                total += count_dir_entries(&child);
+            }
+        }
+    }
+    total
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn make_ext4fs(
     output: OutputTarget,
@@ -926,8 +957,35 @@ pub fn make_ext4fs(
     fs_config: &FsConfigProvider,
     sehnd: Option<&FileContexts>,
     opts: &Ext4Options,
-    mut block_list_file: Option<&mut File>,
+    block_list_file: Option<&mut File>,
 ) -> Result<(), String> {
+    make_ext4fs_with_progress(
+        output,
+        directory,
+        mountpoint,
+        fs_config,
+        sehnd,
+        opts,
+        block_list_file,
+        |_, _| {},
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn make_ext4fs_with_progress<F>(
+    output: OutputTarget,
+    directory: Option<&str>,
+    mountpoint: Option<&str>,
+    fs_config: &FsConfigProvider,
+    sehnd: Option<&FileContexts>,
+    opts: &Ext4Options,
+    mut block_list_file: Option<&mut File>,
+    mut on_progress: F,
+) -> Result<(), String>
+where
+    F: FnMut(u8, &str),
+{
+    on_progress(2, "Initializing EXT4 metadata");
     let mp = match mountpoint {
         None => String::new(),
         Some(m) => canonicalize_slashes(m, true),
@@ -1025,7 +1083,7 @@ pub fn make_ext4fs(
     let mut groups = div_round_up_u64(len_blocks - first_data_block as u64, blocks_per_group as u64) as u32;
     let blocks_per_ind = block_size / 4;
     let blocks_per_dind = blocks_per_ind.wrapping_mul(blocks_per_ind);
-    let blocks_per_tind = blocks_per_dind.wrapping_mul(blocks_per_dind);
+    let blocks_per_tind = blocks_per_dind.wrapping_mul(blocks_per_ind);
     let bg_desc_blocks = div_round_up_u32(groups * GROUP_DESC_SIZE as u32, block_size);
 
     let last_group_size = (len_blocks % blocks_per_group as u64) as u32;
@@ -1120,14 +1178,49 @@ pub fn make_ext4fs(
         }
     }
 
+    let total_entries = dir
+        .as_deref()
+        .map(|d| count_dir_entries(Path::new(d)).max(1))
+        .unwrap_or(1);
+    on_progress(10, "Building EXT4 tree");
+    let mut tracker: (usize, usize, u8, &mut dyn FnMut(u8, &str)) =
+        (0, total_entries, 10, &mut on_progress);
+
     let root_inode_num = if let Some(ref d) = dir {
-        state.build_directory_structure(Some(d), &mp, 0, fs_config, sehnd)?
+        state.build_directory_structure(Some(d), &mp, 0, fs_config, sehnd, &mut tracker)?
     } else {
         state.build_default_directory_structure(&mp, sehnd)?
     };
+    let mut last_pct = tracker.2.max(56);
+    on_progress(last_pct, "Writing EXT4 metadata");
 
-    let root_mode: u16 = 0o755;
-    state.inode_set_permissions(root_inode_num, root_mode, 0, 0, 0);
+    let mut root_uid = 0u32;
+    let mut root_gid = 0u32;
+    let mut root_mode_u32 = 0o755u32;
+    let mut root_caps = 0u64;
+    if fs_config.is_active() {
+        let root_key = mp.trim_end_matches('/');
+        let lookup_key = if root_key.is_empty() { "/" } else { root_key };
+        fs_config.apply(
+            lookup_key,
+            true,
+            &mut root_uid,
+            &mut root_gid,
+            &mut root_mode_u32,
+            &mut root_caps,
+        );
+    }
+    let root_mtime = if opts.fixed_time == -1 { 0u32 } else { opts.fixed_time as u32 };
+    state.inode_set_permissions(
+        root_inode_num,
+        (root_mode_u32 & 0o7777) as u16,
+        root_uid,
+        root_gid,
+        root_mtime,
+    );
+    if root_caps != 0 {
+        state.set_inode_capabilities(root_inode_num, root_caps)?;
+    }
 
     if let Some(se) = sehnd {
         match se.lookup(&mp, S_IFDIR) {
@@ -1196,12 +1289,20 @@ pub fn make_ext4fs(
 
     match output {
         OutputTarget::File(file) => {
+            on_progress(58, "Writing EXT4 image");
             state
                 .sparse_file
-                .write_to_file(file, opts.gzip, opts.sparse, opts.crc)
+                .write_to_file_with_progress(file, opts.gzip, opts.sparse, opts.crc, |p| {
+                    let mapped = 58 + ((p as usize * 41) / 100).min(41) as u8;
+                    if mapped > last_pct {
+                        last_pct = mapped;
+                        on_progress(mapped, "Writing EXT4 image");
+                    }
+                })
                 .map_err(|e| format!("failed to write ext4 image: {}", e))?;
         }
         OutputTarget::Stdout => {
+            on_progress(58, "Writing EXT4 image");
             let stdout = io::stdout();
             let handle = stdout.lock();
             state
@@ -1211,6 +1312,7 @@ pub fn make_ext4fs(
         }
     }
 
+    on_progress(100, "Done");
     let _ = state.info.inodes;
     Ok(())
 }

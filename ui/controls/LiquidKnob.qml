@@ -13,6 +13,7 @@ Item {
     property color surfaceColor: preferences ? preferences.colors.BG2 : "#202020"
     property bool pressed: false
     property bool animationsEnabled: preferences ? preferences.settings.animations : true
+    property bool glassEnabled: true
     property real pressedScaleX: 1.5
     property real pressedScaleY: 1.5
     property real position: 0
@@ -24,7 +25,7 @@ Item {
     property double previousTime: 0
     readonly property real progress: Math.max(0,Math.min(1,pressProgress))
     readonly property string effectLevel: preferences ? preferences.settings.effects : "low"
-    readonly property real stretch: Math.max(-.2,Math.min(.2,dragVelocity))
+    readonly property real stretch: glassEnabled ? Math.max(-.2,Math.min(.2,dragVelocity)) : Math.max(-.08,Math.min(.08,dragVelocity))
     readonly property real visualWidth: width*expansionX/(1-stretch)
     readonly property real visualHeight: height*expansionY*(1-stretch/3)
     readonly property bool glassActive: glassLoader.active
@@ -32,8 +33,8 @@ Item {
     readonly property var glass: glassLoader.item
     implicitWidth: 12; implicitHeight: 12
     SpringValue { id: pressMotion; target: knob.pressed && knob.enabled?1:0; stiffness: 1000; dampingRatio: 1; animated: knob.animationsEnabled }
-    SpringValue { id: widthMotion; target: knob.pressed && knob.enabled?knob.pressedScaleX:1; stiffness: 250; dampingRatio: .6; animated: knob.animationsEnabled }
-    SpringValue { id: heightMotion; target: knob.pressed && knob.enabled?knob.pressedScaleY:1; stiffness: 250; dampingRatio: .7; animated: knob.animationsEnabled }
+    SpringValue { id: widthMotion; target: knob.pressed && knob.enabled?knob.pressedScaleX:1; stiffness: knob.glassEnabled ? 250 : 650; dampingRatio: knob.glassEnabled ? .6 : .86; animated: knob.animationsEnabled }
+    SpringValue { id: heightMotion; target: knob.pressed && knob.enabled?knob.pressedScaleY:1; stiffness: knob.glassEnabled ? 250 : 650; dampingRatio: knob.glassEnabled ? .7 : .86; animated: knob.animationsEnabled }
     Behavior on dragVelocity { enabled: knob.animationsEnabled; NumberAnimation { duration: 70; easing.type: Easing.OutCubic } }
     onPositionChanged: {
         const now=Date.now(),elapsed=now-previousTime
@@ -60,7 +61,7 @@ Item {
         Loader {
             id: glassLoader
             anchors.fill: parent
-            active: knob.enabled && knob.visible && knob.effectLevel!=="low" && knob.progress>.001
+            active: knob.glassEnabled && knob.enabled && knob.visible && knob.effectLevel!=="low" && knob.progress>.001
             sourceComponent: LiveGlass {
                 objectName: "controlKnobGlass"
                 preferences: knob.preferences

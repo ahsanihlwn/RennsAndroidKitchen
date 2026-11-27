@@ -40,6 +40,10 @@ class Popen(_native.Popen):
         publisher=execution.publisher_for(command) if not _background_probe.get() and execution and hasattr(execution,'publisher_for') else None
         inherited=set()
         if publisher is not None and len(args)<=3:
+            if os.name == 'nt':
+                flags = kwargs.get('creationflags', 0)
+                if not flags & (_native.CREATE_NEW_CONSOLE | _native.DETACHED_PROCESS):
+                    kwargs['creationflags'] = flags | _native.CREATE_NO_WINDOW
             for channel in ('stdout','stderr'):
                 if kwargs.get(channel) is None:kwargs[channel]=_native.PIPE;inherited.add(channel)
         super().__init__(*args,**kwargs)

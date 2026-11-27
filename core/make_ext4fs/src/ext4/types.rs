@@ -176,5 +176,7 @@ pub mod inode_off {
     pub const I_FILE_ACL_LO: usize = 0x68;
     pub const I_SIZE_HIGH: usize = 0x6C;
     pub const L_I_BLOCKS_HIGH: usize = 0x74;
+    pub const L_I_UID_HIGH: usize = 0x78;
+    pub const L_I_GID_HIGH: usize = 0x7A;
     pub const I_EXTRA_ISIZE: usize = 0x80;
 }

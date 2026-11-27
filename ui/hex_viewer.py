@@ -6,6 +6,7 @@ import threading
 from PySide6.QtCore import QObject,Property,Signal,Slot,QUrl
 from core.hex_document import PAGE_SIZES,analyze_binary,read_page,search_pattern,find_pattern
 from core.bin_analyzer import extract_strings
+from core.command_context import failure_summary
 from services.async_jobs import AsyncJobs
 from ui.rows import RowsModel
 
@@ -63,10 +64,10 @@ class HexDocument(QObject):
             self._pending.discard(key)
             if ok:done(result)
             elif key=='analysis':self._status='Analysis failed.'
-            elif key=='export':self.messageRequested.emit('Export Failed',str(result))
+            elif key=='export':self.messageRequested.emit('Export Failed',failure_summary(result) or str(result))
             elif key=='search':done(-1)
             self.changed.emit()
-        self._jobs.submit(key,run,None,finished)
+        self._jobs.submit(key,run,None,finished,report_operation_errors=False)
 
     @Slot(str)
     def load(self,path):

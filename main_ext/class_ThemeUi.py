@@ -429,65 +429,61 @@ def _hex_rgba(hex_color: str, alpha: float) -> str:
 
 
 def button_tokens_for(name: str, palette: dict, rgba_fn=None) -> dict:
-    """Return synchronized primary, secondary, and danger button tokens for a palette."""
+    """Return synchronized semi-transparent frosted button tokens for blurred glass windows."""
     blend = rgba_fn or _hex_rgba
     is_light = bool(palette.get("_is_light", False))
-    bg, hover, down, edge, edge_hover, fg, fg_hover = _PRIMARY_BUTTON_SPECS.get(
-        name, _PRIMARY_BUTTON_SPECS["default"]
-    )
+    accent = palette.get("accent_hex", "#4d8ef0")
     br, bg_, bb = palette.get("_border_rgb", (0, 0, 0) if is_light else (255, 255, 255))
     border_hex = f"#{br:02x}{bg_:02x}{bb:02x}"
-    if is_light:
-        sec_bg = palette.get("BG2", "#ffffff")
-        sec_hover = palette.get("BG4", "#eef0f4")
-        sec_down = palette.get("BG_DARK", "#e0e3e8")
-        sec_edge = blend(border_hex, 0.14)
-        sec_edge_hover = blend(border_hex, 0.24)
-        sec_fg = palette.get("FG", "#1c1e26")
-        sec_fg_hover = palette.get("FG_BRIGHT", "#0a0c12")
-        sec_dis_bg = palette.get("BG_DISABLED", "#e8eaed")
-        sec_dis_edge = blend(border_hex, 0.08)
-        sec_dis_fg = palette.get("FG_DISABLED", "#c0c4cc")
-        danger_bg, danger_hover, danger_down = "#b91c1c", "#991b1b", "#7f1d1d"
-        danger_edge, danger_edge_hover = "#ef4444", "#f87171"
-        danger_fg, danger_fg_hover = "#ffffff", "#ffffff"
-    else:
-        sec_bg = palette.get("BG4", "#1e1f26")
-        sec_hover = blend(palette.get("BG4", "#1e1f26"), 1.0)
-        # lift secondary hover subtly toward white using neutral border tint over BG4/BG3
-        h4 = sec_bg.lstrip("#")
-        if len(h4) == 6:
-            sr, sg, sb = int(h4[0:2], 16), int(h4[2:4], 16), int(h4[4:6], 16)
-            sec_hover = f"#{min(255, sr + 10):02x}{min(255, sg + 10):02x}{min(255, sb + 10):02x}"
-            sec_down = f"#{max(0, sr - 6):02x}{max(0, sg - 6):02x}{max(0, sb - 6):02x}"
-        else:
-            sec_hover = blend(border_hex, 0.11)
-            sec_down = blend(border_hex, 0.15)
-        sec_edge = blend(border_hex, 0.12)
-        sec_edge_hover = blend(border_hex, 0.22)
-        sec_fg = palette.get("FG", "#ededed")
-        sec_fg_hover = palette.get("FG_BRIGHT", "#ffffff")
-        sec_dis_bg = blend(border_hex, 0.03)
-        sec_dis_edge = blend(border_hex, 0.06)
-        sec_dis_fg = palette.get("FG_DISABLED", "#3a3f50")
-        danger_bg, danger_hover, danger_down = "#7f1d24", "#99232c", "#63151b"
-        danger_edge, danger_edge_hover = "#cc4750", "#ef5f67"
-        danger_fg, danger_fg_hover = "#fee2e2", "#ffffff"
+
+    # Semi-transparent frosted accent for primary buttons (preserves window blur)
+    prim_bg = blend(accent, 0.22 if not is_light else 0.16)
+    prim_hover = blend(accent, 0.32 if not is_light else 0.24)
+    prim_down = blend(accent, 0.44 if not is_light else 0.34)
+    prim_edge = blend(accent, 0.45 if not is_light else 0.40)
+    prim_edge_hover = blend(accent, 0.65 if not is_light else 0.60)
+    prim_fg = "#ffffff" if not is_light else palette.get("FG_BLUE", "#2563eb")
+    prim_fg_hover = "#ffffff" if not is_light else palette.get("FG_BLUE_LIGHT", "#1d4ed8")
+    prim_dis_bg = blend(accent, 0.08)
+    prim_dis_edge = blend(accent, 0.15)
+    prim_dis_fg = blend("#ffffff" if not is_light else "#000000", 0.35)
+
+    # Semi-transparent frosted neutral for secondary buttons
+    sec_bg = blend(border_hex, 0.05 if not is_light else 0.04)
+    sec_hover = blend(border_hex, 0.09 if not is_light else 0.08)
+    sec_down = blend(border_hex, 0.14 if not is_light else 0.13)
+    sec_edge = blend(border_hex, 0.10)
+    sec_edge_hover = blend(border_hex, 0.18)
+    sec_fg = palette.get("FG", "#ededed") if not is_light else palette.get("FG", "#1c1e26")
+    sec_fg_hover = palette.get("FG_BRIGHT", "#ffffff") if not is_light else palette.get("FG_BRIGHT", "#0a0c12")
+    sec_dis_bg = blend(border_hex, 0.02)
+    sec_dis_edge = blend(border_hex, 0.05)
+    sec_dis_fg = palette.get("FG_DISABLED", "#3a3f50") if not is_light else palette.get("FG_DISABLED", "#c0c4cc")
+
+    # Semi-transparent frosted red for danger buttons
+    danger_bg = blend("#dc4646", 0.18)
+    danger_hover = blend("#dc4646", 0.28)
+    danger_down = blend("#dc4646", 0.40)
+    danger_edge = blend("#dc4646", 0.48)
+    danger_edge_hover = blend("#dc4646", 0.65)
+    danger_fg = "#f08080"
+    danger_fg_hover = "#fee2e2"
+
     toggle_off = palette.get("BG_SCROLL", "#2a2c3a")
     return {
-        "TOGGLE_ON": bg,
+        "TOGGLE_ON": prim_bg,
         "TOGGLE_OFF": toggle_off,
-        "TOGGLE_KNOB": "#ffffff" if not is_light else "#ffffff",
-        "BTN_PRIMARY_BG": bg,
-        "BTN_PRIMARY_HOVER": hover,
-        "BTN_PRIMARY_DOWN": down,
-        "BTN_PRIMARY_EDGE": edge,
-        "BTN_PRIMARY_EDGE_HOVER": edge_hover,
-        "BTN_PRIMARY_FG": fg,
-        "BTN_PRIMARY_FG_HOVER": fg_hover,
-        "BTN_PRIMARY_DISABLED_BG": blend(bg, 0.42),
-        "BTN_PRIMARY_DISABLED_EDGE": blend(edge, 0.25),
-        "BTN_PRIMARY_DISABLED_FG": blend("#ffffff", 0.72 if is_light else 0.45),
+        "TOGGLE_KNOB": "#ffffff",
+        "BTN_PRIMARY_BG": prim_bg,
+        "BTN_PRIMARY_HOVER": prim_hover,
+        "BTN_PRIMARY_DOWN": prim_down,
+        "BTN_PRIMARY_EDGE": prim_edge,
+        "BTN_PRIMARY_EDGE_HOVER": prim_edge_hover,
+        "BTN_PRIMARY_FG": prim_fg,
+        "BTN_PRIMARY_FG_HOVER": prim_fg_hover,
+        "BTN_PRIMARY_DISABLED_BG": prim_dis_bg,
+        "BTN_PRIMARY_DISABLED_EDGE": prim_dis_edge,
+        "BTN_PRIMARY_DISABLED_FG": prim_dis_fg,
         "BTN_SEC_BG": sec_bg,
         "BTN_SEC_HOVER": sec_hover,
         "BTN_SEC_DOWN": sec_down,

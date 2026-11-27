@@ -15,7 +15,7 @@ _MAX_DEPTH = 24
 
 class Service:
     __slots__ = ("name", "path", "args", "origin", "options", "klass",
-                 "started_by", "seclabel")
+                 "classes", "started_by", "seclabel", "user", "group")
 
     def __init__(self, name, path, args, origin):
         self.name = name
@@ -24,10 +24,11 @@ class Service:
         self.origin = origin
         self.options = set()
         self.klass = ""          # kelas pertama (init mengizinkan banyak)
+        self.classes = []        # semua kelas dari baris `class <c1> [c2 ...]`
         self.started_by = set()  # trigger yang menyebabkan dia start
-
-
         self.seclabel = ""
+        self.user = ""
+        self.group = ""
 
     @property
     def critical(self):
@@ -145,10 +146,18 @@ def parse_rc(text, origin, props):
             continue
         if current_service is not None:
             current_service.options.add(parts[0])
-            if parts[0] == "class" and len(parts) > 1 and not current_service.klass:
-                current_service.klass = parts[1]
+            if parts[0] == "class" and len(parts) > 1:
+                for cls_tok in parts[1:]:
+                    if cls_tok not in current_service.classes:
+                        current_service.classes.append(cls_tok)
+                if not current_service.klass:
+                    current_service.klass = parts[1]
             elif parts[0] == "seclabel" and len(parts) > 1:
                 current_service.seclabel = parts[1]
+            elif parts[0] == "user" and len(parts) > 1:
+                current_service.user = parts[1]
+            elif parts[0] == "group" and len(parts) > 1:
+                current_service.group = " ".join(parts[1:])
         elif current_action is not None:
             expanded, unk = expand(stripped, props)
             unknown |= unk
@@ -174,9 +183,33 @@ class InitModel:
         self.mount_all = []         # [(fstab_arg, trigger)]
         self.class_starts = []      # [(kelas, trigger)]
         self.explicit_starts = []   # [(nama_service, trigger)]
+        self.exec_commands = []     # [(cmd_name, bin_path, trigger, origin)]
+        self.setprops = []          # [(prop_key, prop_val, trigger, origin)]
+        self.trigger_order = []     # [event_name, ...]
+        self.duplicate_services = {}  # name -> [origin, ...]
+
+    @staticmethod
+    def _extract_exec_binary(args):
+        """Parse Android init `exec[_background] [seclabel [user [group]*]] -- <path> [args...]`."""
+        if not args:
+            return ""
+        if "--" in args:
+            idx = args.index("--")
+            return args[idx + 1] if (idx + 1) < len(args) else ""
+        for tok in args:
+            if tok.startswith("/"):
+                return tok
+        return ""
 
     # ── penelusuran antrean ──
     def run_triggers(self):
+        # Record accidental duplicate service names (ignore intentional `override` blocks)
+        seen_svcs = {}
+        for s in self.services:
+            if "override" in s.options:
+                continue
+            seen_svcs.setdefault(s.name, []).append(s.origin)
+        self.duplicate_services = {k: v for k, v in seen_svcs.items() if len(v) > 1}
 
         by_event = {}
         for a in self.actions:
@@ -193,6 +226,7 @@ class InitModel:
             if event in seen:
                 continue
             seen.add(event)
+            self.trigger_order.append(event)
             for action in by_event.get(event, []):
                 certain = self._conditions_hold(action)
                 (self.executed if certain else self.conditional).append(
@@ -206,8 +240,14 @@ class InitModel:
                         self.mount_all.append((args[0], event))
                     elif name == "class_start" and args:
                         self.class_starts.append((args[0], event))
-                    elif name in ("start", "exec_start") and args:
+                    elif name in ("start", "restart", "exec_start") and args:
                         self.explicit_starts.append((args[0], event))
+                    elif name in ("exec", "exec_background") and args:
+                        bpath = self._extract_exec_binary(args)
+                        if bpath:
+                            self.exec_commands.append((name, bpath, event, action.origin))
+                    elif name == "setprop" and len(args) >= 2:
+                        self.setprops.append((args[0], args[1], event, action.origin))
         self._converge_vold_decrypt()
         self._mark_started()
         return self.executed
@@ -288,15 +328,21 @@ class InitModel:
 
     def _mark_started(self):
         started_classes = {c for c, _t in self.class_starts}
-        by_name = {s.name: s for s in self.services}
+        by_name = {}
+        for s in self.services:
+            by_name.setdefault(s.name, s)
+        self.unknown_explicit_starts = []
         for cls, trig in self.class_starts:
             for s in self.services:
-                if s.klass == cls and not s.disabled:
+                svc_classes = s.classes or ([s.klass] if s.klass else [])
+                if cls in svc_classes and not s.disabled:
                     s.started_by.add(trig)
         for name, trig in self.explicit_starts:
             svc = by_name.get(name)
             if svc is not None:
                 svc.started_by.add(trig)
+            else:
+                self.unknown_explicit_starts.append((name, trig))
         self.started_classes = started_classes
 
     # ── ringkasan ──

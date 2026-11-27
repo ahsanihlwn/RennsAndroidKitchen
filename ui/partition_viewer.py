@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MPL-2.0
 """Selection and asynchronous metadata for the two original partition viewers."""
 from PySide6.QtCore import QObject,Property,Signal,Slot,Qt
+from core.command_context import failure_summary
 from core.partition_viewer import payload_partitions,super_info
 from services.async_jobs import AsyncJobs
 
@@ -10,7 +11,7 @@ class PartitionDocument(QObject):
     messageRequested=Signal(str,str)
     def __init__(self,parent=None):
         super().__init__(parent);self._jobs=AsyncJobs(self,limit=1);self._closed=False;self._generation=0
-        self._kind='';self._parts=[];self._a=[];self._b=[];self._selected=set();self._anchor={'a':-1,'b':-1};self._busy=False;self._active=''
+        self._kind='';self._parts=[];self._a=[];self._b=[];self._selected=set();self._anchor={'a':-1,'b':-1};self._busy=False;self._active='';self._error=''
 
     @Property('QStringList',notify=changed)
     def partsA(self):return self._a
@@ -24,11 +25,13 @@ class PartitionDocument(QObject):
     def busy(self):return self._busy
     @Property(str,notify=changed)
     def activeSlot(self):return self._active
+    @Property(str,notify=changed)
+    def error(self):return self._error
 
     @Slot(str,str)
     def load(self,path,kind):
         if self._closed:return
-        self._generation+=1;generation=self._generation;self._kind=kind;self._busy=True;self.changed.emit()
+        self._generation+=1;generation=self._generation;self._kind=kind;self._busy=True;self._error='';self.changed.emit()
         def worker(_=None):
             if kind=='super':return True,super_info(path)
             if kind=='oem':
@@ -40,14 +43,17 @@ class PartitionDocument(QObject):
             if self._closed or generation!=self._generation:return
             self._busy=False
             if ok:
+                self._error=''
                 self._parts=result['partitions'];self._active=result.get('active_slot','') or ''
                 parts=[p for p in self._parts if not p.startswith(('main_','default'))] if kind=='super' else self._parts
                 self._a=[p for p in parts if p.endswith('_a')] if kind=='super' else list(parts)
                 self._b=[p for p in parts if p.endswith('_b')] if kind=='super' else []
                 self._selected.clear();self._anchor={'a':-1,'b':-1}
-            else:self.messageRequested.emit('Super' if kind=='super' else 'OEM Container' if kind=='oem' else 'Payload',str(result))
+            else:
+                self._parts=[];self._a=[];self._b=[];self._selected.clear();self._anchor={'a':-1,'b':-1}
+                self._error=failure_summary(result) or str(result)
             self.changed.emit()
-        self._jobs.submit('load',worker,None,loaded)
+        self._jobs.submit('load',worker,None,loaded,report_operation_errors=False)
 
     @Slot(str,int,int)
     def select(self,side,index,modifiers):
@@ -102,12 +108,12 @@ def extract(session,logical,kind,parts,all_parts=False):
         stem=os.path.splitext(os.path.basename(path))[0] or 'oem_extracted'
         oem_out=os.path.join(out_dir,stem)
         pick=None if all_parts else selected
-        workers.append((stem,lambda:extract_container(path,oem_out,selected=pick),lambda ok,result:finished(stem,ok,result)))
+        workers.append((stem,lambda:extract_container(path,oem_out,selected=pick),lambda ok,result:finished(stem,ok,result),(path,oem_out)))
     elif all_parts and kind=='super':
-        workers.append(('all',lambda:operations.extract_super(path,None,out_dir),lambda ok,result:finished('all',ok,result)))
+        workers.append(('all',lambda:operations.extract_super(path,None,out_dir),lambda ok,result:finished('all',ok,result),(path,out_dir)))
     else:
         for partition in selected:
             work=(lambda p=partition:operations.extract_payload(path,p,out_dir)) if kind=='payload' else (lambda p=partition:operations.extract_super(path,p,out_dir))
-            workers.append((partition,work,lambda ok,result,p=partition:finished(p,ok,result)))
-    try:session._tasks.enqueue_batch('Extracting '+kind,workers)
+            workers.append((partition,work,lambda ok,result,p=partition:finished(p,ok,result),(path,os.path.join(out_dir,partition+'.img'))))
+    try:session._tasks.enqueue_batch('Extracting '+kind,workers,lane='heavy')
     except RuntimeError as error:session.message(str(error))

@@ -43,7 +43,7 @@ NUITKA_EXCLUDES = [
 ]
 ASSET_DIRS = [
     "icons", "textures", "learning_contexts", "fonts",
-    "core/flashable_assets", "app_ext/dependency_registry", "licenses",
+    "core/flashable_assets", "app_ext/dependency_registry", "licenses", "package",
 ]
 TERMINAL_NATIVE_LIBS = ["termcore.dll"] if sys.platform == "win32" else []
 LICENSE_FILES = [

@@ -8,18 +8,24 @@ DialogWindow {
     objectName: "workspaceActionDialog"
     required property var workspace
     property var details: ({})
-    property var values: ({})
     implicitWidth: details.width || 400
     implicitHeight: Math.max(details.height || 0,form.height+110)
     function showForm(data) {
-        details=data;let initial={}
-        for (let i=0;i<(data.fields || []).length;++i)initial[data.fields[i].key]=data.fields[i].value || ""
-        values=initial;open()
+        details=data
+        for (let i=0;i<fields.count;++i) fields.itemAt(i)?.reset()
+        open()
     }
-    function submit() { workspace.dispatch(details.action || "submitForm",{token:details.token,values:values});dismiss() }
+    function submit() {
+        let values={}
+        for (let i=0;i<fields.count;++i) {
+            const field=fields.itemAt(i)
+            if (field) values[field.modelData.key]=field.value
+        }
+        workspace.dispatch(details.action || "submitForm",{token:details.token,values:values})
+        dismiss()
+    }
     D.FileDialog {
         id: fieldFilePicker
-        property string targetKey: ""
         property var targetField: null
         function urlToLocalPath(u) {
             let s = u.toString()
@@ -32,7 +38,6 @@ DialogWindow {
         }
         onAccepted: {
             const local = urlToLocalPath(selectedFile)
-            dialog.values[targetKey] = local
             if (targetField) targetField.text = local
         }
     }
@@ -41,10 +46,17 @@ DialogWindow {
         id: form; x: 20; y: 52; width: parent.width-40; spacing: 12
         RakLabel { visible: text.length>0; width: parent.width; text: dialog.details.description || ""; wrapMode: Text.WordWrap; font.pixelSize: 12; color: dialog.c.FG2 }
         Repeater {
+            id: fields
             model: dialog.details.fields || []
             delegate: Column {
                 id: field
                 required property var modelData
+                readonly property string value: modelData.choices ? choice.selectedValue : textInput.text
+                function reset() {
+                    const initial=String(modelData.value === undefined ? "" : modelData.value)
+                    textInput.text=initial
+                    choice.selectedValue=initial
+                }
                 width: form.width; spacing: 5
                 RakLabel { visible: text.length>0; text: field.modelData.label || ""; font.pixelSize: 11; color: dialog.c.FG2 }
                 Row {
@@ -57,14 +69,12 @@ DialogWindow {
                         text: field.modelData.value || ""; placeholderText: field.modelData.placeholder || ""
                         fillColor: dialog.c.BG_INPUT; edgeColor: dialog.c.b18; focusEdgeColor: dialog.c.a55
                         labelColor: dialog.c.FG; hintColor: dialog.c.placeholder
-                        onTextChanged: dialog.values[field.modelData.key]=text
                         Keys.onReturnPressed: dialog.submit()
                     }
                     DialogButton {
                         visible: !!field.modelData.browseFile
                         colors: dialog.c; text: "Browse"; implicitWidth: 76; implicitHeight: 36
                         onClicked: {
-                            fieldFilePicker.targetKey = field.modelData.key
                             fieldFilePicker.targetField = textInput
                             fieldFilePicker.title = field.modelData.browseTitle || ("Select " + (field.modelData.label || "File"))
                             fieldFilePicker.nameFilters = field.modelData.nameFilters || ["All Files (*)"]
@@ -84,7 +94,7 @@ DialogWindow {
                         const selected=options.find(option=>option.key===choice.selectedValue)
                         return selected?selected.label:selectedValue
                     }
-                    onChosen: key => {selectedValue=key;dialog.values[field.modelData.key]=key}
+                    onChosen: key => {selectedValue=key}
                 }
             }
         }

@@ -2,6 +2,7 @@
 import os
 from PySide6.QtCore import QObject,Property,Signal,Slot,Qt
 from core.archive_document import ArchiveReader
+from core.command_context import failure_summary
 from services.async_jobs import AsyncJobs
 from ui.rows import RowsModel
 from ui.file_icons import file_icon
@@ -22,7 +23,7 @@ class ArchiveDocument(QObject):
             with ArchiveReader(path) as reader:return True,(reader.archive_type,reader.members)
         def done(ok,result):
             if self._closed:return
-            if not ok:self._status='Error: '+str(result);self.changed.emit();return
+            if not ok:self._status='Error: '+(failure_summary(result) or str(result));self.changed.emit();return
             self._kind,members=result;tree={}
             for path in members:
                 node=tree
@@ -34,7 +35,7 @@ class ArchiveDocument(QObject):
                     self._nodes.append({'key':path,'path':path,'parent':parent,'name':name,'depth':depth,'folder':folder,'icon':'folder' if folder else file_icon(name)})
                     if folder:visit(nodes[name],path,depth+1)
             visit(tree);self._status=f'{len(members)} entries  ·  {(self._kind or "").upper()}';self._refresh()
-        self._jobs.submit('archive',work,None,done)
+        self._jobs.submit('archive',work,None,done,report_operation_errors=False)
     def _refresh(self):
         self._visible=[];nodes={r['path']:r for r in self._nodes}
         for row in self._nodes:

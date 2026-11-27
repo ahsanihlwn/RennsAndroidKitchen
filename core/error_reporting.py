@@ -46,7 +46,7 @@ def _presenter_for(owner=None):
     while isinstance(owner, QObject) and shiboken6.isValid(owner):
         if any(reference() is owner for reference in _presenters) and not getattr(owner, '_closing', False):
             return owner
-        owner = owner.parent()
+        owner = QObject.parent(owner)
     for reference in reversed(_presenters):
         presenter = reference()
         if presenter is not None and shiboken6.isValid(presenter) and not getattr(presenter, '_closing', False):

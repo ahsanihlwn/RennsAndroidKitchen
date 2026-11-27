@@ -11,7 +11,7 @@ Item {
     property bool animateChanges: false
     property int transitionDuration: 240
     property real effectMix: effectsEnabled ? 1 : 0
-    readonly property bool wantsRefraction: refractionEnabled && (!preferences || preferences.settings.effects==="high")
+    readonly property bool wantsRefraction: refractionEnabled && !!preferences && preferences.settings.effects==="high"
     property real refractionMix: wantsRefraction ? 1 : 0
     Behavior on effectMix { enabled: glass.animateChanges; NumberAnimation { duration: glass.transitionDuration; easing.type: Easing.InOutCubic } }
     Behavior on refractionMix { enabled: glass.animateChanges; NumberAnimation { duration: glass.transitionDuration; easing.type: Easing.InOutCubic } }

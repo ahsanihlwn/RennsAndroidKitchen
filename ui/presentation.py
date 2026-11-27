@@ -256,6 +256,11 @@ class LauncherModel(QObject):
         self._string_cache = result
         return result
 
+    @Property("QVariantList", constant=True)
+    def licenseDocuments(self):
+        from core.license_texts import license_entries
+        return license_entries()
+
     @Property(bool, notify=favoriteFilterChanged)
     def favoriteFilter(self):
         return self._favorite_filter

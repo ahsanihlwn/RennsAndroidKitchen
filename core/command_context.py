@@ -36,7 +36,8 @@ def is_application_exception(error):
     # Keep archive/codec exception APIs intact while reporting malformed input
     # as an operation failure. Builtin TypeError/AttributeError remain defects.
     if type(error).__module__.startswith(('zipfile', 'tarfile', 'py7zr.', 'rarfile', 'lzma', '_lzma',
-                                         'zstandard.', 'compression.zstd', 'backports.zstd', 'lz4.')):return False
+                                         'zstandard.', 'compression.zstd', 'backports.zstd', 'lz4.',
+                                         'elftools.')):return False
     return not (isinstance(error, (OSError, EOFError, OperationError, UnicodeError, re.error, subprocess.SubprocessError))
                 or type(error) is ValueError)
 
@@ -54,6 +55,21 @@ def failure_from_exception(error):
     if application_error or type(error) not in labels:
         text = ''.join(traceback.format_exception(type(error), error, error.__traceback__)).rstrip()
     return CommandFailure(text, application_error=application_error, code=type(error).__name__)
+
+
+def failure_summary(error):
+    text = str(error or '').strip()
+    if not text.startswith('Traceback (most recent call last):'):
+        return text
+    lines = [line.rstrip() for line in text.splitlines() if line.strip()]
+    for index in range(len(lines) - 1, -1, -1):
+        line = lines[index]
+        if not line.startswith((' ', '\t', 'Traceback ')):
+            tail = '\n'.join(lines[index:]).strip()
+            if ': ' in tail:
+                return tail.split(': ', 1)[1].strip() or tail
+            return tail
+    return lines[-1].strip() if lines else text
 
 
 class CommandContext:

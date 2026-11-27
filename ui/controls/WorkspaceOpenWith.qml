@@ -52,11 +52,11 @@ DialogWindow {
                     leftPadding: 0; rightPadding: 0; topPadding: 0; bottomPadding: 0
                     readonly property bool chosen: dialog.choice===modelData.key
                     checked: chosen
-                    fillColor: chosen?dialog.c.a15:dialog.c.b03
-                    hoverFillColor: chosen?dialog.c.a15:dialog.c.b07
+                    fillColor: chosen?dialog.c.a15:dialog.c.b04
+                    hoverFillColor: chosen?dialog.c.a18:dialog.c.b07
                     downFillColor: dialog.c.a22
-                    edgeColor: chosen?dialog.c.a40:dialog.c.b06
-                    hoverEdgeColor: chosen?dialog.c.a40:dialog.c.b10
+                    edgeColor: chosen?dialog.c.a40:dialog.c.b08
+                    hoverEdgeColor: chosen?dialog.c.a40:dialog.c.b12
                     onPressed: dialog.choice=card.modelData.key
                     onDoubleClicked: dialog.choose()
                     contentItem: Item {

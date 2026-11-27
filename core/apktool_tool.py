@@ -7,7 +7,7 @@ import shutil
 from core import kitchen_process as subprocess
 import zipfile
 
-from core.binary_handler import resolve_binary, is_available
+from core.binary_handler import resolve_external_binary, is_external_available
 from core.app_paths import BIN_DIR
 from core.proc_util import CREATE_NO_WINDOW
 
@@ -34,7 +34,7 @@ class ToolError(RuntimeError):
 def _find(name: str) -> str:
     # Single source of truth: the kitchen's managed bin (package.json). No
     # PATH / hardcoded dev fallback — same rule as core/magiskboot_tree.py.
-    resolved = resolve_binary(BIN_PATH, name)
+    resolved = resolve_external_binary(BIN_PATH, name)
     if resolved and os.path.isfile(resolved):
         return resolved
     raise SystemExit(
@@ -44,7 +44,7 @@ def _find(name: str) -> str:
 
 
 def resolve_java() -> str | None:
-    managed = resolve_binary(BIN_PATH, JAVA_NAME)
+    managed = resolve_external_binary(BIN_PATH, JAVA_NAME)
     if managed and os.path.isfile(managed):
         return managed
     system = shutil.which(JAVA_NAME)
@@ -73,11 +73,11 @@ def find_testkey() -> tuple[str, str]:
 
 
 def is_apktool_available() -> bool:
-    return bool(resolve_java()) and is_available(APKTOOL_JAR)
+    return bool(resolve_java()) and is_external_available(APKTOOL_JAR)
 
 
 def is_signer_available() -> bool:
-    return bool(resolve_java()) and is_available(APKSIGNER_JAR, TESTKEY_PK8, TESTKEY_CERT)
+    return bool(resolve_java()) and is_external_available(APKSIGNER_JAR, TESTKEY_PK8, TESTKEY_CERT)
 
 
 def _run_jar(jar_path: str, args: list) -> str:

@@ -42,6 +42,7 @@ class ApexIndex:
 
         self.manifests = {}     # nama file apex -> {"name":…, "version":…}
         self.files = {}         # nama paket apex -> set(path di dalam payload)
+        self.classpath_jars = []  # decoded classpath.pb jars dari dalam APEX
 
     def declared_name(self, apex_file):
         return (self.manifests.get(apex_file) or {}).get("name", "")
@@ -107,13 +108,16 @@ def _index_one(zpath, index, name=None, depth=0):
                 if not f.seekable():
                     index.failed.append((name, "payload is not seekable"))
                     return
-                from core.imgfs import ExtReader, _NativeErofsHandle, _detect_fs_bytes
+                from core.imgfs import ExtReader, _NativeErofsHandle, _NativeExtHandle, _detect_fs_bytes, _use_python_ext_backend
                 from core import native_backend
                 head = f.read(8192)
                 f.seek(0)
                 fs = _detect_fs_bytes(head)
                 if fs == "EXT":
-                    reader = ExtReader(f)
+                    if not _use_python_ext_backend():
+                        reader = _NativeExtHandle(native_backend.ext_open_bytes_reader(f.read()))
+                    else:
+                        reader = ExtReader(f)
                 elif fs == "EROFS":
                     reader = _NativeErofsHandle(
                         native_backend.erofs_open_bytes_reader(f.read())
@@ -183,6 +187,10 @@ def _index_from_mounts(vfs, index):
 
 
 def build_index(vfs, limit=400):
+
+    pre = getattr(vfs, "_preindexed_apex", None)
+    if pre is not None:
+        return pre
 
     index = ApexIndex()
 

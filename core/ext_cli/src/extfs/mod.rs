@@ -1,6 +1,7 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::path::Path;
 
 pub const EXT4_SUPER_MAGIC: u16 = 0xEF53;
 pub const EXT4_ROOT_INO: u32 = 2;
@@ -9,7 +10,13 @@ pub const COMPAT_HAS_JOURNAL: u32 = 0x0004;
 pub const INCOMPAT_FILETYPE: u32 = 0x0002;
 pub const INCOMPAT_EXTENTS: u32 = 0x0040;
 pub const INCOMPAT_64BIT: u32 = 0x0080;
+pub const INCOMPAT_FLEX_BG: u32 = 0x0200;
+pub const RO_COMPAT_HUGE_FILE: u32 = 0x0008;
+pub const RO_COMPAT_GDT_CSUM: u32 = 0x0010;
+pub const RO_COMPAT_DIR_NLINK: u32 = 0x0020;
+pub const RO_COMPAT_EXTRA_ISIZE: u32 = 0x0040;
 pub const RO_COMPAT_SPARSE_SUPER2: u32 = 0x0200;
+pub const RO_COMPAT_METADATA_CSUM: u32 = 0x0400;
 
 pub const EXT4_INDEX_FL: u32 = 0x0000_1000;
 pub const EXT4_EXTENTS_FL: u32 = 0x0008_0000;
@@ -55,12 +62,12 @@ const CHUNK_TYPE_DONT_CARE: u16 = 0xCAC3;
 const CHUNK_TYPE_CRC32: u16 = 0xCAC4;
 
 #[inline]
-fn u16_le(b: &[u8], off: usize) -> u16 {
+pub fn u16_le(b: &[u8], off: usize) -> u16 {
     u16::from_le_bytes([b[off], b[off + 1]])
 }
 
 #[inline]
-fn u32_le(b: &[u8], off: usize) -> u32 {
+pub fn u32_le(b: &[u8], off: usize) -> u32 {
     u32::from_le_bytes([b[off], b[off + 1], b[off + 2], b[off + 3]])
 }
 
@@ -78,8 +85,13 @@ pub struct SparseChunk {
     kind: SparseChunkKind,
 }
 
+pub trait ExtReadSeek: Read + Seek + Send {}
+impl<T: Read + Seek + Send> ExtReadSeek for T {}
+
 pub enum ImageReader {
     Raw(File),
+    Memory(Vec<u8>),
+    Custom(Box<dyn ExtReadSeek>),
     Sparse {
         file: File,
         chunks: Vec<SparseChunk>,
@@ -88,6 +100,88 @@ pub enum ImageReader {
 }
 
 impl ImageReader {
+    pub fn from_custom(reader: Box<dyn ExtReadSeek>) -> Self {
+        Self::Custom(reader)
+    }
+    pub fn is_sparse_file(path: &Path) -> io::Result<bool> {
+        let mut f = File::open(path)?;
+        let mut magic4 = [0u8; 4];
+        Ok(f.read_exact(&mut magic4).is_ok() && u32::from_le_bytes(magic4) == SPARSE_HEADER_MAGIC)
+    }
+
+    pub fn is_sparse(&self) -> bool {
+        matches!(self, Self::Sparse { .. })
+    }
+
+    pub fn from_bytes(data: Vec<u8>) -> io::Result<Self> {
+        if data.len() >= 28 && u32::from_le_bytes([data[0], data[1], data[2], data[3]]) == SPARSE_HEADER_MAGIC {
+            // Unpack in-memory sparse payload if needed
+            let mut cursor = io::Cursor::new(&data);
+            let mut hdr = [0u8; 28];
+            cursor.read_exact(&mut hdr)?;
+            let major = u16_le(&hdr, 4);
+            let file_hdr_sz = u16_le(&hdr, 8);
+            let chunk_hdr_sz = u16_le(&hdr, 10);
+            let blk_sz = u32_le(&hdr, 12) as usize;
+            let total_blks = u32_le(&hdr, 16) as usize;
+            let total_chunks = u32_le(&hdr, 20);
+            if major == 1 && file_hdr_sz >= 28 && chunk_hdr_sz >= 12 {
+                if file_hdr_sz > 28 {
+                    cursor.seek(SeekFrom::Current((file_hdr_sz - 28) as i64))?;
+                }
+                let mut out = vec![0u8; total_blks.saturating_mul(blk_sz)];
+                let mut out_off = 0usize;
+                for _ in 0..total_chunks {
+                    let mut chdr = [0u8; 12];
+                    cursor.read_exact(&mut chdr)?;
+                    if chunk_hdr_sz > 12 {
+                        cursor.seek(SeekFrom::Current((chunk_hdr_sz - 12) as i64))?;
+                    }
+                    let ctype = u16_le(&chdr, 0);
+                    let chunk_sz = u32_le(&chdr, 4) as usize;
+                    let total_sz = u32_le(&chdr, 8) as usize;
+                    let data_sz = total_sz.saturating_sub(chunk_hdr_sz as usize);
+                    let byte_len = chunk_sz.saturating_mul(blk_sz);
+                    match ctype {
+                        CHUNK_TYPE_RAW => {
+                            let take = byte_len.min(out.len().saturating_sub(out_off));
+                            cursor.read_exact(&mut out[out_off..out_off + take])?;
+                            if data_sz > take {
+                                cursor.seek(SeekFrom::Current((data_sz - take) as i64))?;
+                            }
+                            out_off = out_off.saturating_add(byte_len);
+                        }
+                        CHUNK_TYPE_FILL => {
+                            let mut val = [0u8; 4];
+                            cursor.read_exact(&mut val)?;
+                            let take = byte_len.min(out.len().saturating_sub(out_off));
+                            for i in 0..take {
+                                out[out_off + i] = val[i % 4];
+                            }
+                            if data_sz > 4 {
+                                cursor.seek(SeekFrom::Current((data_sz - 4) as i64))?;
+                            }
+                            out_off = out_off.saturating_add(byte_len);
+                        }
+                        CHUNK_TYPE_DONT_CARE => {
+                            if data_sz > 0 {
+                                cursor.seek(SeekFrom::Current(data_sz as i64))?;
+                            }
+                            out_off = out_off.saturating_add(byte_len);
+                        }
+                        _ => {
+                            if data_sz > 0 {
+                                cursor.seek(SeekFrom::Current(data_sz as i64))?;
+                            }
+                        }
+                    }
+                }
+                return Ok(Self::Memory(out));
+            }
+        }
+        Ok(Self::Memory(data))
+    }
+
     pub fn open(mut file: File) -> io::Result<Self> {
         let mut magic4 = [0u8; 4];
         file.seek(SeekFrom::Start(0))?;
@@ -187,6 +281,24 @@ impl ImageReader {
             Self::Raw(f) => {
                 f.seek(SeekFrom::Start(offset))?;
                 f.read_exact(buf)
+            }
+            Self::Custom(r) => {
+                r.seek(SeekFrom::Start(offset))?;
+                r.read_exact(buf)
+            }
+            Self::Memory(data) => {
+                let start = offset as usize;
+                let end = start.checked_add(buf.len()).ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::UnexpectedEof, "offset overflow")
+                })?;
+                if end > data.len() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "read past end of memory image",
+                    ));
+                }
+                buf.copy_from_slice(&data[start..end]);
+                Ok(())
             }
             Self::Sparse {
                 file,
@@ -389,6 +501,77 @@ pub struct ExtentRun {
     pub unwritten: bool,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExtFileNode {
+    pub path: String,
+    pub ino: u32,
+    pub size: u64,
+    pub mode: u16,
+    pub perm: String,
+    pub is_dir: bool,
+    pub is_link: bool,
+    pub target: Option<String>,
+    pub selinux: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExtChildEntry {
+    pub ino: u32,
+    pub name: String,
+    pub is_dir: bool,
+    pub is_link: bool,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug)]
+pub struct ExtUsageReport {
+    pub fs: String,
+    pub block_size: u64,
+    pub file_size: u64,
+    pub total_blocks: u64,
+    pub meta_bytes: u64,
+    pub used_blocks: u64,
+    pub used_bytes: u64,
+    pub wasted_blocks: u64,
+    pub wasted_bytes: u64,
+    pub free_blocks: u64,
+    pub free_bytes: u64,
+    pub logical_bytes: u64,
+    pub reclaimable_bytes: u64,
+    pub files: usize,
+    pub dirs: usize,
+    pub links: usize,
+}
+
+pub fn mode_to_perm(mode: u16) -> String {
+    let tc = match mode & S_IFMT {
+        S_IFSOCK => 's',
+        S_IFLNK => 'l',
+        S_IFREG => '-',
+        S_IFBLK => 'b',
+        S_IFDIR => 'd',
+        S_IFCHR => 'c',
+        S_IFIFO => 'p',
+        _ => '?',
+    };
+    let rwx = |bits: u16, special: bool, lo: char, up: char| -> String {
+        let r = if (bits & 0o4) != 0 { 'r' } else { '-' };
+        let w = if (bits & 0o2) != 0 { 'w' } else { '-' };
+        let x = if special {
+            if (bits & 0o1) == 0 { up } else { lo }
+        } else if (bits & 0o1) != 0 {
+            'x'
+        } else {
+            '-'
+        };
+        format!("{r}{w}{x}")
+    };
+    let u = rwx((mode >> 6) & 7, (mode & S_ISUID) != 0, 's', 'S');
+    let g = rwx((mode >> 3) & 7, (mode & S_ISGID) != 0, 's', 'S');
+    let o = rwx(mode & 7, (mode & S_ISVTX) != 0, 't', 'T');
+    format!("{tc}{u}{g}{o}")
+}
+
 pub struct Volume {
     pub reader: ImageReader,
     pub superblock: Superblock,
@@ -399,7 +582,20 @@ pub struct Volume {
 
 impl Volume {
     pub fn open(file: File) -> io::Result<Self> {
-        let mut reader = ImageReader::open(file)?;
+        let reader = ImageReader::open(file)?;
+        Self::open_with_reader(reader)
+    }
+
+    pub fn open_bytes(data: Vec<u8>) -> io::Result<Self> {
+        let reader = ImageReader::from_bytes(data)?;
+        Self::open_with_reader(reader)
+    }
+
+    pub fn open_custom(reader: Box<dyn ExtReadSeek>) -> io::Result<Self> {
+        Self::open_with_reader(ImageReader::from_custom(reader))
+    }
+
+    pub fn open_with_reader(mut reader: ImageReader) -> io::Result<Self> {
         let mut sb_raw = [0u8; 1024];
         reader.read_at(0x400, &mut sb_raw)?;
         let sb = Superblock::parse(&sb_raw);
@@ -414,11 +610,18 @@ impl Volume {
         }
 
         let block_size = sb.block_size();
-        let num_groups = if sb.s_inodes_per_group > 0 {
-            (sb.s_inodes_count / sb.s_inodes_per_group) as usize
+        let ino_groups = if sb.s_inodes_per_group > 0 {
+            sb.s_inodes_count.div_ceil(sb.s_inodes_per_group) as usize
         } else {
             1
         };
+        let blk_groups = if sb.s_blocks_per_group > 0 && sb.s_blocks_count > sb.s_first_data_block as u64 {
+            ((sb.s_blocks_count - sb.s_first_data_block as u64)
+                .div_ceil(sb.s_blocks_per_group as u64)) as usize
+        } else {
+            1
+        };
+        let num_groups = ino_groups.max(blk_groups).max(1);
 
         let gdt_offset = (0x400 / block_size + 1) * block_size;
         let desc_size = sb.s_desc_size as usize;
@@ -448,8 +651,18 @@ impl Volume {
         })
     }
 
+    pub fn is_sparse(&self) -> bool {
+        self.reader.is_sparse()
+    }
+
     pub fn read_inode(&mut self, inode_idx: u32, mut file_type: u8) -> io::Result<InodeData> {
         let ipg = self.superblock.s_inodes_per_group;
+        if inode_idx == 0 || ipg == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Invalid inode number {} (inodes_per_group={})", inode_idx, ipg),
+            ));
+        }
         let group_idx = ((inode_idx - 1) / ipg) as usize;
         let entry_idx = ((inode_idx - 1) % ipg) as u64;
 
@@ -457,7 +670,17 @@ impl Volume {
             .group_descriptors
             .get(group_idx)
             .map(|g| g.bg_inode_table)
-            .unwrap_or(99);
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "Inode {} maps to out-of-range block group {} (groups={})",
+                        inode_idx,
+                        group_idx,
+                        self.group_descriptors.len()
+                    ),
+                )
+            })?;
         let inode_size = self.superblock.s_inode_size as usize;
         let offset = inode_table_block * self.block_size + entry_idx * inode_size as u64;
         let raw = self.reader.read_vec(offset, inode_size)?;
@@ -486,7 +709,7 @@ impl Volume {
 
         let uid_lo = u32_le_u16(&raw, 0x02);
         let gid_lo = u32_le_u16(&raw, 0x18);
-        let (uid_hi, gid_hi, acl_hi, extra_isize) = if inode_size >= 130 {
+        let (uid_hi, gid_hi, acl_hi) = if raw.len() >= 128 {
             let uh = u32_le_u16(&raw, 0x78);
             let gh = u32_le_u16(&raw, 0x7A);
             let ah = if self.superblock.is_64bit() {
@@ -494,10 +717,14 @@ impl Volume {
             } else {
                 0
             };
-            let ei = u16_le(&raw, 0x80);
-            (uh, gh, ah, ei)
+            (uh, gh, ah)
         } else {
-            (0, 0, 0, 0)
+            (0, 0, 0)
+        };
+        let extra_isize = if raw.len() >= 130 {
+            u16_le(&raw, 0x80)
+        } else {
+            0
         };
 
         let mut i_block = [0u32; 15];
@@ -537,7 +764,7 @@ impl Volume {
         Ok(self.indirect_cache.get(&block_idx).unwrap())
     }
 
-    fn collect_extents(&mut self, inode: &InodeData) -> io::Result<Vec<ExtentRun>> {
+    pub fn collect_extents(&mut self, inode: &InodeData) -> io::Result<Vec<ExtentRun>> {
         let mut runs = Vec::new();
         let mut queue = vec![inode.offset + 0x28];
 
@@ -593,7 +820,7 @@ impl Volume {
         Ok(runs)
     }
 
-    fn resolve_indirect_block(&mut self, inode: &InodeData, mut file_block: u64) -> io::Result<u64> {
+    pub fn resolve_indirect_block(&mut self, inode: &InodeData, mut file_block: u64) -> io::Result<u64> {
         let ptrs_per_blk = self.block_size / 4;
         if file_block < 12 {
             return Ok(inode.i_block[file_block as usize] as u64);
@@ -669,10 +896,17 @@ impl Volume {
             return Ok(());
         }
 
-        // Fast symlink or inline data
-        let is_fast_symlink =
-            inode.is_symlink() && (inode.i_flags & EXT4_EXTENTS_FL) == 0 && inode.i_blocks_lo == 0;
-        if is_fast_symlink && size <= 60 {
+        // Fast symlink: inline in i_block when size <= 60 and any allocated blocks belong solely to an external EA block
+        let ea_blocks = if inode.i_file_acl != 0 {
+            (self.block_size / 512) as u32
+        } else {
+            0
+        };
+        let is_fast_symlink = inode.is_symlink()
+            && (inode.i_flags & (EXT4_EXTENTS_FL | EXT4_INLINE_DATA_FL)) == 0
+            && size <= 60
+            && inode.i_blocks_lo <= ea_blocks;
+        if is_fast_symlink {
             writer.write_all(&inode.i_block_raw[..size as usize])?;
             return Ok(());
         }
@@ -854,21 +1088,17 @@ impl Volume {
                 break;
             }
 
-            let prefix = match e_name_index {
-                0 => "",
-                1 => "user.",
-                2 => "system.posix_acl_access",
-                3 => "system.posix_acl_default",
-                4 => "trusted.",
-                6 => "security.",
-                7 => "system.",
-                8 => "system.richacl",
-                _ => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Unknown attribute prefix {}", e_name_index),
-                    ));
-                }
+            let prefix: std::borrow::Cow<'static, str> = match e_name_index {
+                0 => std::borrow::Cow::Borrowed(""),
+                1 => std::borrow::Cow::Borrowed("user."),
+                2 => std::borrow::Cow::Borrowed("system.posix_acl_access"),
+                3 => std::borrow::Cow::Borrowed("system.posix_acl_default"),
+                4 => std::borrow::Cow::Borrowed("trusted."),
+                5 => std::borrow::Cow::Borrowed("lustre."),
+                6 => std::borrow::Cow::Borrowed("security."),
+                7 => std::borrow::Cow::Borrowed("system."),
+                8 => std::borrow::Cow::Borrowed("system.richacl"),
+                other => std::borrow::Cow::Owned(format!("xattr_{}.", other)),
             };
 
             if i + 16 + e_name_len > entries.len() {
@@ -898,6 +1128,379 @@ impl Volume {
             i += 4 * ((16 + e_name_len + 3) / 4);
         }
         Ok(())
+    }
+
+    pub fn inode_selinux(&mut self, inode: &InodeData) -> Option<String> {
+        let xattrs = self.read_xattrs(inode).ok()?;
+        for (k, v) in xattrs {
+            if k == "security.selinux" {
+                let end = v.iter().position(|&b| b == 0).unwrap_or(v.len());
+                return Some(String::from_utf8_lossy(&v[..end]).into_owned());
+            }
+        }
+        None
+    }
+
+    pub fn build_node(&mut self, path: String, inode: &InodeData) -> io::Result<ExtFileNode> {
+        let is_dir = inode.is_dir();
+        let is_link = inode.is_symlink();
+        let target = if is_link {
+            let raw = self.read_inode_bytes(inode)?;
+            Some(String::from_utf8_lossy(&raw).into_owned())
+        } else {
+            None
+        };
+        let selinux = self.inode_selinux(inode);
+        Ok(ExtFileNode {
+            path,
+            ino: inode.inode_idx,
+            size: inode.i_size,
+            mode: inode.i_mode,
+            perm: mode_to_perm(inode.i_mode),
+            is_dir,
+            is_link,
+            target,
+            selinux,
+        })
+    }
+
+    pub fn read_root_node(&mut self) -> io::Result<ExtFileNode> {
+        let inode = self.read_inode(EXT4_ROOT_INO, FT_DIR)?;
+        self.build_node(String::new(), &inode)
+    }
+
+    pub fn stat_ino(&mut self, ino: u32) -> io::Result<ExtFileNode> {
+        let inode = self.read_inode(ino, 0)?;
+        let path = if ino == EXT4_ROOT_INO {
+            String::new()
+        } else {
+            format!("#{ino}")
+        };
+        self.build_node(path, &inode)
+    }
+
+    pub fn walk_nodes(&mut self) -> io::Result<Vec<ExtFileNode>> {
+        let mut nodes = Vec::new();
+        let mut visited = HashSet::new();
+        self.walk_recursive(EXT4_ROOT_INO, "", &mut visited, &mut nodes)?;
+        Ok(nodes)
+    }
+
+    fn walk_recursive(
+        &mut self,
+        dir_ino: u32,
+        prefix: &str,
+        visited: &mut HashSet<u32>,
+        out: &mut Vec<ExtFileNode>,
+    ) -> io::Result<()> {
+        if !visited.insert(dir_ino) {
+            return Ok(());
+        }
+        let dir_inode = self.read_inode(dir_ino, FT_DIR)?;
+        let entries = self.read_dir(&dir_inode)?;
+        for entry in entries {
+            if entry.name == "." || entry.name == ".." {
+                continue;
+            }
+            if entry.inode == 0 || entry.inode > self.superblock.s_inodes_count {
+                continue;
+            }
+            let child_path = if prefix.is_empty() {
+                entry.name.clone()
+            } else {
+                format!("{prefix}/{}", entry.name)
+            };
+            let child_inode = self.read_inode(entry.inode, entry.file_type)?;
+            let node = self.build_node(child_path.clone(), &child_inode)?;
+            let is_dir = node.is_dir;
+            out.push(node);
+            if is_dir {
+                self.walk_recursive(entry.inode, &child_path, visited, out)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn children_of(&mut self, dir_ino: u32) -> io::Result<Vec<ExtChildEntry>> {
+        let dir_inode = self.read_inode(dir_ino, FT_DIR)?;
+        let entries = self.read_dir(&dir_inode)?;
+        let mut out = Vec::with_capacity(entries.len());
+        for entry in entries {
+            if entry.name == "." || entry.name == ".." {
+                continue;
+            }
+            if entry.inode == 0 || entry.inode > self.superblock.s_inodes_count {
+                continue;
+            }
+            let child = self.read_inode(entry.inode, entry.file_type)?;
+            out.push(ExtChildEntry {
+                ino: entry.inode,
+                name: entry.name,
+                is_dir: child.is_dir(),
+                is_link: child.is_symlink(),
+                size: child.i_size,
+            });
+        }
+        Ok(out)
+    }
+
+    pub fn lookup_path(&mut self, internal_path: &str) -> io::Result<ExtFileNode> {
+        let norm = internal_path.trim_matches('/').replace('\\', "/");
+        if norm.is_empty() {
+            return self.read_root_node();
+        }
+        let mut cur_ino = EXT4_ROOT_INO;
+        let parts: Vec<&str> = norm.split('/').filter(|p| !p.is_empty()).collect();
+        for (idx, part) in parts.iter().enumerate() {
+            let dir_inode = self.read_inode(cur_ino, FT_DIR)?;
+            if !dir_inode.is_dir() {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Path not found: {norm}"),
+                ));
+            }
+            let entries = self.read_dir(&dir_inode)?;
+            let found = entries.into_iter().find(|e| e.name == *part);
+            let Some(entry) = found else {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    format!("Path not found: {norm}"),
+                ));
+            };
+            if idx + 1 == parts.len() {
+                let child = self.read_inode(entry.inode, entry.file_type)?;
+                return self.build_node(norm, &child);
+            }
+            cur_ino = entry.inode;
+        }
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("Path not found: {norm}"),
+        ))
+    }
+
+    pub fn read_path(&mut self, internal_path: &str) -> io::Result<(Vec<u8>, ExtFileNode)> {
+        let node = self.lookup_path(internal_path)?;
+        if node.is_dir {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Is a directory: {internal_path}"),
+            ));
+        }
+        let inode = self.read_inode(node.ino, 0)?;
+        let bytes = self.read_inode_bytes(&inode)?;
+        Ok((bytes, node))
+    }
+
+    pub fn open_inode_reader(&mut self, inode: InodeData) -> io::Result<ExtFileReader<'_>> {
+        let size = inode.i_size;
+        let block_size = self.block_size;
+        let inline_data = if (inode.i_flags & EXT4_INLINE_DATA_FL) != 0 {
+            let bytes = self.read_inode_bytes(&inode)?;
+            Some(bytes)
+        } else {
+            None
+        };
+        let extents = if inline_data.is_none() && (inode.i_flags & EXT4_EXTENTS_FL) != 0 {
+            Some(self.collect_extents(&inode)?)
+        } else {
+            None
+        };
+        Ok(ExtFileReader {
+            vol: self,
+            inode,
+            size,
+            pos: 0,
+            block_size,
+            inline_data,
+            extents,
+            cached_blk: None,
+        })
+    }
+
+    pub fn open_path_reader(&mut self, internal_path: &str) -> io::Result<ExtFileReader<'_>> {
+        let node = self.lookup_path(internal_path)?;
+        if node.is_dir {
+            return Err(io::Error::new(
+                io::ErrorKind::Other,
+                format!("Is a directory: {internal_path}"),
+            ));
+        }
+        let inode = self.read_inode(node.ino, 0)?;
+        self.open_inode_reader(inode)
+    }
+
+    pub fn usage_report(&mut self, file_size: u64) -> io::Result<ExtUsageReport> {
+        let nodes = self.walk_nodes()?;
+        let free_blocks = self.superblock.s_free_blocks_count;
+        let total_blocks = self.superblock.s_blocks_count;
+        let bs = self.block_size;
+        let used_blocks = total_blocks.saturating_sub(free_blocks);
+        let mut files = 0usize;
+        let mut dirs = 0usize;
+        let mut links = 0usize;
+        let mut logical_bytes = 0u64;
+        for n in &nodes {
+            if n.is_dir {
+                dirs += 1;
+            } else if n.is_link {
+                links += 1;
+            } else {
+                files += 1;
+                logical_bytes += n.size;
+            }
+        }
+        Ok(ExtUsageReport {
+            fs: "EXT".to_string(),
+            block_size: bs,
+            file_size,
+            total_blocks,
+            meta_bytes: 0,
+            used_blocks,
+            used_bytes: used_blocks * bs,
+            wasted_blocks: 0,
+            wasted_bytes: 0,
+            free_blocks,
+            free_bytes: free_blocks * bs,
+            logical_bytes,
+            reclaimable_bytes: 0,
+            files,
+            dirs,
+            links,
+        })
+    }
+}
+
+/// Range-seekable `Read + Seek` reader for a single EXT2/3/4 file inode.
+/// Reads only the exact blocks/extents touched by `read` / `seek`.
+pub struct ExtFileReader<'a> {
+    vol: &'a mut Volume,
+    inode: InodeData,
+    size: u64,
+    pos: u64,
+    block_size: u64,
+    inline_data: Option<Vec<u8>>,
+    extents: Option<Vec<ExtentRun>>,
+    cached_blk: Option<(u64, Vec<u8>)>,
+}
+
+impl<'a> ExtFileReader<'a> {
+    pub fn len(&self) -> u64 {
+        self.size
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.size == 0
+    }
+
+    fn read_single_block(&mut self, file_block: u64) -> io::Result<&[u8]> {
+        let hit = self
+            .cached_blk
+            .as_ref()
+            .is_some_and(|(fb, _)| *fb == file_block);
+        if !hit {
+            let bs = self.block_size as usize;
+            let mut blk = vec![0u8; bs];
+            let disk_block = if let Some(ref runs) = self.extents {
+                let idx = runs.partition_point(|r| r.file_block + r.len as u64 <= file_block);
+                if idx < runs.len() {
+                    let r = &runs[idx];
+                    if file_block >= r.file_block
+                        && file_block < r.file_block + r.len as u64
+                        && !r.unwritten
+                        && r.disk_block != 0
+                    {
+                        r.disk_block + (file_block - r.file_block)
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                }
+            } else {
+                self.vol.resolve_indirect_block(&self.inode, file_block)?
+            };
+            if disk_block != 0 {
+                self.vol
+                    .reader
+                    .read_at(disk_block * self.block_size, &mut blk)?;
+            }
+            self.cached_blk = Some((file_block, blk));
+        }
+        Ok(&self.cached_blk.as_ref().unwrap().1)
+    }
+}
+
+impl<'a> Read for ExtFileReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.pos >= self.size || buf.is_empty() {
+            return Ok(0);
+        }
+        let want = ((self.size - self.pos) as usize).min(buf.len());
+        if let Some(ref inline) = self.inline_data {
+            let start = self.pos as usize;
+            let take = want.min(inline.len().saturating_sub(start));
+            buf[..take].copy_from_slice(&inline[start..start + take]);
+            self.pos += take as u64;
+            return Ok(take);
+        }
+
+        let bs = self.block_size;
+        let mut done = 0usize;
+        while done < want {
+            let cur_pos = self.pos;
+            let file_block = cur_pos / bs;
+            let within = (cur_pos % bs) as usize;
+            let rem = want - done;
+
+            // Fast contiguous multi-block path when reading >= 1 full block from an extent
+            if within == 0 && rem >= bs as usize {
+                if let Some(ref runs) = self.extents {
+                    let idx = runs.partition_point(|r| r.file_block + r.len as u64 <= file_block);
+                    if idx < runs.len() {
+                        let r = &runs[idx];
+                        if file_block >= r.file_block && file_block < r.file_block + r.len as u64 {
+                            let avail_blocks = (r.file_block + r.len as u64) - file_block;
+                            let take = (avail_blocks * bs).min(rem as u64) as usize;
+                            if r.unwritten || r.disk_block == 0 {
+                                buf[done..done + take].fill(0);
+                            } else {
+                                let disk_off = (r.disk_block + (file_block - r.file_block)) * bs;
+                                self.vol.reader.read_at(disk_off, &mut buf[done..done + take])?;
+                            }
+                            self.pos += take as u64;
+                            done += take;
+                            continue;
+                        }
+                    }
+                }
+            }
+
+            let take = ((bs as usize) - within).min(rem);
+            let blk = self.read_single_block(file_block)?;
+            buf[done..done + take].copy_from_slice(&blk[within..within + take]);
+            self.pos += take as u64;
+            done += take;
+        }
+        Ok(done)
+    }
+}
+
+impl<'a> Seek for ExtFileReader<'a> {
+    fn seek(&mut self, style: SeekFrom) -> io::Result<u64> {
+        let next: i64 = match style {
+            SeekFrom::Start(off) => off as i64,
+            SeekFrom::Current(delta) => self.pos as i64 + delta,
+            SeekFrom::End(delta) => self.size as i64 + delta,
+        };
+        if next < 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "negative seek position",
+            ));
+        }
+        self.pos = next as u64;
+        Ok(self.pos)
     }
 }
 

@@ -110,6 +110,26 @@ def test_quill_selection_and_agent_context(tmp_path):
     assert doc["selection"]["endLineNumber"] == 5
     assert "def second():" in doc["selection"]["text"]
 
+    # Second selection after clearing/sending (attachment reset to None) must capture new tree/editor selection
+    ws.agentChat._data["attachment"] = None
+    other_file = tmp_path / "other.txt"
+    other_file.write_text("hello world\n", encoding="utf-8")
+    ws.setFocusArea("tree0")
+    ws.selectPaths(0, [str(other_file)])
+    ws.agentChat.show()
+    assert [a["path"] for a in ws.agentChat.attachments] == [str(other_file)]
+
+    # Selecting lines in editor while panel is open with empty draft updates attachments
+    ws.setFocusArea("editor")
+    editor._doc.set_cursor(6, 0, False)
+    editor._doc.set_cursor(7, 12, True)
+    editor._changed()
+    new_sel = editor.selectionRange
+    ws.editor.setSelection(str(test_file), new_sel)
+    ws.agentChat._refresh_live_attachment()
+    assert [a["path"] for a in ws.agentChat.attachments] == [str(test_file)]
+    assert "lines 7–8" in ws.agentChat.attachments[0]["sizeLabel"]
+
 
 if __name__ == "__main__":
     import tempfile

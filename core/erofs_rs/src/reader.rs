@@ -18,7 +18,7 @@ use crate::xattr::{
     LongXattrPrefix, XATTR_NAME_CAPABILITY, XATTR_NAME_SELINUX, XattrEntry,
     decode_raw_xattr_entry, parse_vfs_capability, resolve_xattr_name,
 };
-use crate::zmap::map_all_extents;
+use crate::zmap::{ZMappedExtent, map_all_extents};
 use serde::Serialize;
 use std::collections::HashSet;
 use std::fs::File;
@@ -115,6 +115,12 @@ impl ErofsImage {
     /// Open an EROFS image directly from an in-memory buffer.
     pub fn open_bytes(data: Vec<u8>) -> Result<Self> {
         let source = ImageSource::from_bytes(data);
+        Self::init_from_source(source, None)
+    }
+
+    /// Open an EROFS image from a custom random-access backing (e.g. LP extents in super.img).
+    pub fn open_custom(backing: std::sync::Arc<dyn crate::io::RandomAccessBacking>) -> Result<Self> {
+        let source = ImageSource::from_custom(backing);
         Self::init_from_source(source, None)
     }
 
@@ -635,6 +641,60 @@ impl ErofsImage {
         Ok(out)
     }
 
+    /// Open a random-access `Read + Seek` reader for a single file inode without
+    /// decompressing untouched pclusters (huge speedup for ZIP/APK/ELF inspection).
+    pub fn open_inode_reader(&self, inode: Inode) -> Result<ErofsFileReader<'_>> {
+        let mode = match inode.layout {
+            DataLayout::FlatPlain => ErofsFileMode::FlatPlain,
+            DataLayout::FlatInline => ErofsFileMode::FlatInline,
+            DataLayout::CompressedFull | DataLayout::CompressedCompact => {
+                let bs = self.sb.block_size as u64;
+                let max_lcl = div_round_up(inode.size, bs);
+                let zmap_start = align_up(inode.data_offset, 8);
+                let est_zmap_len: usize = match inode.layout {
+                    DataLayout::CompressedCompact => {
+                        (16 + (max_lcl as usize) * 4 + 64 + (bs as usize)).min(64 * 1024 * 1024)
+                    }
+                    DataLayout::CompressedFull => {
+                        (32 + (max_lcl as usize) * 8 + 64).min(64 * 1024 * 1024)
+                    }
+                    _ => 0,
+                };
+                let zmap_buf = self.read_meta_space(inode.in_metabox, zmap_start, est_zmap_len)?;
+                let zmap_end = zmap_start + (zmap_buf.len() as u64);
+                let mut read_meta = |off: u64, len: usize| -> Result<Vec<u8>> {
+                    if off >= zmap_start && off + (len as u64) <= zmap_end {
+                        let s = (off - zmap_start) as usize;
+                        Ok(zmap_buf[s..s + len].to_vec())
+                    } else {
+                        self.read_meta_space(inode.in_metabox, off, len)
+                    }
+                };
+                let (_hdr, extents) = map_all_extents(&self.sb, &inode, &mut read_meta)?;
+                ErofsFileMode::Compressed {
+                    extents,
+                    cached_idx: None,
+                    cached_buf: Vec::new(),
+                }
+            }
+            DataLayout::ChunkBased => {
+                let data = self.read_chunked(&inode)?;
+                ErofsFileMode::Buffered(data)
+            }
+        };
+        Ok(ErofsFileReader {
+            img: self,
+            inode,
+            pos: 0,
+            mode,
+        })
+    }
+
+    pub fn open_path_reader(&self, path: &str) -> Result<ErofsFileReader<'_>> {
+        let inode = self.lookup(path)?;
+        self.open_inode_reader(inode)
+    }
+
     /// Read directory entries for directory `inode` (excluding `.` and `..` when `include_dots` is false).
     pub fn read_dir(&self, inode: &Inode, include_dots: bool) -> Result<Vec<DirEntry>> {
         if !inode.is_dir() {
@@ -1103,4 +1163,207 @@ pub fn is_text_bytes(data: &[u8]) -> bool {
         .filter(|&&b| b < 0x20 && !matches!(b, 0x08 | 0x09 | 0x0A | 0x0C | 0x0D))
         .count();
     (nontext as f64) / (sample.len() as f64) <= 0.30
+}
+
+enum ErofsFileMode {
+    FlatPlain,
+    FlatInline,
+    Compressed {
+        extents: Vec<ZMappedExtent>,
+        cached_idx: Option<usize>,
+        cached_buf: Vec<u8>,
+    },
+    Buffered(Vec<u8>),
+}
+
+/// Random-access `Read + Seek` reader for an EROFS file inode.
+/// Decompresses only the pclusters overlapping requested byte ranges.
+pub struct ErofsFileReader<'a> {
+    img: &'a ErofsImage,
+    inode: Inode,
+    pos: u64,
+    mode: ErofsFileMode,
+}
+
+impl<'a> ErofsFileReader<'a> {
+    pub fn len(&self) -> u64 {
+        self.inode.size
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.inode.size == 0
+    }
+}
+
+impl<'a> std::io::Read for ErofsFileReader<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.pos >= self.inode.size || buf.is_empty() {
+            return Ok(0);
+        }
+        let max_avail = ((self.inode.size - self.pos) as usize).min(buf.len());
+        let bs = self.img.sb.block_size as u64;
+        let bs_usize = self.img.sb.block_size as usize;
+
+        match &mut self.mode {
+            ErofsFileMode::FlatPlain => {
+                if self.inode.is_null_start() {
+                    buf[..max_avail].fill(0);
+                    self.pos += max_avail as u64;
+                    return Ok(max_avail);
+                }
+                let n = self
+                    .img
+                    .source
+                    .read_at(self.inode.start_blk * bs + self.pos, &mut buf[..max_avail])
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                self.pos += n as u64;
+                Ok(n)
+            }
+            ErofsFileMode::FlatInline => {
+                let full_bytes = (self.inode.size / bs) * bs;
+                let mut done = 0usize;
+                while done < max_avail {
+                    let cur = self.pos;
+                    if cur < full_bytes {
+                        let take = ((full_bytes - cur) as usize).min(max_avail - done);
+                        if self.inode.is_null_start() {
+                            buf[done..done + take].fill(0);
+                        } else {
+                            let n = self
+                                .img
+                                .source
+                                .read_at(self.inode.start_blk * bs + cur, &mut buf[done..done + take])
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                            if n < take {
+                                buf[done + n..done + take].fill(0);
+                            }
+                        }
+                        self.pos += take as u64;
+                        done += take;
+                    } else {
+                        let tail_off = cur - full_bytes;
+                        let take = max_avail - done;
+                        let part = self
+                            .img
+                            .read_meta_space(self.inode.in_metabox, self.inode.data_offset + tail_off, take)
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                        let copy_n = part.len().min(take);
+                        buf[done..done + copy_n].copy_from_slice(&part[..copy_n]);
+                        if copy_n < take {
+                            buf[done + copy_n..done + take].fill(0);
+                        }
+                        self.pos += take as u64;
+                        done += take;
+                    }
+                }
+                Ok(done)
+            }
+            ErofsFileMode::Buffered(data) => {
+                let start = self.pos as usize;
+                let avail = data.len().saturating_sub(start).min(max_avail);
+                buf[..avail].copy_from_slice(&data[start..start + avail]);
+                self.pos += avail as u64;
+                Ok(avail)
+            }
+            ErofsFileMode::Compressed {
+                extents,
+                cached_idx,
+                cached_buf,
+            } => {
+                let mut done = 0usize;
+                while done < max_avail {
+                    let cur = self.pos;
+                    let idx = extents.partition_point(|e| e.la + e.llen <= cur);
+                    if idx >= extents.len() {
+                        break;
+                    }
+                    let ext = &extents[idx];
+                    if cur < ext.la {
+                        let gap = ((ext.la - cur) as usize).min(max_avail - done);
+                        buf[done..done + gap].fill(0);
+                        self.pos += gap as u64;
+                        done += gap;
+                        continue;
+                    }
+                    if *cached_idx != Some(idx) {
+                        let decoded = if ext.is_fragment {
+                            let packed = self
+                                .img
+                                .get_packed_blob()
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                            let p_start = ext.pa as usize;
+                            let p_end = (p_start + ext.llen as usize).min(packed.len());
+                            if p_start >= packed.len() {
+                                vec![0u8; ext.llen as usize]
+                            } else {
+                                let mut v = packed[p_start..p_end].to_vec();
+                                v.resize(ext.llen as usize, 0);
+                                v
+                            }
+                        } else if ext.is_inline {
+                            let raw_in = self
+                                .img
+                                .read_meta_space(self.inode.in_metabox, ext.pa, ext.plen)
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                            decompress_pcluster(&DecompressRequest {
+                                alg: ext.alg,
+                                input: &raw_in,
+                                decoded_len: ext.llen as usize,
+                                decoded_skip: 0,
+                                partial: ext.partial,
+                                block_size: bs_usize,
+                            })
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?
+                        } else {
+                            let raw_in = self
+                                .img
+                                .source
+                                .read_exact_vec(ext.pa, ext.plen)
+                                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                            decompress_pcluster(&DecompressRequest {
+                                alg: ext.alg,
+                                input: &raw_in,
+                                decoded_len: ext.llen as usize,
+                                decoded_skip: 0,
+                                partial: ext.partial,
+                                block_size: bs_usize,
+                            })
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?
+                        };
+                        *cached_buf = decoded;
+                        *cached_idx = Some(idx);
+                    }
+                    let within = (cur - ext.la) as usize;
+                    let take = ((ext.llen as usize).saturating_sub(within))
+                        .min(cached_buf.len().saturating_sub(within))
+                        .min(max_avail - done);
+                    if take == 0 {
+                        break;
+                    }
+                    buf[done..done + take].copy_from_slice(&cached_buf[within..within + take]);
+                    self.pos += take as u64;
+                    done += take;
+                }
+                Ok(done)
+            }
+        }
+    }
+}
+
+impl<'a> std::io::Seek for ErofsFileReader<'a> {
+    fn seek(&mut self, style: std::io::SeekFrom) -> std::io::Result<u64> {
+        let next: i64 = match style {
+            std::io::SeekFrom::Start(off) => off as i64,
+            std::io::SeekFrom::Current(delta) => self.pos as i64 + delta,
+            std::io::SeekFrom::End(delta) => self.inode.size as i64 + delta,
+        };
+        if next < 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "negative seek position",
+            ));
+        }
+        self.pos = next as u64;
+        Ok(self.pos)
+    }
 }

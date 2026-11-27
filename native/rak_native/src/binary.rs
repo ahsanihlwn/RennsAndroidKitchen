@@ -4,10 +4,121 @@ use goblin::{elf, mach, Object};
 use pyo3::{exceptions::PyValueError, prelude::*};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{fs::File, io::Read, path::PathBuf};
+use std::{
+    fs::File,
+    io::{self, BufReader, Read, Seek, SeekFrom},
+    path::PathBuf,
+};
 
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ROWS: usize = 200_000;
+
+fn image_bytechunks(source: &mut (impl Read + Seek), ranges: &[(u64, u64, usize)]) -> io::Result<String> {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut output = String::new();
+    let mut buffer = [0u8; 16 * 1024];
+    for (index, &(address, offset, size)) in ranges.iter().enumerate() {
+        if index != 0 {
+            output.push('\n');
+        }
+        output.push_str(&format!("<bytechunk space=\"ram\" offset=\"{address:#x}\" readonly=\"true\">\n"));
+        source.seek(SeekFrom::Start(offset))?;
+        let mut processed = 0;
+        while processed < size {
+            let capacity = buffer.len().min(size - processed);
+            let length = source.read(&mut buffer[..capacity])?;
+            if length == 0 {
+                break;
+            }
+            for &byte in &buffer[..length] {
+                if processed != 0 && processed % 64 == 0 {
+                    output.push('\n');
+                }
+                output.push(HEX[(byte >> 4) as usize] as char);
+                output.push(HEX[(byte & 0xf) as usize] as char);
+                processed += 1;
+            }
+        }
+        output.push_str("\n</bytechunk>");
+    }
+    Ok(output)
+}
+
+#[pyfunction]
+pub fn binary_image_bytechunks(
+    py: Python<'_>,
+    path: PathBuf,
+    ranges: Vec<(u64, u64, usize)>,
+) -> PyResult<String> {
+    py.detach(move || {
+        let total = ranges.iter().try_fold(0u64, |sum, range| sum.checked_add(range.2 as u64));
+        if total.is_none_or(|size| size > MAX_BYTES) {
+            return Err(PyValueError::new_err("Binary byte ranges exceed the analysis limit"));
+        }
+        let mut source = BufReader::new(File::open(path)?);
+        Ok(image_bytechunks(&mut source, &ranges)?)
+    })
+}
+
+#[pyfunction]
+pub fn binary_flat_sha256(
+    py: Python<'_>,
+    path: PathBuf,
+    ranges: Vec<(u64, u64, u64)>,
+) -> PyResult<String> {
+    py.detach(move || {
+        let mut source = File::open(path)?;
+        let mut digest = Sha256::new();
+        let mut position = 0;
+        let zeros = [0u8; 64 * 1024];
+        let mut buffer = [0u8; 64 * 1024];
+        for (start, offset, length) in ranges {
+            let end = start.checked_add(length).filter(|end| *end <= MAX_BYTES);
+            let Some(end) = end else {
+                return Err(PyValueError::new_err("Flat binary exceeds the analysis limit"));
+            };
+            if start < position {
+                return Err(PyValueError::new_err("Overlapping flat binary ranges"));
+            }
+            let mut gap = start - position;
+            while gap > 0 {
+                let take = gap.min(zeros.len() as u64) as usize;
+                digest.update(&zeros[..take]);
+                gap -= take as u64;
+            }
+            source.seek(SeekFrom::Start(offset))?;
+            let mut remaining = length;
+            while remaining > 0 {
+                let take = remaining.min(buffer.len() as u64) as usize;
+                source.read_exact(&mut buffer[..take])?;
+                digest.update(&buffer[..take]);
+                remaining -= take as u64;
+            }
+            position = end;
+        }
+        Ok(format!("{:x}", digest.finalize()))
+    })
+}
+
+#[pyfunction]
+pub fn binary_dwarf_functions(
+    py: Python<'_>,
+    path: PathBuf,
+) -> PyResult<Option<Vec<crate::dwarf::Location>>> {
+    py.detach(move || {
+        let source = File::open(path)?;
+        let metadata = source.metadata()?;
+        if !metadata.is_file() || metadata.len() > MAX_BYTES {
+            return Err(PyValueError::new_err("vmlinux exceeds the binary analysis limit"));
+        }
+        let mut bytes = Vec::with_capacity(metadata.len() as usize);
+        source.take(MAX_BYTES + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_BYTES {
+            return Err(PyValueError::new_err("vmlinux exceeds the binary analysis limit"));
+        }
+        crate::dwarf::function_locations(&bytes).map_err(|error| PyValueError::new_err(error.to_string()))
+    })
+}
 
 fn hex(n: u64) -> String { format!("{n:#x}") }
 fn demangle(name: &str) -> String {
@@ -164,16 +275,65 @@ fn analyze(data: &[u8], minimum: usize) -> Result<Value, String> {
     r["exec_sections"]=json!(sections.iter().filter(|s|s["flags"].as_u64().unwrap_or(0)&4!=0).map(|s|&s["name"]).collect::<Vec<_>>());
     r["symbols"]=json!({"total":exports.len()+imports.len()+locals.len(),"exported":exports,"imported":imports,"local":locals});
     r["sections"]=json!(sections);r["segments"]=json!(segments);r["relocations"]=json!(relocations);
-    let mut strings=Vec::new(); let mut start=0;
+    let mut spans: Vec<(u32, u32, u8)> = Vec::new();
+    let mut start = 0usize;
     for i in 0..=data.len() {
-        if i<data.len() && (0x20..=0x7e).contains(&data[i]) {continue;}
-        if i-start>=minimum {
-            if strings.len()==MAX_ROWS {r["warnings"]=json!(["Strings truncated at 200000 entries"]);break;}
-            strings.push(json!({"offset":hex(start as u64),"length":i-start,"encoding":"ascii","value":String::from_utf8_lossy(&data[start..i])}));
+        if i < data.len() && (0x20..=0x7e).contains(&data[i]) {
+            continue;
         }
-        start=i+1;
+        let len = i - start;
+        if len >= minimum {
+            let nul = i < data.len() && data[i] == 0;
+            let tier = if nul && (len >= 6 || data[start..i].contains(&b'/')) {
+                0
+            } else if nul {
+                1
+            } else if len >= 8 {
+                2
+            } else {
+                3
+            };
+            spans.push((start as u32, len as u32, tier));
+        }
+        start = i + 1;
     }
-    r["string_entries"]=json!(strings);
+    if spans.len() > MAX_ROWS {
+        r["warnings"] = json!(["Strings truncated at 200000 entries"]);
+        let mut selected: Vec<(u32, u32)> = Vec::with_capacity(MAX_ROWS);
+        for tier in 0..=3u8 {
+            for &(s, l, t) in &spans {
+                if t == tier {
+                    selected.push((s, l));
+                    if selected.len() == MAX_ROWS {
+                        break;
+                    }
+                }
+            }
+            if selected.len() == MAX_ROWS {
+                break;
+            }
+        }
+        selected.sort_unstable_by_key(|&(s, _)| s);
+        let strings: Vec<Value> = selected
+            .into_iter()
+            .map(|(s, l)| {
+                let st = s as usize;
+                let en = st + l as usize;
+                json!({"offset":hex(s as u64),"length":l as usize,"encoding":"ascii","value":String::from_utf8_lossy(&data[st..en])})
+            })
+            .collect();
+        r["string_entries"] = json!(strings);
+    } else {
+        let strings: Vec<Value> = spans
+            .into_iter()
+            .map(|(s, l, _)| {
+                let st = s as usize;
+                let en = st + l as usize;
+                json!({"offset":hex(s as u64),"length":l as usize,"encoding":"ascii","value":String::from_utf8_lossy(&data[st..en])})
+            })
+            .collect();
+        r["string_entries"] = json!(strings);
+    }
     Ok(r)
 }
 
@@ -189,6 +349,337 @@ pub fn binary_analyze_json(py: Python<'_>, path: PathBuf, minimum: usize) -> PyR
         let mut result=analyze(&data,minimum).map_err(PyValueError::new_err)?;
         result["filepath"]=json!(path.to_string_lossy());result["header"]["file"]=json!(path.to_string_lossy());
         serde_json::to_string(&result).map_err(|e|PyValueError::new_err(e.to_string()))
+    })
+}
+
+fn sign_extend_21(imm: u32) -> i64 {
+    let sign = 1i64 << 20;
+    let v = imm as i64;
+    (v & (sign - 1)) - (v & sign)
+}
+
+fn find_arm64_prologue(data: &[u8], va: u64, sec_va: u64, sec_off: usize) -> Option<u64> {
+    if va < sec_va { return None; }
+    let rel = (va - sec_va) as usize;
+    let limit = 0x8000;
+    let low = if rel > limit { rel - limit } else { 0 };
+    if sec_off + rel > data.len() { return None; }
+    let mut pos = rel & !3;
+    while pos >= low {
+        let off = sec_off + pos;
+        if off + 4 <= data.len() {
+            let w = u32::from_le_bytes([data[off], data[off + 1], data[off + 2], data[off + 3]]);
+            if matches!(w, 0xD503233F | 0xD503237F | 0xD503245F | 0xD50324DF | 0xD503249F) {
+                return Some(sec_va + pos as u64);
+            }
+            if (w & 0xFFC07FFF) == 0xA9807BFD {
+                return Some(sec_va + pos as u64);
+            }
+        }
+        if pos < 4 { break; }
+        pos -= 4;
+    }
+    None
+}
+
+#[pyfunction]
+#[pyo3(signature=(path, target_vas, abi, endian="little", max_hits=40, base_va=None))]
+pub fn binary_fast_scan_xrefs_json(
+    py: Python<'_>,
+    path: PathBuf,
+    target_vas: Vec<u64>,
+    abi: &str,
+    endian: &str,
+    max_hits: usize,
+    base_va: Option<u64>,
+) -> PyResult<String> {
+    let abi_owned = abi.to_string();
+    let endian_owned = endian.to_string();
+    py.detach(move || -> PyResult<String> {
+        let file = File::open(&path)?;
+        let mut data = Vec::new();
+        file.take(MAX_BYTES + 1).read_to_end(&mut data)?;
+        let targets: std::collections::HashSet<u64> = target_vas.into_iter().collect();
+        if targets.is_empty() {
+            return Ok("[]".to_string());
+        }
+
+        let is_little = endian_owned.to_lowercase() != "big";
+        let is_aarch64 = matches!(abi_owned.to_uppercase().as_str(), "AARCH64" | "ARM64" | "PE_0XAA64");
+        let is_x86_64 = matches!(abi_owned.to_uppercase().as_str(), "X86_64" | "X64" | "AMD64" | "PE_0X8664");
+
+        let mut exec_secs = Vec::new();
+        let mut data_secs = Vec::new();
+        let mut text_sec: Option<(u64, usize, usize)> = None;
+
+        if base_va.is_none() {
+            if let Ok(obj) = Object::parse(&data) {
+                match obj {
+                    Object::Elf(e) => {
+                        for s in &e.section_headers {
+                            let is_exec = s.sh_flags & 4 != 0;
+                            let va = s.sh_addr;
+                            let off = s.sh_offset as usize;
+                            let sz = s.sh_size as usize;
+                            let name = e.shdr_strtab.get_at(s.sh_name).unwrap_or("").to_string();
+                            if is_exec {
+                                if text_sec.is_none() || name == ".text" {
+                                    text_sec = Some((va, off, sz));
+                                }
+                                exec_secs.push((va, off, sz, name));
+                            } else if s.sh_flags & 3 != 0 || matches!(name.as_str(), ".rodata" | ".data" | ".data.rel.ro" | "__bug_table") {
+                                data_secs.push((va, off, sz, name));
+                            }
+                        }
+                    }
+                    Object::PE(p) => {
+                        for s in &p.sections {
+                            let flags = (if s.characteristics & 0x80000000 != 0 { 1 } else { 0 })
+                                | (if s.characteristics & 0x40000000 != 0 { 2 } else { 0 })
+                                | (if s.characteristics & 0x20000000 != 0 { 4 } else { 0 });
+                            let va = p.image_base + s.virtual_address as u64;
+                            let off = s.pointer_to_raw_data as usize;
+                            let sz = s.size_of_raw_data as usize;
+                            let name = s.name().unwrap_or("").to_string();
+                            if flags & 4 != 0 {
+                                if text_sec.is_none() || name == ".text" {
+                                    text_sec = Some((va, off, sz));
+                                }
+                                exec_secs.push((va, off, sz, name));
+                            } else if flags & 3 != 0 || name == ".data" || name == ".rdata" {
+                                data_secs.push((va, off, sz, name));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        if exec_secs.is_empty() {
+            let raw_va = base_va.unwrap_or(0);
+            exec_secs.push((raw_va, 0, data.len(), ".image".to_string()));
+            data_secs.push((raw_va, 0, data.len(), ".image".to_string()));
+            text_sec = Some((raw_va, 0, data.len()));
+        }
+
+        let mut hits = Vec::new();
+        let pages: std::collections::HashSet<u64> = targets.iter().map(|va| va & !0xFFF).collect();
+
+        // 1. Scan Executable Sections
+        for (sec_va, sec_off, sec_sz, sec_name) in &exec_secs {
+            if hits.len() >= max_hits {
+                break;
+            }
+            let end = (sec_off + sec_sz).min(data.len());
+            if *sec_off >= end {
+                continue;
+            }
+            let slice = &data[*sec_off..end];
+
+            if is_aarch64 && is_little {
+                let mut recent_adrp: std::collections::HashMap<u32, (u64, u64)> = std::collections::HashMap::new();
+                let n = slice.len() & !3;
+                let mut off = 0;
+                while off < n {
+                    let insn = u32::from_le_bytes([slice[off], slice[off+1], slice[off+2], slice[off+3]]);
+                    let pc = sec_va + off as u64;
+
+                    if (insn & 0x9F000000) == 0x10000000 {
+                        let rd = insn & 0x1F;
+                        let immlo = (insn >> 29) & 0x3;
+                        let immhi = (insn >> 5) & 0x7FFFF;
+                        let imm = sign_extend_21((immhi << 2) | immlo) as u64;
+                        let target = pc.wrapping_add(imm);
+                        recent_adrp.remove(&rd);
+                        if targets.contains(&target) {
+                            let fn_addr = find_arm64_prologue(&data, pc, *sec_va, *sec_off);
+                            hits.push(json!({
+                                "from": format!("{:#x}", pc),
+                                "to": format!("{:#x}", target),
+                                "kind": "ADR",
+                                "section": sec_name,
+                                "function_address": fn_addr.map(|a| format!("{:#x}", a)).unwrap_or_default(),
+                                "line": 0
+                            }));
+                            if hits.len() >= max_hits {
+                                break;
+                            }
+                        }
+                        off += 4;
+                        continue;
+                    }
+
+                    if (insn & 0x9F000000) == 0x90000000 {
+                        let rd = insn & 0x1F;
+                        let immlo = (insn >> 29) & 0x3;
+                        let immhi = (insn >> 5) & 0x7FFFF;
+                        let imm = (sign_extend_21((immhi << 2) | immlo) << 12) as u64;
+                        let page = (pc & !0xFFF).wrapping_add(imm);
+                        if pages.contains(&page) {
+                            recent_adrp.insert(rd, (pc, page));
+                        } else {
+                            recent_adrp.remove(&rd);
+                        }
+                        off += 4;
+                        continue;
+                    }
+
+                    if (insn & 0xFF800000) == 0x91000000 {
+                        let rd = insn & 0x1F;
+                        let rn = (insn >> 5) & 0x1F;
+                        if let Some((_, page)) = recent_adrp.get(&rn) {
+                            let shift = (insn >> 22) & 0x3;
+                            let imm12 = (((insn >> 10) & 0xFFF) << (if shift == 1 { 12 } else { 0 })) as u64;
+                            let target = page.wrapping_add(imm12);
+                            if targets.contains(&target) {
+                                let fn_addr = find_arm64_prologue(&data, pc, *sec_va, *sec_off);
+                                hits.push(json!({
+                                    "from": format!("{:#x}", pc),
+                                    "to": format!("{:#x}", target),
+                                    "kind": "ADRP+ADD",
+                                    "section": sec_name,
+                                    "function_address": fn_addr.map(|a| format!("{:#x}", a)).unwrap_or_default(),
+                                    "line": 0
+                                }));
+                                if hits.len() >= max_hits {
+                                    break;
+                                }
+                            }
+                            if rd != rn {
+                                off += 4;
+                                continue;
+                            }
+                        }
+                        recent_adrp.remove(&rd);
+                        off += 4;
+                        continue;
+                    }
+
+                    if (insn & 0x3B000000) == 0x39000000 {
+                        let rn = (insn >> 5) & 0x1F;
+                        if let Some((_, page)) = recent_adrp.get(&rn) {
+                            let size_bits = (insn >> 30) & 0x3;
+                            let imm12 = (((insn >> 10) & 0xFFF) << size_bits) as u64;
+                            let target = page.wrapping_add(imm12);
+                            if targets.contains(&target) {
+                                let fn_addr = find_arm64_prologue(&data, pc, *sec_va, *sec_off);
+                                hits.push(json!({
+                                    "from": format!("{:#x}", pc),
+                                    "to": format!("{:#x}", target),
+                                    "kind": "ADRP+LDR",
+                                    "section": sec_name,
+                                    "function_address": fn_addr.map(|a| format!("{:#x}", a)).unwrap_or_default(),
+                                    "line": 0
+                                }));
+                                if hits.len() >= max_hits {
+                                    break;
+                                }
+                            }
+                        }
+                        recent_adrp.remove(&rn);
+                        off += 4;
+                        continue;
+                    }
+
+                    off += 4;
+                }
+            } else if is_x86_64 && is_little {
+                let n = slice.len();
+                let mut i = 0;
+                while i + 7 <= n {
+                    let b0 = slice[i];
+                    if (0x48..=0x4F).contains(&b0) && slice[i + 1] == 0x8D && (slice[i + 2] & 0xC7) == 0x05 {
+                        let disp = i32::from_le_bytes([slice[i+3], slice[i+4], slice[i+5], slice[i+6]]);
+                        let pc = sec_va + i as u64;
+                        let target = pc.wrapping_add(7).wrapping_add(disp as i64 as u64);
+                        if targets.contains(&target) {
+                            hits.push(json!({
+                                "from": format!("{:#x}", pc),
+                                "to": format!("{:#x}", target),
+                                "kind": "LEA [RIP]",
+                                "section": sec_name,
+                                "function_address": format!("{:#x}", pc),
+                                "line": 0
+                            }));
+                            if hits.len() >= max_hits {
+                                break;
+                            }
+                        }
+                        i += 7;
+                        continue;
+                    }
+                    i += 1;
+                }
+            }
+        }
+
+        // 2. Scan Data Sections for Pointer Tables and Linux __bug_table 32-bit Displacements
+        for (sec_va, sec_off, sec_sz, sec_name) in &data_secs {
+            if hits.len() >= max_hits {
+                break;
+            }
+            let end = (sec_off + sec_sz).min(data.len());
+            if *sec_off >= end {
+                continue;
+            }
+            let slice = &data[*sec_off..end];
+            let n = slice.len() & !3;
+            let mut off = 0;
+            while off < n {
+                let disp = i32::from_le_bytes([slice[off], slice[off+1], slice[off+2], slice[off+3]]);
+                let tbl_va = sec_va + off as u64;
+                let target = tbl_va.wrapping_add(disp as i64 as u64);
+                if targets.contains(&target) {
+                    if off >= 4 {
+                        let bug_disp = i32::from_le_bytes([slice[off-4], slice[off-3], slice[off-2], slice[off-1]]);
+                        let code_va = (tbl_va - 4).wrapping_add(bug_disp as i64 as u64);
+                        let line = if off + 6 <= slice.len() {
+                            u16::from_le_bytes([slice[off+4], slice[off+5]])
+                        } else {
+                            0
+                        };
+                        let fn_addr = if let Some((t_va, t_off, _)) = text_sec {
+                            find_arm64_prologue(&data, code_va, t_va, t_off)
+                        } else {
+                            None
+                        };
+                        hits.push(json!({
+                            "from": format!("{:#x}", code_va),
+                            "to": format!("{:#x}", target),
+                            "kind": if line > 0 { format!("BUG_TABLE:L{}", line) } else { "BUG_TABLE".to_string() },
+                            "section": sec_name,
+                            "function_address": fn_addr.map(|a| format!("{:#x}", a)).unwrap_or_default(),
+                            "line": line
+                        }));
+                        if hits.len() >= max_hits {
+                            break;
+                        }
+                    }
+                }
+
+                if off + 8 <= slice.len() {
+                    let ptr = u64::from_le_bytes([slice[off], slice[off+1], slice[off+2], slice[off+3], slice[off+4], slice[off+5], slice[off+6], slice[off+7]]);
+                    if targets.contains(&ptr) {
+                        hits.push(json!({
+                            "from": format!("{:#x}", tbl_va),
+                            "to": format!("{:#x}", ptr),
+                            "kind": "PTR64",
+                            "section": sec_name,
+                            "function_address": "",
+                            "line": 0
+                        }));
+                        if hits.len() >= max_hits {
+                            break;
+                        }
+                    }
+                }
+
+                off += 4;
+            }
+        }
+
+        serde_json::to_string(&hits).map_err(|e| PyValueError::new_err(e.to_string()))
     })
 }
 

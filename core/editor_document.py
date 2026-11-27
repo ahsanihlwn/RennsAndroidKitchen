@@ -242,6 +242,7 @@ class EditorBridge(QObject):
     fileSaved    = Signal(str)             # filepath
     fileUnsaved  = Signal(str)             # filepath — emitted when content diverges from saved
     fileReloaded = Signal(str, str)        # filepath, content (external change)
+    readOnlyChanged = Signal(str, bool)    # filepath, read_only
     tabClosed    = Signal(str)             # filepath
     editorReady  = Signal()
     viewRequested = Signal()
@@ -377,7 +378,7 @@ class EditorBridge(QObject):
             print(f"[TAB_ICON] ERROR: {e}")
         return ""
 
-    def open_file(self, filepath: str):
+    def open_file(self, filepath: str, read_only: bool = False):
 
         if not os.path.isfile(filepath):
             return False
@@ -387,7 +388,10 @@ class EditorBridge(QObject):
         if filepath in self._tabs:
             # Sudah ada — emit supaya JS switch
             tab = self._tabs[filepath]
-            self._emit_or_queue_file_loaded(filepath, tab["content"], tab["language"], icon_b64)
+            if read_only and not tab.get("read_only"):
+                tab["read_only"] = True
+                self.readOnlyChanged.emit(filepath, True)
+            self._emit_or_queue_file_loaded(filepath, tab["content"], tab["language"], icon_b64, bool(tab.get("read_only", False)))
             self._active = filepath
             return True
 
@@ -419,14 +423,14 @@ class EditorBridge(QObject):
             "hash"    : h,
             "unsaved" : False,
             "language": lang,
-            "read_only": False,
+            "read_only": bool(read_only),
             "virtual" : False,
             "encoding": enc,
             "eol"     : eol,
             "bom"     : bom,
         }
         self._active = filepath
-        self._emit_or_queue_file_loaded(filepath, content, lang, icon_b64, False)
+        self._emit_or_queue_file_loaded(filepath, content, lang, icon_b64, bool(read_only))
         return True
 
     def bind_neobranch_tab(self, filepath: str, tree_base: str, fs_root: str,
@@ -513,6 +517,26 @@ class EditorBridge(QObject):
             self.documentChanged.emit(filepath)
         self.fileReloaded.emit(filepath, content)
 
+    def set_read_only(self, filepath: str, read_only: bool):
+        key, tab = self._find_tab(filepath)
+        if tab is None:
+            return
+        ro = bool(read_only)
+        if bool(tab.get("read_only")) == ro:
+            return
+        tab["read_only"] = ro
+        self.readOnlyChanged.emit(key, ro)
+
+    def promote_to_disk(self, filepath: str, read_only: bool = False):
+        key, tab = self._find_tab(filepath)
+        if tab is None:
+            return
+        if tab.get("virtual") and os.path.isfile(key):
+            tab["virtual"] = False
+            self._virtual_save_cbs.pop(key, None)
+            self.reload_file(key)
+        self.set_read_only(key, read_only)
+
     def has_unsaved(self) -> bool:
         return any(v["unsaved"] for v in self._tabs.values())
 
@@ -531,6 +555,11 @@ class EditorBridge(QObject):
         for key, tab in self._tabs.items():
             if os.path.normcase(os.path.normpath(key)) == norm:
                 return key, tab
+        if not filepath.startswith('mount://'):
+            real = os.path.normcase(os.path.realpath(filepath))
+            for key, tab in self._tabs.items():
+                if not key.startswith('mount://') and os.path.normcase(os.path.realpath(key)) == real:
+                    return key, tab
         return None, None
 
     def is_unsaved(self, filepath: str) -> bool:
@@ -666,6 +695,12 @@ class EditorBridge(QObject):
                 self.warningRaised.emit("NeoBranch save error", str(e))
                 self._save_failure(filepath,e)
                 return
+        if ctx and not metadata:
+            try:
+                from core import filesystem_map
+                filesystem_map.record_entry(ctx["tree_base"], ctx["source_path"], filepath)
+            except Exception:
+                pass
 
         h = hashlib.md5(content.encode("utf-8", errors="ignore")).hexdigest()
         if filepath in self._tabs:

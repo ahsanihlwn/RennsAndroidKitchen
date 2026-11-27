@@ -24,6 +24,12 @@ public class RakBinaryExport extends HeadlessScript {
         row.addProperty("external", f.isExternal());
         return row;
     }
+    private String stringValueAt(Address target) {
+        Data data = currentProgram.getListing().getDefinedDataAt(target);
+        if (data == null || !data.hasStringValue()) return "";
+        Object val = data.getValue();
+        return val == null ? "" : val.toString();
+    }
     @Override public void run() throws Exception {
         String[] args = getScriptArgs();
         if (args.length != 2) throw new IllegalArgumentException("Expected output path and index/address");
@@ -42,6 +48,38 @@ public class RakBinaryExport extends HeadlessScript {
                     rows.add(function(it.next()));
                 }
                 result.add("functions", rows);
+                JsonArray stringXrefs = new JsonArray();
+                ReferenceManager refMgr = currentProgram.getReferenceManager();
+                DataIterator dataIt = currentProgram.getListing().getDefinedData(true);
+                while (dataIt.hasNext()) {
+                    monitor.checkCancelled();
+                    Data data = dataIt.next();
+                    if (!data.hasStringValue()) continue;
+                    Object val = data.getValue();
+                    if (val == null) continue;
+                    String text = val.toString();
+                    if (text.length() < 4) continue;
+                    ReferenceIterator refsTo = refMgr.getReferencesTo(data.getAddress());
+                    JsonArray refRows = new JsonArray();
+                    while (refsTo.hasNext() && refRows.size() < 64) {
+                        Reference ref = refsTo.next();
+                        JsonObject r = new JsonObject();
+                        r.addProperty("from", addr(ref.getFromAddress()));
+                        Function fn = manager.getFunctionContaining(ref.getFromAddress());
+                        r.addProperty("function", fn != null ? fn.getName() : "");
+                        r.addProperty("function_address", fn != null ? addr(fn.getEntryPoint()) : "");
+                        refRows.add(r);
+                    }
+                    if (refRows.size() > 0) {
+                        if (stringXrefs.size() == 50000) { result.addProperty("string_xrefs_truncated", true); break; }
+                        JsonObject entry = new JsonObject();
+                        entry.addProperty("address", addr(data.getAddress()));
+                        entry.addProperty("value", text);
+                        entry.add("refs", refRows);
+                        stringXrefs.add(entry);
+                    }
+                }
+                result.add("string_xrefs", stringXrefs);
             } else {
                 Address address = currentProgram.getAddressFactory().getDefaultAddressSpace().getAddress(args[1]);
                 Function f = manager.getFunctionContaining(address);
@@ -70,7 +108,12 @@ public class RakBinaryExport extends HeadlessScript {
                     for (Reference ref : instruction.getReferencesFrom()) {
                         if (refs.size() >= 20000) { result.addProperty("references_truncated", true); break; }
                         JsonObject reference = new JsonObject(); reference.addProperty("from", addr(ref.getFromAddress()));
-                        reference.addProperty("to", addr(ref.getToAddress())); reference.addProperty("type", ref.getReferenceType().toString()); refs.add(reference);
+                        reference.addProperty("to", addr(ref.getToAddress())); reference.addProperty("type", ref.getReferenceType().toString());
+                        Symbol sym = currentProgram.getSymbolTable().getPrimarySymbol(ref.getToAddress());
+                        if (sym != null) reference.addProperty("to_name", sym.getName());
+                        String strVal = stringValueAt(ref.getToAddress());
+                        if (!strVal.isEmpty()) reference.addProperty("string_value", strVal);
+                        refs.add(reference);
                     }
                 }
                 result.add("instructions", instructions); result.add("references", refs);

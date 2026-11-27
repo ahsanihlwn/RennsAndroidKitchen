@@ -15,6 +15,8 @@ from PySide6.QtCore import (
     Slot,
 )
 
+from core.threader_control import threader_control
+
 _active_threads = set()
 
 print("[CORE STAGE] THREADER CALLED")
@@ -168,8 +170,18 @@ def run_in_thread(fn, arg, callback=None):
 
 
 _thumb_pool = QThreadPool()
-_thumb_pool.setMaxThreadCount(4)
+_thumb_pool.setMaxThreadCount(threader_control.pool_limit())
 _active_pool_signals = set()
+
+
+def sync_pool_limits(limit=None):
+    """Synchronize QThreadPool thread limit with hardware-aware threader_control."""
+    target = int(limit) if limit is not None else threader_control.pool_limit()
+    _thumb_pool.setMaxThreadCount(max(1, target))
+    return _thumb_pool.maxThreadCount()
+
+
+threader_control.register_pool_hook(sync_pool_limits)
 
 
 class _PoolSignals(QObject):
@@ -213,7 +225,10 @@ class _PoolRunnable(QRunnable):
         except Exception as e:
             from core.command_context import failure_from_exception
             ok,payload=False,failure_from_exception(e)
-        self.signals.finished.emit(self.token, ok, payload)
+        try:
+            self.signals.finished.emit(self.token, ok, payload)
+        except RuntimeError:
+            pass
 
 
 def run_in_pool(token, fn, arg, callback):
@@ -244,6 +259,7 @@ def run_in_pool(token, fn, arg, callback):
 
     signals.finished.connect(signals.on_finished)
 
+    sync_pool_limits()
     runnable = _PoolRunnable(token, scoped_work, None, signals)
     runnable.setAutoDelete(True)
     _thumb_pool.start(runnable)

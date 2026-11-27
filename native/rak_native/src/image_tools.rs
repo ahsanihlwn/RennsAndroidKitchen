@@ -5,18 +5,34 @@
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use ext_cli::check::inspect_ext;
-use ext_cli::unpack::unpack_image;
-use lp_tools::lp::{inspect_super_image, unpack_super_image, unsparse_super_image};
+use ext_cli::unpack::unpack_image_with_progress;
+use lp_tools::lp::{
+    inspect_super_image, unpack_super_image_with_progress, unsparse_super_image_with_progress,
+    write_empty_image_file, write_to_image_file_with_progress, BlockDeviceInfo, MetadataBuilder,
+    DEFAULT_BLOCK_SIZE, DEFAULT_GROUP, DEFAULT_PARTITION_ALIGNMENT, LP_PARTITION_ATTR_NONE,
+    LP_PARTITION_ATTR_READONLY,
+};
+use lp_tools::sparse::ImageSource;
 use make_ext4fs_rs::config::fs_config::{CannedFsConfig, FsConfigProvider};
 use make_ext4fs_rs::config::selinux::FileContexts;
-use make_ext4fs_rs::ext4::fs::{make_ext4fs, Ext4Options, OutputTarget};
+use make_ext4fs_rs::ext4::fs::{make_ext4fs_with_progress, Ext4Options, OutputTarget};
 use make_ext4fs_rs::sparse::SparseFile;
+
+fn emit_py_progress(cb: Option<&Py<PyAny>>, pct: u8, stage: &str) {
+    let Some(func) = cb else {
+        return;
+    };
+    Python::attach(|py| {
+        let _ = func.call1(py, (pct, stage));
+    });
+}
 use pac_extractor::pac::{open_pac_file, prepare_output_dir};
 use std::collections::HashSet;
 use std::sync::{Mutex, MutexGuard};
@@ -74,7 +90,7 @@ pub fn super_info_json(py: Python<'_>, img_path: PathBuf, slot: u32) -> PyResult
 
 
 #[pyfunction]
-#[pyo3(signature = (img_path, out_dir, partitions=None, slot=0, normalize=false))]
+#[pyo3(signature = (img_path, out_dir, partitions=None, slot=0, normalize=false, progress=None))]
 pub fn super_extract_json(
     py: Python<'_>,
     img_path: PathBuf,
@@ -82,11 +98,17 @@ pub fn super_extract_json(
     partitions: Option<Vec<String>>,
     slot: u32,
     normalize: bool,
+    progress: Option<Py<PyAny>>,
 ) -> PyResult<String> {
     let requested = partitions.unwrap_or_default();
     let out_dir_str = out_dir.to_string_lossy().into_owned();
+    let cb = progress.as_ref();
     let outputs = py
-        .detach(move || unpack_super_image(&img_path, &out_dir, &requested, slot, normalize))
+        .detach(move || {
+            unpack_super_image_with_progress(&img_path, &out_dir, &requested, slot, normalize, |pct, stage| {
+                emit_py_progress(cb, pct, stage);
+            })
+        })
         .map_err(|e| PyOSError::new_err(e.to_string()))?;
     let payload = SuperExtractJson {
         out_dir: out_dir_str,
@@ -100,15 +122,221 @@ pub fn super_extract_json(
 
 
 
+#[derive(Deserialize)]
+struct SuperMakeGroupSpec {
+    name: String,
+    max_size: u64,
+}
+
+#[derive(Deserialize)]
+struct SuperMakePartitionSpec {
+    name: String,
+    #[serde(default = "default_readonly_attr")]
+    attr: String,
+    #[serde(default)]
+    size: u64,
+    #[serde(default)]
+    group: String,
+    #[serde(default)]
+    image: Option<PathBuf>,
+}
+
+fn default_readonly_attr() -> String {
+    "readonly".to_string()
+}
+
+#[derive(Serialize)]
+struct SuperMakeResultJson {
+    output_path: String,
+    device_size: u64,
+    sparse: bool,
+    virtual_ab: bool,
+    partitions: Vec<String>,
+    bytes_written: u64,
+}
+
 #[pyfunction]
-#[pyo3(signature = (img_path, out_dir=None))]
+pub fn image_logical_size(py: Python<'_>, img_path: PathBuf) -> PyResult<u64> {
+    py.detach(move || {
+        let file = File::open(&img_path)?;
+        let src = ImageSource::open(file).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e.to_string()))?;
+        Ok::<u64, std::io::Error>(src.logical_size())
+    })
+    .map_err(|e| PyOSError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+#[pyo3(signature = (
+    output_path,
+    device_size,
+    groups_json,
+    partitions_json,
+    metadata_size=65536,
+    metadata_slots=2,
+    block_size=DEFAULT_BLOCK_SIZE,
+    alignment=DEFAULT_PARTITION_ALIGNMENT,
+    alignment_offset=0,
+    super_name="super".to_string(),
+    sparse=false,
+    virtual_ab=false,
+    auto_slot_suffixing=false,
+    force_full_image=true,
+    progress=None
+))]
+#[allow(clippy::too_many_arguments)]
+pub fn super_make_json(
+    py: Python<'_>,
+    output_path: PathBuf,
+    device_size: u64,
+    groups_json: String,
+    partitions_json: String,
+    metadata_size: u32,
+    metadata_slots: u32,
+    block_size: u32,
+    alignment: u32,
+    alignment_offset: u32,
+    super_name: String,
+    sparse: bool,
+    virtual_ab: bool,
+    auto_slot_suffixing: bool,
+    force_full_image: bool,
+    progress: Option<Py<PyAny>>,
+) -> PyResult<String> {
+    let groups: Vec<SuperMakeGroupSpec> = serde_json::from_str(&groups_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid groups_json: {e}")))?;
+    let partitions: Vec<SuperMakePartitionSpec> = serde_json::from_str(&partitions_json)
+        .map_err(|e| PyValueError::new_err(format!("Invalid partitions_json: {e}")))?;
+    if partitions.is_empty() {
+        return Err(PyValueError::new_err("Partition list cannot be empty."));
+    }
+    let cb = progress.as_ref();
+
+    let payload = py
+        .detach(move || -> Result<SuperMakeResultJson, String> {
+            let dev = BlockDeviceInfo::new(
+                &super_name,
+                device_size,
+                alignment,
+                alignment_offset,
+                block_size,
+            )
+            .map_err(|e| e.to_string())?;
+            let mut builder = MetadataBuilder::new(
+                &[dev],
+                &super_name,
+                metadata_size,
+                metadata_slots,
+            )
+            .map_err(|e| format!("Invalid metadata parameters: {e}"))?;
+
+            if auto_slot_suffixing {
+                builder.set_auto_slot_suffixing();
+            }
+            if virtual_ab {
+                builder.set_virtual_ab_device_flag();
+            }
+
+            for g in &groups {
+                if g.name.is_empty() {
+                    return Err("Partition group must have a valid name.".into());
+                }
+                if g.name != DEFAULT_GROUP {
+                    builder
+                        .add_group(&g.name, g.max_size)
+                        .map_err(|e| e.to_string())?;
+                }
+            }
+
+            let mut images: BTreeMap<String, PathBuf> = BTreeMap::new();
+            let mut part_names: Vec<String> = Vec::with_capacity(partitions.len());
+            for p in &partitions {
+                if p.name.is_empty() {
+                    return Err("Partition must have a valid name.".into());
+                }
+                let attr_flags = match p.attr.as_str() {
+                    "readonly" => LP_PARTITION_ATTR_READONLY,
+                    "none" => LP_PARTITION_ATTR_NONE,
+                    other => return Err(format!("Attribute not recognized: {other}")),
+                };
+                let group_name = if p.group.is_empty() {
+                    DEFAULT_GROUP
+                } else {
+                    p.group.as_str()
+                };
+                let mut part_size = p.size;
+                if let Some(img_path) = &p.image {
+                    if !img_path.as_os_str().is_empty() {
+                        if part_size == 0 {
+                            let file = File::open(img_path).map_err(|e| {
+                                format!("Could not open image '{}': {e}", img_path.display())
+                            })?;
+                            let src = ImageSource::open(file).map_err(|e| e.to_string())?;
+                            part_size = src.logical_size();
+                        }
+                        images.insert(p.name.clone(), img_path.clone());
+                    }
+                }
+                let part_idx = builder
+                    .add_partition(&p.name, group_name, attr_flags)
+                    .map_err(|e| format!("Could not add partition {}: {e}", p.name))?;
+                builder
+                    .resize_partition(part_idx, part_size, &[])
+                    .map_err(|e| e.to_string())?;
+                part_names.push(p.name.clone());
+            }
+
+            let metadata = builder.export().map_err(|e| e.to_string())?;
+            if let Some(parent) = output_path.parent() {
+                if !parent.as_os_str().is_empty() && !parent.exists() {
+                    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+                }
+            }
+
+            if !images.is_empty() || force_full_image {
+                write_to_image_file_with_progress(
+                    &output_path,
+                    &metadata,
+                    block_size,
+                    &images,
+                    sparse,
+                    |pct, stage| emit_py_progress(cb, pct, stage),
+                )
+                .map_err(|e| e.to_string())?;
+            } else {
+                write_empty_image_file(&output_path, &metadata).map_err(|e| e.to_string())?;
+                emit_py_progress(cb, 100, "Done");
+            }
+
+            let bytes_written = fs::metadata(&output_path).map(|m| m.len()).unwrap_or(0);
+            Ok(SuperMakeResultJson {
+                output_path: output_path.to_string_lossy().into_owned(),
+                device_size,
+                sparse,
+                virtual_ab,
+                partitions: part_names,
+                bytes_written,
+            })
+        })
+        .map_err(PyOSError::new_err)?;
+
+    serde_json::to_string(&payload).map_err(|e| PyOSError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+#[pyo3(signature = (img_path, out_dir=None, progress=None))]
 pub fn super_unsparse(
     py: Python<'_>,
     img_path: PathBuf,
     out_dir: Option<PathBuf>,
+    progress: Option<Py<PyAny>>,
 ) -> PyResult<String> {
+    let cb = progress.as_ref();
     let out = py
-        .detach(move || unsparse_super_image(&img_path, out_dir.as_deref()))
+        .detach(move || {
+            unsparse_super_image_with_progress(&img_path, out_dir.as_deref(), |pct, stage| {
+                emit_py_progress(cb, pct, stage);
+            })
+        })
         .map_err(|e| PyOSError::new_err(e.to_string()))?;
     Ok(out.to_string_lossy().into_owned())
 }
@@ -137,15 +365,408 @@ pub fn ext_inspect_json(py: Python<'_>, img_path: PathBuf) -> PyResult<String> {
 
 
 #[pyfunction]
-pub fn ext_unpack(py: Python<'_>, img_path: PathBuf) -> PyResult<String> {
+#[pyo3(signature = (img_path, progress=None))]
+pub fn ext_unpack(
+    py: Python<'_>,
+    img_path: PathBuf,
+    progress: Option<Py<PyAny>>,
+) -> PyResult<String> {
+    let cb = progress.as_ref();
     let out_dir = py
-        .detach(move || unpack_image(&img_path))
+        .detach(move || unpack_image_with_progress(&img_path, |pct, stage| emit_py_progress(cb, pct, stage)))
         .map_err(|e| PyOSError::new_err(e.to_string()))?;
     Ok(out_dir.to_string_lossy().into_owned())
 }
 
+#[derive(Serialize)]
+struct ExtNodeJson {
+    path: String,
+    ino: u32,
+    size: u64,
+    mode: u16,
+    perm: String,
+    is_dir: bool,
+    is_link: bool,
+    target: Option<String>,
+    selinux: Option<String>,
+}
+
+impl From<ext_cli::extfs::ExtFileNode> for ExtNodeJson {
+    fn from(n: ext_cli::extfs::ExtFileNode) -> Self {
+        Self {
+            path: n.path,
+            ino: n.ino,
+            size: n.size,
+            mode: n.mode,
+            perm: n.perm,
+            is_dir: n.is_dir,
+            is_link: n.is_link,
+            target: n.target,
+            selinux: n.selinux,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ExtChildEntryJson {
+    ino: u32,
+    name: String,
+    is_dir: bool,
+    is_link: bool,
+    size: u64,
+}
+
+#[derive(Serialize)]
+struct ExtUsageJson {
+    fs: String,
+    block_size: u64,
+    file_size: u64,
+    total_blocks: u64,
+    meta_bytes: u64,
+    used_blocks: u64,
+    used_bytes: u64,
+    wasted_blocks: u64,
+    wasted_bytes: u64,
+    free_blocks: u64,
+    free_bytes: u64,
+    logical_bytes: u64,
+    reclaimable_bytes: u64,
+    files: usize,
+    dirs: usize,
+    links: usize,
+}
+
+#[derive(Serialize)]
+struct ExtWritePlanJson {
+    mode: String,
+    old_size: u64,
+    new_size: u64,
+    grow_bytes: u64,
+}
+
+#[derive(Serialize)]
+struct ExtWriteResultJson {
+    path: String,
+    mode: String,
+    old_size: u64,
+    new_size: u64,
+    blocks_freed: u64,
+}
+
+#[derive(Serialize)]
+struct ExtUnlinkResultJson {
+    removed: String,
+    was_dir: bool,
+    entries_removed: usize,
+    blocks_freed: u64,
+    mode: String,
+}
+
+/// Persistent native EXT2/3/4 reader handle for mounting, browsing, reading, and APEX payloads.
+#[pyclass]
+pub struct NativeExtReader {
+    vol: Mutex<Option<ext_cli::extfs::Volume>>,
+}
+
+impl NativeExtReader {
+    pub(crate) fn from_volume(vol: ext_cli::extfs::Volume) -> Self {
+        Self {
+            vol: Mutex::new(Some(vol)),
+        }
+    }
+
+    pub(crate) fn with_vol<T, F>(&self, f: F) -> PyResult<T>
+    where
+        F: FnOnce(&mut ext_cli::extfs::Volume) -> Result<T, String>,
+    {
+        let mut guard = self
+            .vol
+            .lock()
+            .map_err(|_| PyOSError::new_err("NativeExtReader mutex poisoned"))?;
+        let vol = guard
+            .as_mut()
+            .ok_or_else(|| PyValueError::new_err("NativeExtReader is closed"))?;
+        f(vol).map_err(PyOSError::new_err)
+    }
+}
+
+#[pymethods]
+impl NativeExtReader {
+    #[new]
+    fn new(py: Python<'_>, path: PathBuf) -> PyResult<Self> {
+        let vol = py
+            .detach(move || -> Result<ext_cli::extfs::Volume, String> {
+                let abs = abs_path(&path)?;
+                let file = File::open(&abs).map_err(|e| e.to_string())?;
+                ext_cli::extfs::Volume::open(file).map_err(|e| e.to_string())
+            })
+            .map_err(PyOSError::new_err)?;
+        Ok(Self {
+            vol: Mutex::new(Some(vol)),
+        })
+    }
+
+    #[staticmethod]
+    fn from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
+        let owned = data.to_vec();
+        let vol = py
+            .detach(move || -> Result<ext_cli::extfs::Volume, String> {
+                ext_cli::extfs::Volume::open_bytes(owned).map_err(|e| e.to_string())
+            })
+            .map_err(PyOSError::new_err)?;
+        Ok(Self {
+            vol: Mutex::new(Some(vol)),
+        })
+    }
+
+    #[getter]
+    fn root_ino(&self) -> PyResult<u32> {
+        Ok(ext_cli::extfs::EXT4_ROOT_INO)
+    }
+
+    #[getter]
+    fn is_sparse(&self) -> PyResult<bool> {
+        self.with_vol(|v| Ok(v.is_sparse()))
+    }
+
+    #[getter]
+    fn block_size(&self) -> PyResult<u64> {
+        self.with_vol(|v| Ok(v.block_size))
+    }
+
+    #[getter]
+    fn has_64bit(&self) -> PyResult<bool> {
+        self.with_vol(|v| Ok(v.superblock.is_64bit()))
+    }
+
+    fn walk_json(&self, py: Python<'_>) -> PyResult<String> {
+        py.detach(|| {
+            self.with_vol(|v| {
+                let nodes: Vec<ExtNodeJson> = v
+                    .walk_nodes()
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(ExtNodeJson::from)
+                    .collect();
+                serde_json::to_string(&nodes).map_err(|e| e.to_string())
+            })
+        })
+    }
+
+    fn children_json(&self, py: Python<'_>, ino: u32) -> PyResult<String> {
+        py.detach(|| {
+            self.with_vol(|v| {
+                let rows: Vec<ExtChildEntryJson> = v
+                    .children_of(ino)
+                    .map_err(|e| e.to_string())?
+                    .into_iter()
+                    .map(|c| ExtChildEntryJson {
+                        ino: c.ino,
+                        name: c.name,
+                        is_dir: c.is_dir,
+                        is_link: c.is_link,
+                        size: c.size,
+                    })
+                    .collect();
+                serde_json::to_string(&rows).map_err(|e| e.to_string())
+            })
+        })
+    }
+
+    fn stat_ino_json(&self, py: Python<'_>, ino: u32) -> PyResult<String> {
+        py.detach(|| {
+            self.with_vol(|v| {
+                let node: ExtNodeJson = v.stat_ino(ino).map_err(|e| e.to_string())?.into();
+                serde_json::to_string(&node).map_err(|e| e.to_string())
+            })
+        })
+    }
+
+    fn stat_path_json(&self, py: Python<'_>, internal_path: String) -> PyResult<String> {
+        py.detach(|| {
+            self.with_vol(|v| {
+                let node: ExtNodeJson = v
+                    .lookup_path(&internal_path)
+                    .map_err(|e| e.to_string())?
+                    .into();
+                serde_json::to_string(&node).map_err(|e| e.to_string())
+            })
+        })
+    }
+
+    fn read_file(&self, py: Python<'_>, ino: u32) -> PyResult<Py<PyBytes>> {
+        let data = py.detach(|| {
+            self.with_vol(|v| {
+                let inode = v.read_inode(ino, 0).map_err(|e| e.to_string())?;
+                v.read_inode_bytes(&inode).map_err(|e| e.to_string())
+            })
+        })?;
+        Ok(PyBytes::new(py, &data).unbind())
+    }
+
+    fn read_path(&self, py: Python<'_>, internal_path: String) -> PyResult<Py<PyBytes>> {
+        let data = py.detach(|| {
+            self.with_vol(|v| {
+                let (bytes, _node) = v.read_path(&internal_path).map_err(|e| e.to_string())?;
+                Ok(bytes)
+            })
+        })?;
+        Ok(PyBytes::new(py, &data).unbind())
+    }
+
+    fn close(&self) {
+        if let Ok(mut guard) = self.vol.lock() {
+            *guard = None;
+        }
+    }
+
+    fn __enter__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    #[pyo3(signature = (_exc_type=None, _exc_val=None, _exc_tb=None))]
+    fn __exit__(
+        &self,
+        _exc_type: Option<&Bound<'_, PyAny>>,
+        _exc_val: Option<&Bound<'_, PyAny>>,
+        _exc_tb: Option<&Bound<'_, PyAny>>,
+    ) -> bool {
+        self.close();
+        false
+    }
+}
+
 #[pyfunction]
-#[pyo3(signature = (out_img, src_dir=None, size_bytes=0, mount_point=None, file_contexts=None, fs_config=None, block_size=4096, sparse=false, label=None))]
+pub fn ext_usage_json(py: Python<'_>, image: PathBuf) -> PyResult<String> {
+    let payload = py
+        .detach(move || -> Result<ExtUsageJson, String> {
+            let abs = abs_path(&image)?;
+            let file_size = fs::metadata(&abs).map(|m| m.len()).unwrap_or(0);
+            let file = File::open(&abs).map_err(|e| e.to_string())?;
+            let mut vol = ext_cli::extfs::Volume::open(file).map_err(|e| e.to_string())?;
+            let rep = vol.usage_report(file_size).map_err(|e| e.to_string())?;
+            Ok(ExtUsageJson {
+                fs: rep.fs,
+                block_size: rep.block_size,
+                file_size: rep.file_size,
+                total_blocks: rep.total_blocks,
+                meta_bytes: rep.meta_bytes,
+                used_blocks: rep.used_blocks,
+                used_bytes: rep.used_bytes,
+                wasted_blocks: rep.wasted_blocks,
+                wasted_bytes: rep.wasted_bytes,
+                free_blocks: rep.free_blocks,
+                free_bytes: rep.free_bytes,
+                logical_bytes: rep.logical_bytes,
+                reclaimable_bytes: rep.reclaimable_bytes,
+                files: rep.files,
+                dirs: rep.dirs,
+                links: rep.links,
+            })
+        })
+        .map_err(PyOSError::new_err)?;
+    serde_json::to_string(&payload).map_err(|e| PyOSError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+pub fn ext_edit_plan_json(
+    py: Python<'_>,
+    image: PathBuf,
+    internal_path: String,
+    new_len: u64,
+) -> PyResult<String> {
+    let payload = py
+        .detach(move || -> Result<ExtWritePlanJson, String> {
+            let abs = abs_path(&image)?;
+            let plan = ext_cli::edit::plan_path_write(&abs, &internal_path, new_len)?;
+            Ok(ExtWritePlanJson {
+                mode: plan.mode,
+                old_size: plan.old_size,
+                new_size: plan.new_size,
+                grow_bytes: plan.grow_bytes,
+            })
+        })
+        .map_err(PyOSError::new_err)?;
+    serde_json::to_string(&payload).map_err(|e| PyOSError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+pub fn ext_edit_write(
+    py: Python<'_>,
+    image: PathBuf,
+    internal_path: String,
+    data: Vec<u8>,
+) -> PyResult<String> {
+    let payload = py
+        .detach(move || -> Result<ExtWriteResultJson, String> {
+            let abs = abs_path(&image)?;
+            let res = ext_cli::edit::write_path_data(&abs, &internal_path, &data)?;
+            Ok(ExtWriteResultJson {
+                path: res.path,
+                mode: res.mode,
+                old_size: res.old_size,
+                new_size: res.new_size,
+                blocks_freed: res.blocks_freed,
+            })
+        })
+        .map_err(PyOSError::new_err)?;
+    serde_json::to_string(&payload).map_err(|e| PyOSError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+pub fn ext_edit_chmod(
+    py: Python<'_>,
+    image: PathBuf,
+    internal_path: String,
+    perm_octal: u16,
+) -> PyResult<u16> {
+    py.detach(move || -> Result<u16, String> {
+        let abs = abs_path(&image)?;
+        ext_cli::edit::write_path_mode(&abs, &internal_path, perm_octal)
+    })
+    .map_err(PyOSError::new_err)
+}
+
+#[pyfunction]
+pub fn ext_edit_selinux(
+    py: Python<'_>,
+    image: PathBuf,
+    internal_path: String,
+    new_ctx: String,
+) -> PyResult<String> {
+    py.detach(move || -> Result<String, String> {
+        let abs = abs_path(&image)?;
+        ext_cli::edit::write_path_selinux(&abs, &internal_path, &new_ctx)
+    })
+    .map_err(PyOSError::new_err)
+}
+
+#[pyfunction]
+#[pyo3(signature = (image, internal_path, recursive=true))]
+pub fn ext_edit_rm(
+    py: Python<'_>,
+    image: PathBuf,
+    internal_path: String,
+    recursive: bool,
+) -> PyResult<String> {
+    let payload = py
+        .detach(move || -> Result<ExtUnlinkResultJson, String> {
+            let abs = abs_path(&image)?;
+            let res = ext_cli::edit::unlink_path(&abs, &internal_path, recursive)?;
+            Ok(ExtUnlinkResultJson {
+                removed: res.removed,
+                was_dir: res.was_dir,
+                entries_removed: res.entries_removed,
+                blocks_freed: res.blocks_freed,
+                mode: res.mode,
+            })
+        })
+        .map_err(PyOSError::new_err)?;
+    serde_json::to_string(&payload).map_err(|e| PyOSError::new_err(e.to_string()))
+}
+
+#[pyfunction]
+#[pyo3(signature = (out_img, src_dir=None, size_bytes=0, mount_point=None, file_contexts=None, fs_config=None, block_size=4096, sparse=false, label=None, progress=None))]
 #[allow(clippy::too_many_arguments)]
 pub fn ext_make_fs(
     py: Python<'_>,
@@ -158,8 +779,10 @@ pub fn ext_make_fs(
     block_size: u32,
     sparse: bool,
     label: Option<String>,
+    progress: Option<Py<PyAny>>,
 ) -> PyResult<String> {
     let out_str = out_img.to_string_lossy().into_owned();
+    let cb = progress.as_ref();
     py.detach(move || -> Result<(), String> {
         let sehnd = if let Some(ref fc_path) = file_contexts {
             Some(FileContexts::open(fc_path).map_err(|e| format!("{}: {e}", fc_path.display()))?)
@@ -200,7 +823,7 @@ pub fn ext_make_fs(
         };
 
         let src_string = src_dir.map(|p| p.to_string_lossy().into_owned());
-        let result = make_ext4fs(
+        let result = make_ext4fs_with_progress(
             OutputTarget::File(out_file),
             src_string.as_deref(),
             mount_point.as_deref(),
@@ -208,6 +831,7 @@ pub fn ext_make_fs(
             sehnd.as_ref(),
             &opts,
             None,
+            |pct, stage| emit_py_progress(cb, pct, stage),
         );
         if let Err(err) = result {
             let _ = fs::remove_file(&out_img);
@@ -220,12 +844,13 @@ pub fn ext_make_fs(
 }
 
 #[pyfunction]
-#[pyo3(signature = (src_path, dst_path, block_size=4096))]
+#[pyo3(signature = (src_path, dst_path, block_size=4096, progress=None))]
 pub fn sparse_img2simg(
     py: Python<'_>,
     src_path: PathBuf,
     dst_path: PathBuf,
     block_size: u32,
+    progress: Option<Py<PyAny>>,
 ) -> PyResult<String> {
     if block_size < 1024 || block_size % 4 != 0 {
         return Err(PyValueError::new_err(format!(
@@ -233,7 +858,9 @@ pub fn sparse_img2simg(
         )));
     }
     let dst_str = dst_path.to_string_lossy().into_owned();
+    let cb = progress.as_ref();
     py.detach(move || -> Result<(), String> {
+        emit_py_progress(cb, 5, "Reading raw image");
         let in_file = File::open(&src_path)
             .map_err(|e| format!("Cannot open input file {}: {e}", src_path.display()))?;
         let mut sf = SparseFile::read_normal_file(in_file, block_size)
@@ -249,7 +876,10 @@ pub fn sparse_img2simg(
             .truncate(true)
             .open(&dst_path)
             .map_err(|e| format!("Cannot open output file {}: {e}", dst_path.display()))?;
-        if let Err(e) = sf.write_to_file(out_file, false, true, false) {
+        if let Err(e) = sf.write_to_file_with_progress(out_file, false, true, false, |pct| {
+            let mapped = 15 + ((pct as usize * 85) / 100).min(85) as u8;
+            emit_py_progress(cb, mapped, "Writing sparse image");
+        }) {
             let _ = fs::remove_file(&dst_path);
             return Err(format!("Failed to write sparse file: {e}"));
         }
@@ -260,9 +890,17 @@ pub fn sparse_img2simg(
 }
 
 #[pyfunction]
-pub fn sparse_simg2img(py: Python<'_>, src_path: PathBuf, dst_path: PathBuf) -> PyResult<String> {
+#[pyo3(signature = (src_path, dst_path, progress=None))]
+pub fn sparse_simg2img(
+    py: Python<'_>,
+    src_path: PathBuf,
+    dst_path: PathBuf,
+    progress: Option<Py<PyAny>>,
+) -> PyResult<String> {
     let dst_str = dst_path.to_string_lossy().into_owned();
+    let cb = progress.as_ref();
     py.detach(move || -> Result<(), String> {
+        emit_py_progress(cb, 5, "Reading sparse image");
         let in_file = File::open(&src_path)
             .map_err(|e| format!("Cannot open input file {}: {e}", src_path.display()))?;
         let mut sf = SparseFile::import_file(in_file, true, false)
@@ -278,7 +916,10 @@ pub fn sparse_simg2img(py: Python<'_>, src_path: PathBuf, dst_path: PathBuf) -> 
             .truncate(true)
             .open(&dst_path)
             .map_err(|e| format!("Cannot open output file {}: {e}", dst_path.display()))?;
-        if let Err(e) = sf.write_to_file(out_file, false, false, false) {
+        if let Err(e) = sf.write_to_file_with_progress(out_file, false, false, false, |pct| {
+            let mapped = 15 + ((pct as usize * 85) / 100).min(85) as u8;
+            emit_py_progress(cb, mapped, "Writing raw image");
+        }) {
             let _ = fs::remove_file(&dst_path);
             return Err(format!("Cannot write raw image {}: {e}", Path::new(&dst_path).display()));
         }
@@ -897,8 +1538,11 @@ pub fn erofs_read_bytes(
     write_configs=true,
     overwrite=true,
     threads=0,
-    offset=None
+    offset=None,
+    symlink_mode=None,
+    progress=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn erofs_unpack(
     py: Python<'_>,
     image: PathBuf,
@@ -911,11 +1555,20 @@ pub fn erofs_unpack(
     overwrite: bool,
     threads: usize,
     offset: Option<u64>,
+    symlink_mode: Option<String>,
+    progress: Option<Py<PyAny>>,
 ) -> PyResult<String> {
+    let cb = progress.as_ref();
     let payload = py
         .detach(move || -> Result<erofs_rs::extract::ExtractReport, String> {
             let img_abs = abs_path(&image)?;
             let out_abs = abs_path(&out_dir)?;
+            let parsed_symlink_mode = match symlink_mode.as_deref() {
+                Some(s) if !s.trim().is_empty() => {
+                    erofs_rs::extract::SymlinkMode::parse(s).map_err(|e| e.to_string())?
+                }
+                _ => erofs_rs::extract::SymlinkMode::Auto,
+            };
             let base_name = image_base_name.unwrap_or_else(|| {
                 image
                     .file_stem()
@@ -933,10 +1586,14 @@ pub fn erofs_unpack(
                 write_configs,
                 overwrite,
                 verify_digest: false,
+                symlink_mode: parsed_symlink_mode,
                 threads,
                 quiet: true,
             };
-            erofs_rs::extract::extract_image(&img, &opts).map_err(|e| e.to_string())
+            erofs_rs::extract::extract_image_with_progress(&img, &opts, |pct, stage| {
+                emit_py_progress(cb, pct, stage);
+            })
+            .map_err(|e| e.to_string())
         })
         .map_err(PyOSError::new_err)?;
     serde_json::to_string(&payload).map_err(|e| PyOSError::new_err(e.to_string()))
@@ -962,8 +1619,10 @@ pub fn erofs_unpack(
     force_gid=None,
     all_root=None,
     enable_crc=None,
-    threads=0
+    threads=0,
+    progress=None
 ))]
+#[allow(clippy::too_many_arguments)]
 pub fn erofs_pack(
     py: Python<'_>,
     source_dir: PathBuf,
@@ -984,7 +1643,9 @@ pub fn erofs_pack(
     all_root: Option<bool>,
     enable_crc: Option<bool>,
     threads: usize,
+    progress: Option<Py<PyAny>>,
 ) -> PyResult<String> {
+    let cb = progress.as_ref();
     let payload = py
         .detach(move || -> Result<erofs_rs::pack::PackReport, String> {
             let src_abs = abs_path(&source_dir)?;
@@ -1046,7 +1707,10 @@ pub fn erofs_pack(
             }
             opts.threads = threads;
 
-            erofs_rs::pack::pack_directory(&opts).map_err(|e| e.to_string())
+            erofs_rs::pack::pack_directory_with_progress(&opts, |pct, stage| {
+                emit_py_progress(cb, pct, stage);
+            })
+            .map_err(|e| e.to_string())
         })
         .map_err(PyOSError::new_err)?;
     serde_json::to_string(&payload).map_err(|e| PyOSError::new_err(e.to_string()))
@@ -1248,7 +1912,13 @@ pub struct NativeErofsReader {
 }
 
 impl NativeErofsReader {
-    fn get_image(&self) -> PyResult<Arc<erofs_rs::reader::ErofsImage>> {
+    pub(crate) fn from_erofs(img: erofs_rs::reader::ErofsImage) -> Self {
+        Self {
+            img: Mutex::new(Some(Arc::new(img))),
+        }
+    }
+
+    pub(crate) fn get_image(&self) -> PyResult<Arc<erofs_rs::reader::ErofsImage>> {
         let guard = self
             .img
             .lock()

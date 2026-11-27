@@ -88,21 +88,24 @@ C.Slider {
         id: handleItem
         x: control.leftPadding + control.knobPosition * control.availableWidth - width / 2
         y: Math.round((control.height - height) / 2)
-        implicitWidth: control.knobDiameter
-        implicitHeight: control.knobDiameter
+        implicitWidth: Math.max(24, control.knobDiameter)
+        implicitHeight: Math.max(24, control.knobDiameter)
         LiquidKnob {
-            anchors.fill: parent
+            anchors.centerIn: parent
+            width: control.knobDiameter
+            height: control.knobDiameter
             objectName: "sliderKnob_" + control.objectName
             trackSource: track
             preferences: control.preferences
+            glassEnabled: control.capsuleTrack
             knobColor: control.capsuleTrack ? (control.colors.BG_DARK || control.colors.BG2 || "#12131c") : control.colors.accent_hex
             surfaceColor: control.colors.BG_DARK || control.colors.BG2 || "#12131c"
             enabled: control.enabled
             pressed: control.pressed
             position: control.knobPosition
             animationsEnabled: control.animationsEnabled
-            pressedScaleX: control.capsuleTrack ? 1.85 : 1.5
-            pressedScaleY: control.capsuleTrack ? 1.5 : 1.5
+            pressedScaleX: control.capsuleTrack ? 1.85 : 1.25
+            pressedScaleY: control.capsuleTrack ? 1.5 : 1.25
         }
     }
 }

@@ -31,6 +31,7 @@ Item {
         {key:"layout",icon:"tree_mode",tip:"Toggle Layout / Split View"},
         {key:"terminal",icon:"terminal",tip:"Terminal"},
         {key:"android",icon:"android_tools",tip:"Android Tools"},
+        {key:"bootAnalyzer",icon:"boot_analyzer",tip:"Boot Analyzer"},
         {key:"import",icon:"import",tip:"Import files"}
     ].concat(workspace.agentChat && workspace.agentChat.available?[{key:"agentInbox",icon:"agent",tip:workspace.agentChat.opened?"Minimize agent":"Agent chat"}]:[]).concat(workspace.privateFeatures && workspace.privateFeatures.allowed?[
         {key:"automation",icon:"automation",tip:"Automation"},
@@ -124,7 +125,7 @@ Item {
         enabled: toolbar.compact && !toolbar.modeAnimating
         preferences: toolbar.preferences; iconKey: "expand"; cornerRadius: 8
         fillColor: toolbar.modeAnimating?"transparent":toolbar.groupFill
-        edgeWidth: toolbar.modeAnimating?0:1; edgeColor: c.b06; hoverEdgeColor: c.b14
+        edgeWidth: toolbar.modeAnimating?0:1; edgeColor: c.b06; hoverEdgeColor: c.b12
         property Component returnCaption: Component {
             Item {
                 WorkspaceNativeIcon {
@@ -189,7 +190,7 @@ Item {
                 objectName: "workspaceToolbarCollapse"
                 anchors.verticalCenter: parent.verticalCenter
                 preferences: toolbar.preferences; iconKey: "expand"; cornerRadius: 8
-                fillColor: toolbar.groupFill; edgeWidth: 1; edgeColor: c.b06; hoverEdgeColor: c.b14
+                fillColor: toolbar.groupFill; edgeWidth: 1; edgeColor: c.b06; hoverEdgeColor: c.b12
                 onClicked: popup.close()
             }
             SmoothRectangle { width: 1; height: 18; color: c.b08; anchors.verticalCenter: parent.verticalCenter }

@@ -73,7 +73,7 @@ Item {
         const agentAvail = !!(pane.hostWindow.workspace && pane.hostWindow.workspace.agentChat && pane.hostWindow.workspace.agentChat.available)
         const hasSel = !!editor.hasSelection
         const canEdit = !editor.readOnly
-        const filePath = editor.filePath || (pane.session ? pane.session.currentPath : "")
+        const filePath = (pane.hostWindow && pane.hostWindow.workspace && pane.hostWindow.workspace.activeTab) || editor.filePath || (pane.session ? pane.session.currentPath : "")
         const actions = [
             { key: "copy", label: "Copy", shortcut: "Ctrl+C", enabled: hasSel, callback: function() { editor.copy() } },
             { key: "cut", label: "Cut", shortcut: "Ctrl+X", enabled: hasSel && canEdit, callback: function() { editor.cut() } },
@@ -115,6 +115,7 @@ Item {
             anchors.fill: parent
             focus: true
             activeFocusOnTab: true
+            animationsEnabled: !pane.effectivePreferences || !pane.effectivePreferences.settings || pane.effectivePreferences.settings.animations !== false
             readonly property bool lightTheme: (pane.colors && pane.colors.is_light !== undefined) ? pane.colors.is_light : (pane.effectivePreferences.paletteName ? pane.effectivePreferences.paletteName.indexOf("light") >= 0 : false)
             readonly property color selectedBg: (pane.colors && pane.colors.BG_SELECTED) ? pane.colors.BG_SELECTED : (lightTheme ? "#f5e6d8" : "#264f78")
             readonly property color accentBg: (pane.colors && pane.colors.accent_hex) ? pane.colors.accent_hex : (lightTheme ? "#4d8ef0" : "#3ecf8e")
@@ -165,6 +166,7 @@ Item {
                         if (ok) {
                             pane.session.setContent(path, after)
                             pane.session.setDirty(path, true)
+                            aiWriteSweep.trigger()
                             pane.session.bridge.on_agent_edit_finished(key, path, true, "")
                         } else {
                             pane.session.bridge.on_agent_edit_finished(key, path, false, "Document content did not match expected revision.")
@@ -177,6 +179,15 @@ Item {
                         } else {
                             pane.session.bridge.on_agent_edit_finished(key, path, false, "Document changed or is no longer editable.")
                         }
+                    }
+                }
+                function onFileReloaded(filepath, content) {
+                    if (quillEditor.filePath === filepath || (pane.session && pane.session.currentPath === filepath)) {
+                        var ws = pane.hostWindow ? pane.hostWindow.workspace : null
+                        var running = !!(ws && ws.agentChat && ws.agentChat.running)
+                        var key = (ws && ws.agentActivity) ? ws.agentActivity.key(ws.activeTab || filepath) : ""
+                        var touched = !!(ws && ws.agentActivity && key && ws.agentActivity.paths[key])
+                        if (running || touched) aiWriteSweep.trigger()
                     }
                 }
                 function onNavigateRequested(path, line, column, endLine, endColumn) {
@@ -210,6 +221,95 @@ Item {
                 }
                 function onContextMenuRequested(clickX, clickY) {
                     pane.showContextMenu(clickX, clickY, quillEditor)
+                }
+            }
+        }
+
+        FrameAnimation {
+            id: editorScrollMotion
+            running: quillEditor.smoothScrolling
+            onTriggered: quillEditor.advanceScroll(frameTime)
+        }
+
+        // Lightweight top-to-bottom AI crossfade sweep when agent writes to this open file
+        Item {
+            id: aiWriteSweep
+            objectName: "editorAiWriteSweep"
+            anchors.fill: parent
+            z: 15
+            enabled: false
+            clip: true
+            visible: sweepProgress > 0.001 && sweepProgress < 0.999
+
+            property real sweepProgress: 0.0
+            property real lastTriggeredAt: -1
+            readonly property bool animsEnabled: !pane.effectivePreferences || !pane.effectivePreferences.settings || pane.effectivePreferences.settings.animations !== false
+
+            function trigger() {
+                if (!pane.visible || !animsEnabled) return
+                var now = Date.now()
+                if (now - lastTriggeredAt < 250 && sweepAnim.running) return
+                lastTriggeredAt = now
+                sweepAnim.restart()
+            }
+
+            NumberAnimation {
+                id: sweepAnim
+                target: aiWriteSweep
+                property: "sweepProgress"
+                from: 0.0
+                to: 1.0
+                duration: 740
+                easing.type: Easing.InOutQuad
+            }
+
+            // Soft crossfade veil gliding top-to-bottom across newly written content
+            Rectangle {
+                id: sweepBand
+                width: parent.width
+                height: Math.max(96, Math.min(200, parent.height * 0.34))
+                y: -height + aiWriteSweep.sweepProgress * (parent.height + height)
+                opacity: Math.sin(aiWriteSweep.sweepProgress * Math.PI)
+
+                gradient: Gradient {
+                    GradientStop { position: 0.00; color: "transparent" }
+                    GradientStop { position: 0.42; color: Qt.rgba(0.573, 0.475, 0.933, 0.05) }
+                    GradientStop { position: 0.78; color: Qt.rgba(0.345, 0.725, 0.937, 0.13) }
+                    GradientStop { position: 0.96; color: Qt.rgba(0.400, 0.800, 0.643, 0.20) }
+                    GradientStop { position: 1.00; color: "transparent" }
+                }
+
+                // Thin horizontal AI rainbow leading edge
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.bottomMargin: 2
+                    height: 1.5
+                    opacity: 0.75
+                    gradient: Gradient {
+                        orientation: Gradient.Horizontal
+                        GradientStop { position: 0.00; color: "#9279ee" }
+                        GradientStop { position: 0.25; color: "#e588ba" }
+                        GradientStop { position: 0.50; color: "#ebbc77" }
+                        GradientStop { position: 0.75; color: "#66cca4" }
+                        GradientStop { position: 1.00; color: "#58b9ef" }
+                    }
+                }
+            }
+        }
+
+        Connections {
+            target: (pane.hostWindow && pane.hostWindow.workspace && pane.hostWindow.workspace.agentActivity) ? pane.hostWindow.workspace.agentActivity : null
+            function onChanged() {
+                var ws = pane.hostWindow ? pane.hostWindow.workspace : null
+                if (!ws || !ws.agentActivity || ws.activeKind !== "editor") return
+                var key = ws.agentActivity.key(ws.activeTab || "")
+                var row = key ? ws.agentActivity.paths[key] : null
+                if (!row) return
+                var k = String(row.kind || "").toLowerCase()
+                if (k === "write" || k === "edit" || k === "filechange" || k === "write_to_file" || k === "replace_file_content") {
+                    aiWriteSweep.trigger()
                 }
             }
         }

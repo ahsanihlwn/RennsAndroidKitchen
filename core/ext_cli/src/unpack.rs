@@ -84,7 +84,7 @@ fn sanitize_local_component(s: &str, trim_trailing_dot: bool) -> String {
     out
 }
 
-struct UnpackContext {
+struct UnpackContext<'a> {
     partition_name: String,
     extract_dir: PathBuf,
     fs_config: Vec<String>,
@@ -92,9 +92,21 @@ struct UnpackContext {
     seen_fc_regex: HashSet<String>,
     space_paths: Vec<String>,
     error_times: usize,
+    total_entries_est: usize,
+    processed_entries: usize,
+    last_pct: u8,
+    on_progress: &'a mut dyn FnMut(u8, &str),
 }
 
-impl UnpackContext {
+impl<'a> UnpackContext<'a> {
+    fn emit_progress(&mut self, pct: u8, stage: &str) {
+        let clamped = pct.min(100);
+        if clamped > self.last_pct || clamped == 0 || clamped == 100 {
+            self.last_pct = clamped;
+            (self.on_progress)(clamped, stage);
+        }
+    }
+
     fn push_file_context(&mut self, regex_str: String, ctx: &str) {
         if self.seen_fc_regex.insert(regex_str.clone()) {
             self.file_contexts.push(format!("{} {}", regex_str, ctx));
@@ -154,10 +166,15 @@ impl UnpackContext {
                         let regex_str = format!("/{}", escape_regex(&out_path));
                         self.push_file_context(regex_str, &ctx);
                     }
-                } else if xname == "security.capability" && xval.len() >= 16 {
+                } else if xname == "security.capability" && xval.len() >= 12 {
+                    let magic_etc = u32::from_le_bytes([xval[0], xval[1], xval[2], xval[3]]);
+                    let ver = magic_etc & 0xFF00_0000;
                     let cap_lo = u32::from_le_bytes([xval[4], xval[5], xval[6], xval[7]]) as u64;
-                    let cap_hi =
-                        u32::from_le_bytes([xval[12], xval[13], xval[14], xval[15]]) as u64;
+                    let cap_hi = if ver >= 0x0200_0000 && xval.len() >= 16 {
+                        u32::from_le_bytes([xval[12], xval[13], xval[14], xval[15]]) as u64
+                    } else {
+                        0
+                    };
                     let cap_val = (cap_hi << 32) | cap_lo;
                     cap = format!(" capabilities={:#x}", cap_val);
                 }
@@ -218,12 +235,23 @@ impl UnpackContext {
                     );
                 }
             }
+            self.processed_entries += 1;
+            let pct = 5 + ((self.processed_entries * 88) / self.total_entries_est.max(1)).min(88) as u8;
+            self.emit_progress(pct, "Extracting EXT files");
         }
         Ok(())
     }
 }
 
 pub fn unpack_image(img_path: &Path) -> io::Result<PathBuf> {
+    unpack_image_with_progress(img_path, |_, _| {})
+}
+
+pub fn unpack_image_with_progress<F>(img_path: &Path, mut on_progress: F) -> io::Result<PathBuf>
+where
+    F: FnMut(u8, &str),
+{
+    on_progress(1, "Opening EXT image");
     let root = img_path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -253,6 +281,22 @@ pub fn unpack_image(img_path: &Path) -> io::Result<PathBuf> {
     };
     println!("[ENGINE] Volume = {}", engine_name);
 
+    let info_path = config_dir.join(format!("{}_info", partition_name));
+    let filesystem_size = vol.superblock.s_blocks_count * vol.block_size;
+    let info_text = format!(
+        "PartitionName: {}\nFormat: {}\nSize: {}\nBlockSize: {}\nBlockCount: {}\nFreeBlocks: {}\nMountPoint: {}\nVolumeName: {}\nUUID: {}\n",
+        partition_name,
+        det.fs_type,
+        filesystem_size,
+        vol.block_size,
+        vol.superblock.s_blocks_count,
+        vol.superblock.s_free_blocks_count,
+        vol.superblock.last_mounted(),
+        vol.superblock.volume_name(),
+        vol.superblock.uuid_string(),
+    );
+    fs::write(&info_path, info_text)?;
+
     let root_inode = vol.read_inode(EXT4_ROOT_INO, FT_DIR)?;
     let mut root_sel_label: Option<String> = None;
     for (xname, xval) in vol.read_xattrs(&root_inode)? {
@@ -268,6 +312,13 @@ pub fn unpack_image(img_path: &Path) -> io::Result<PathBuf> {
         }
     }
 
+    let used_inodes = vol
+        .superblock
+        .s_inodes_count
+        .saturating_sub(vol.superblock.s_free_inodes_count)
+        .saturating_sub(10)
+        .max(1) as usize;
+
     let mut ctx = UnpackContext {
         partition_name: partition_name.clone(),
         extract_dir: part_dir.clone(),
@@ -276,14 +327,31 @@ pub fn unpack_image(img_path: &Path) -> io::Result<PathBuf> {
         seen_fc_regex: HashSet::new(),
         space_paths: Vec::new(),
         error_times: 0,
+        total_entries_est: used_inodes,
+        processed_entries: 0,
+        last_pct: 4,
+        on_progress: &mut on_progress,
     };
 
+    ctx.emit_progress(5, "Extracting EXT files");
     ctx.scan_dir(&mut vol, &root_inode, "")?;
+    ctx.emit_progress(94, "Writing Android configs");
 
-    // Header entries for fs_config
-    ctx.fs_config.insert(0, "/ 0 0 0755".to_string());
-    ctx.fs_config
-        .insert(1, format!("{} 0 0 0755", partition_name));
+    // Header entries for fs_config (preserve root inode ownership and permissions)
+    let root_uid = root_inode.i_uid;
+    let root_gid = root_inode.i_gid;
+    let root_mode = root_inode.i_mode & 0o7777;
+    ctx.fs_config.insert(
+        0,
+        format!("/ {} {} {:04o}", root_uid, root_gid, root_mode),
+    );
+    ctx.fs_config.insert(
+        1,
+        format!(
+            "{} {} {} {:04o}",
+            partition_name, root_uid, root_gid, root_mode
+        ),
+    );
     ctx.fs_config
         .insert(2, format!("{}/lost+found 0 0 0700", partition_name));
 
@@ -347,7 +415,6 @@ pub fn unpack_image(img_path: &Path) -> io::Result<PathBuf> {
     let fs_config_path = config_dir.join(format!("{}_fs_config", partition_name));
     let file_contexts_path = config_dir.join(format!("{}_file_contexts", partition_name));
     let space_path = config_dir.join(format!("{}_space.txt", partition_name));
-    let info_path = config_dir.join(format!("{}_info", partition_name));
 
     fs::write(&fs_config_path, ctx.fs_config.join("\n"))?;
 
@@ -359,20 +426,7 @@ pub fn unpack_image(img_path: &Path) -> io::Result<PathBuf> {
         fs::write(&space_path, ctx.space_paths.join("\n"))?;
     }
 
-    let filesystem_size = vol.superblock.s_blocks_count * vol.block_size;
-    let info_text = format!(
-        "PartitionName: {}\nFormat: {}\nSize: {}\nBlockSize: {}\nBlockCount: {}\nFreeBlocks: {}\nMountPoint: {}\nVolumeName: {}\nUUID: {}\n",
-        partition_name,
-        det.fs_type,
-        filesystem_size,
-        vol.block_size,
-        vol.superblock.s_blocks_count,
-        vol.superblock.s_free_blocks_count,
-        vol.superblock.last_mounted(),
-        vol.superblock.volume_name(),
-        vol.superblock.uuid_string(),
-    );
-    fs::write(&info_path, info_text)?;
+    on_progress(100, "Done");
 
     Ok(part_dir)
 }

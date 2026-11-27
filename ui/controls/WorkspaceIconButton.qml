@@ -10,8 +10,12 @@ RakButton {
     property int layoutMode: 2
     property bool useAccentColor: true
     property bool loading: false
+    property bool aiActive: false
+    property bool aiColored: false
+    property bool aiGlow: false
     implicitWidth: 28
     implicitHeight: 28
+    focusPolicy: Qt.NoFocus
     leftPadding: 0
     rightPadding: 0
 
@@ -39,7 +43,7 @@ RakButton {
     cornerRadius: circular ? width / 2 : 6
     edgeWidth: 1
     edgeColor: "transparent"
-    hoverEdgeColor: Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.28)
+    hoverEdgeColor: Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.20)
     fillColor: "transparent"
     hoverFillColor: isLight ? Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.08) : Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.12)
     downFillColor: isLight ? Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.15) : Qt.rgba(refinedThemeColor.r, refinedThemeColor.g, refinedThemeColor.b, 0.20)
@@ -66,6 +70,9 @@ RakButton {
             fillColor: button.fillColor
             layoutMode: button.layoutMode
             animationsEnabled: button.anims
+            aiActive: button.aiActive
+            aiColored: button.aiColored
+            aiGlow: button.aiGlow
         }
     }
 
@@ -85,11 +92,11 @@ RakButton {
             height: parent.height
             radius: height / 2
             color: button.accentColor
-            x: button.anims ? 0 : (parent.width - width) / 2
+            x: 0
 
             SequentialAnimation on x {
                 loops: Animation.Infinite
-                running: loadingTrack.visible && button.anims
+                running: loadingTrack.visible
                 NumberAnimation {
                     from: 0
                     to: Math.max(0, loadingTrack.width - loadingThumb.width)

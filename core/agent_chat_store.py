@@ -16,6 +16,61 @@ def project_folder(project):
     return Path(USER_STATE_DIR)/'agent_chat'/digest
 
 
+def probe_folder():
+    from core.app_paths import AGENT_PROBE_DIR
+    folder=Path(AGENT_PROBE_DIR)
+    folder.mkdir(parents=True,exist_ok=True)
+    return folder
+
+
+def probe_log_path(provider,operation,suffix='.json'):
+    safe_provider=re.sub(r'[^A-Za-z0-9_.-]+','_',str(provider or 'agent')).strip('._') or 'agent'
+    safe_op=re.sub(r'[^A-Za-z0-9_.-]+','_',str(operation or 'probe')).strip('._') or 'probe'
+    folder=probe_folder()/'logs'
+    folder.mkdir(parents=True,exist_ok=True)
+    return folder/f'{safe_provider}_{safe_op}{suffix}'
+
+
+def get_probe_session(provider):
+    if not provider:return ''
+    try:
+        path=probe_folder()/'probe_sessions.json'
+        if not path.is_file():return ''
+        data=json.loads(path.read_text(encoding='utf-8'))
+        sessions=data.get('sessions') if isinstance(data,dict) else None
+        value=sessions.get(provider,'') if isinstance(sessions,dict) else ''
+        return value if isinstance(value,str) else ''
+    except (OSError,ValueError):
+        return ''
+
+
+def set_probe_session(provider,session):
+    if not provider:return
+    try:
+        folder=probe_folder()
+        path=folder/'probe_sessions.json'
+        sessions={}
+        if path.is_file():
+            try:
+                raw=json.loads(path.read_text(encoding='utf-8'))
+                if isinstance(raw,dict) and isinstance(raw.get('sessions'),dict):
+                    sessions={str(k):str(v) for k,v in raw['sessions'].items() if isinstance(k,str) and isinstance(v,str) and v}
+            except (OSError,ValueError):
+                sessions={}
+        if session:sessions[str(provider)]=str(session)
+        else:sessions.pop(str(provider),None)
+        descriptor,name=tempfile.mkstemp(prefix='.probe-',suffix='.tmp',dir=folder)
+        try:
+            with os.fdopen(descriptor,'w',encoding='utf-8') as stream:
+                stream.write(json.dumps({'version':1,'sessions':sessions},ensure_ascii=False))
+                stream.flush();os.fsync(stream.fileno())
+            os.replace(name,path)
+        finally:
+            if os.path.exists(name):os.remove(name)
+    except OSError:
+        pass
+
+
 class ChatStore:
     def __init__(self,project):
         self.folder=project_folder(project);self.path=self.folder/'history.json'

@@ -22,11 +22,15 @@ mod brotli_ops;
 mod compare;
 mod config_insert;
 mod directory;
+mod dtbo;
+mod dwarf;
 mod image_tools;
+mod markdown;
 mod mods;
 mod oem;
 mod path_index;
 mod platform_tools_ops;
+mod vdev;
 
 // Match Python's UTF-8 errors="ignore", including an incomplete final sequence.
 fn decode_utf8_ignore(mut bytes: &[u8]) -> String {
@@ -226,6 +230,9 @@ fn header_magic(bytes: &[u8]) -> &'static str {
     if bytes.starts_with(b"AVB0") {
         return "VBMETA";
     }
+    if bytes.starts_with(&[0xd7, 0xb7, 0xab, 0x1e]) {
+        return "DTBO";
+    }
     ""
 }
 
@@ -400,6 +407,10 @@ fn rak_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
             "config_insert_lines",
             "config_insert_text",
             "binary_analyze_json",
+            "binary_fast_scan_xrefs_json",
+            "binary_image_bytechunks",
+            "binary_flat_sha256",
+            "binary_dwarf_functions",
             "CompareJob",
             "diff_lines",
             "oem_detect_magic",
@@ -415,6 +426,12 @@ fn rak_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
             "super_info_json",
             "super_extract_json",
             "super_unsparse",
+            "super_make_json",
+            "image_logical_size",
+            "dtbo_inspect_json",
+            "dtbo_unpack_json",
+            "dtbo_pack_json",
+            "fdt_to_dts_text",
             "ext_inspect_json",
             "ext_unpack",
             "ext_make_fs",
@@ -441,10 +458,16 @@ fn rak_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
             "fastboot_run_stdio",
             "platform_tool_run_stdio",
             "platform_tools_version_json",
+            "markdown_render_json",
+            "markdown_render_file_json",
         ],
     )?;
     module.add_function(wrap_pyfunction!(parse_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(binary::binary_analyze_json, module)?)?;
+    module.add_function(wrap_pyfunction!(binary::binary_fast_scan_xrefs_json, module)?)?;
+    module.add_function(wrap_pyfunction!(binary::binary_image_bytechunks, module)?)?;
+    module.add_function(wrap_pyfunction!(binary::binary_flat_sha256, module)?)?;
+    module.add_function(wrap_pyfunction!(binary::binary_dwarf_functions, module)?)?;
     module.add_function(wrap_pyfunction!(prescan_json, module)?)?;
     module.add_class::<path_index::PathIndex>()?;
     module.add_class::<compare::CompareJob>()?;
@@ -476,8 +499,21 @@ fn rak_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(image_tools::super_info_json, module)?)?;
     module.add_function(wrap_pyfunction!(image_tools::super_extract_json, module)?)?;
     module.add_function(wrap_pyfunction!(image_tools::super_unsparse, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::super_make_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::image_logical_size, module)?)?;
+    module.add_function(wrap_pyfunction!(dtbo::dtbo_inspect_json, module)?)?;
+    module.add_function(wrap_pyfunction!(dtbo::dtbo_unpack_json, module)?)?;
+    module.add_function(wrap_pyfunction!(dtbo::dtbo_pack_json, module)?)?;
+    module.add_function(wrap_pyfunction!(dtbo::fdt_to_dts_text, module)?)?;
     module.add_function(wrap_pyfunction!(image_tools::ext_inspect_json, module)?)?;
     module.add_function(wrap_pyfunction!(image_tools::ext_unpack, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_usage_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_edit_plan_json, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_edit_write, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_edit_chmod, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_edit_selinux, module)?)?;
+    module.add_function(wrap_pyfunction!(image_tools::ext_edit_rm, module)?)?;
+    module.add_class::<image_tools::NativeExtReader>()?;
     module.add_function(wrap_pyfunction!(image_tools::ext_make_fs, module)?)?;
     module.add_function(wrap_pyfunction!(image_tools::sparse_img2simg, module)?)?;
     module.add_function(wrap_pyfunction!(image_tools::sparse_simg2img, module)?)?;
@@ -553,6 +589,9 @@ fn rak_native(module: &Bound<'_, PyModule>) -> PyResult<()> {
         platform_tools_ops::platform_tools_version_json,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(markdown::markdown_render_json, module)?)?;
+    module.add_function(wrap_pyfunction!(markdown::markdown_render_file_json, module)?)?;
+    vdev::register(module)?;
     Ok(())
 }
 

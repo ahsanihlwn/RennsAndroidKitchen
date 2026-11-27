@@ -16,6 +16,21 @@ def compute_root(path, image_size, salt, data_block_size, hash_block_size,
     if not image_size or not data_block_size or not hash_block_size:
         return None
     try:
+        from core import native_backend
+        res = native_backend.vdev_verify_hashtree(
+            path, image_size, salt.hex(), data_block_size, hash_block_size, algorithm
+        )
+        root_hex = res.get("computed_root") or ""
+        if root_hex:
+            if progress:
+                try:
+                    progress(image_size, image_size)
+                except Exception:
+                    pass
+            return bytes.fromhex(root_hex)
+    except Exception:
+        pass
+    try:
         hashlib.new(algorithm)
     except ValueError:
         return None                      # algoritma tidak dikenal, jangan menebak

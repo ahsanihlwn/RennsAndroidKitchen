@@ -7,7 +7,7 @@ from PySide6.QtGui import QColor,QFont,QFontMetrics
 _TONES={"EROFS":("accent_hex",0),"EXT2":("accent_hex",-45),"EXT3":("accent_hex",35),
         "EXT4":("accent_hex",70),"F2FS":("accent_hex",110),"VBMETA":("_gauge_danger",0),
         "SUPER":("_gauge_warn",0),"SPARSE":("_gauge_warn",25),
-        "PAYLOAD":("_gauge_safe",-25),"BOOT":("_gauge_safe",-70),"VNDRBOOT":("_gauge_danger",25),
+        "PAYLOAD":("_gauge_safe",-25),"BOOT":("_gauge_safe",-70),"VNDRBOOT":("_gauge_danger",25),"DTBO":("_gauge_safe",40),"GKI":("accent_hex",25),
         "BR":("_gauge_danger",-20),"DAT":("_gauge_warn",-30),"DAT.BR":("_gauge_safe",60),
         "OZIP":("_gauge_warn",45),"OFP":("_gauge_warn",45),"OFP_QC":("_gauge_warn",45),"OFP_MTK":("_gauge_warn",45),"OFP_ZIP":("_gauge_warn",45),"OPS":("_gauge_warn",45),
         "KDZ":("_gauge_safe",15),"DZ":("_gauge_safe",15),"UPDATE_APP":("_gauge_safe",15),
@@ -24,29 +24,36 @@ def _metrics(size):
 
 
 @lru_cache(maxsize=4096)
-def entry_layout(name,size,badge,symlink,branch,width,origin):
+def entry_layout(name,size,badge,symlink,branch,width,origin,gki=False):
     fm,size_fm,chip_fm=_metrics(13),_metrics(12),_metrics(9)
     has_badge=badge in _TONES
     size_width=size_fm.horizontalAdvance(size) if size else 0
     chip_width=chip_fm.horizontalAdvance(badge)+10 if has_badge else 0
-    chip_height=chip_fm.ascent()+4 if has_badge else 0
-    reserve=(6+chip_width if has_badge else 0)+(6+size_width if size else 0)+(12 if symlink else 0)+(18 if branch else 0)
+    gki_width=chip_fm.horizontalAdvance("GKI")+10 if gki else 0
+    chip_height=chip_fm.ascent()+4 if has_badge or gki else 0
+    reserve=(6+chip_width if has_badge else 0)+(6+gki_width if gki else 0)+(6+size_width if size else 0)+(12 if symlink else 0)+(18 if branch else 0)
     caption=fm.elidedText(name,Qt.ElideRight,max(0,width-origin-reserve-4)) if reserve else fm.elidedText(name,Qt.ElideRight,max(0,width-origin-4))
     end=origin+fm.horizontalAdvance(caption)
     size_x=0;chip_x=0;dot_x=0;branch_x=0
     if size:
-        trailing=(6+chip_width if has_badge else 0)+(12 if symlink else 0)+(18 if branch else 0)
+        trailing=(6+chip_width if has_badge else 0)+(6+gki_width if gki else 0)+(12 if symlink else 0)+(18 if branch else 0)
         size_x=max(origin,min(end+6,width-1-trailing-size_width-4))
         end=size_x+size_width
     if has_badge:
-        trailing=(12 if symlink else 0)+(18 if branch else 0)
+        trailing=(6+gki_width if gki else 0)+(12 if symlink else 0)+(18 if branch else 0)
         chip_x=max(origin,min(end+6,width-1-trailing-chip_width-4))
         end=chip_x+chip_width
+    gki_x=0
+    if gki:
+        trailing=(12 if symlink else 0)+(18 if branch else 0)
+        gki_x=max(origin,min(end+6,width-1-trailing-gki_width-4))
+        end=gki_x+gki_width
     if symlink:dot_x=end+6;end=dot_x+5
     if branch:branch_x=min(end+14,width-1-7)
     return {"text":caption,"textX":origin+3,"sizeX":size_x,"sizeWidth":size_width,
             "chipX":chip_x,"chipWidth":chip_width,"chipHeight":chip_height,"chipY":(28-chip_height)//2,
-            "chipAscent":chip_fm.ascent(),"dotX":dot_x,"branchX":branch_x,"hasBadge":has_badge}
+            "chipAscent":chip_fm.ascent(),"dotX":dot_x,"branchX":branch_x,"hasBadge":has_badge,
+            "gkiX":gki_x,"gkiWidth":gki_width}
 
 
 @lru_cache(maxsize=256)

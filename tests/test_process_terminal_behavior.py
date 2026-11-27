@@ -10,6 +10,8 @@ from PySide6.QtQml import QQmlApplicationEngine, QQmlComponent
 from PySide6.QtQuick import QQuickItem
 from PySide6.QtWidgets import QApplication
 
+from core.qtterm import Terminal
+from core.terminal_execution import ProcessTerminalManager
 from core.terminal_pty import PtySignals
 from ui.presentation import LauncherModel
 from ui.runtime import initialize_quick_runtime
@@ -104,6 +106,20 @@ class ProcessTerminalBehaviorTests(unittest.TestCase):
         self.assertEqual(session.activeTerminal, session._process_terminal_key)
         self.assertNotEqual(session.activeTerminal, shell_key)
 
+    def test_kitchen_renders_buffered_and_live_output_without_starting_a_shell(self):
+        manager = ProcessTerminalManager('.')
+        session = TerminalSession(manager=manager)
+        terminal = Terminal()
+        self.addCleanup(session.stop)
+        self.assertTrue(session.start())
+        manager.feed('buffered log\n')
+
+        session.bindTerminal(terminal)
+        manager.feed('live log\n')
+
+        self.assertFalse(terminal.running)
+        self.assertIn('buffered log\nlive log', terminal.screenText())
+
     def test_run_active_still_opens_terminal_and_selects_script_tab(self):
         root, session = self._make_session()
         script = str(root / 'PORT' / 'script.py')
@@ -167,6 +183,14 @@ class ProcessTerminalBehaviorTests(unittest.TestCase):
 
             first_tab = find_visual('workspaceTab_' + session.activeTerminal)
             self.assertIsNotNone(first_tab)
+            self.assertTrue(first_tab.property('nativeTabIcon'))
+            native_icons = [c for c in first_tab.findChildren(QQuickItem) if c.property('iconKey') == 'terminal']
+            svg_images = [c for c in first_tab.findChildren(QQuickItem) if c.metaObject().className().startswith('QQuickImage')]
+            self.assertEqual(len(native_icons), 1)
+            self.assertTrue(native_icons[0].isVisible())
+            self.assertEqual(len(svg_images), 1)
+            self.assertFalse(svg_images[0].isVisible())
+            self.assertEqual(svg_images[0].property('source').toString(), '')
             self.assertAlmostEqual(new_btn.x(), min(tabs.property('contentWidth'), tabs.width()) + 6, delta=1.0)
             self.assertAlmostEqual(new_btn.x(), first_tab.width() + 6, delta=1.0)
 
@@ -174,6 +198,12 @@ class ProcessTerminalBehaviorTests(unittest.TestCase):
             for _ in range(10):
                 self.app.processEvents()
                 time.sleep(0.01)
+            second_tab = find_visual('workspaceTab_' + session.activeTerminal)
+            self.assertIsNotNone(second_tab)
+            self.assertTrue(second_tab.property('nativeTabIcon'))
+            second_native_icons = [c for c in second_tab.findChildren(QQuickItem) if c.property('iconKey') == 'terminal']
+            self.assertEqual(len(second_native_icons), 1)
+            self.assertTrue(second_native_icons[0].isVisible())
             self.assertAlmostEqual(new_btn.x(), min(tabs.property('contentWidth'), tabs.width()) + 6, delta=1.0)
             self.assertLess(new_btn.x() + new_btn.width(), root_sel.x())
         finally:

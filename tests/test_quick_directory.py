@@ -158,16 +158,29 @@ class DirectoryTests(unittest.TestCase):
         self.assertFalse(self.failures)
 
     def test_only_opened_directories_are_enumerated(self):
+        from core import filesystem_map
         from core.native_backend import directory_entries
-        with patch('core.directory_scan.directory_entries',wraps=directory_entries) as enumerate_directory:
+        enumerated = []
+        orig_scan = filesystem_map.scan_and_revalidate_dir
+
+        def track_dir_entries(path, *args, **kwargs):
+            enumerated.append(path)
+            return directory_entries(path, *args, **kwargs)
+
+        def track_fsmap_scan(project_base, physical_dir, *args, **kwargs):
+            enumerated.append(physical_dir)
+            return orig_scan(project_base, physical_dir, *args, **kwargs)
+
+        with patch('core.directory_scan.directory_entries', side_effect=track_dir_entries), \
+             patch('core.directory_scan.filesystem_map.scan_and_revalidate_dir', side_effect=track_fsmap_scan):
             self.load()
             QTest.qWait(100)
-            self.assertEqual([call.args[0] for call in enumerate_directory.call_args_list],[str(self.base)])
-            target=str(self.base/'system')
-            self.model.activate(target);self.wait(lambda:not self.model.busy)
-            self.assertEqual([call.args[0] for call in enumerate_directory.call_args_list],[str(self.base),target])
-            self.assertEqual(self.names(),['..','etc'])
-            self.assertFalse(self.model._nodes[str(self.base/'system'/'etc')].loaded)
+            self.assertEqual(enumerated, [str(self.base)])
+            target = str(self.base / 'system')
+            self.model.activate(target); self.wait(lambda: not self.model.busy)
+            self.assertEqual(enumerated, [str(self.base), target])
+            self.assertEqual(self.names(), ['..', 'etc'])
+            self.assertFalse(self.model._nodes[str(self.base / 'system' / 'etc')].loaded)
 
     def test_cpp_view_lazy_expansion_metadata_and_persistent_indexes(self):
         view=self.model.viewModel
@@ -273,6 +286,31 @@ class DirectoryTests(unittest.TestCase):
         self.assertEqual(self.model._presentation_for(self.model._nodes[str(super_img)]).badge, 'SUPER')
         self.assertEqual(len(badge_updates), 4)
         self.assertNotIn(str(nested_img), seen_probes)
+        self.assertFalse(self.failures)
+
+    def test_folder_skeleton_loading_dummy_resolves_to_contents_or_empty(self):
+        (self.base / 'empty_folder').mkdir()
+        view = self.model.viewModel
+        self.model.setDisplayMode('tree')
+        self.load()
+
+        for folder_name, expected_child in (('system', 'etc'), ('empty_folder', 'Empty')):
+            folder_path = str(self.base / folder_name)
+            idx = self.model.indexForPath(folder_path)
+            self.assertEqual(view.rowCount(idx), 1)
+            dummy_idx = view.index(0, 0, idx)
+            self.assertTrue(bool(dummy_idx.data(Qt.UserRole + 5001)))
+            dummy_entry = dummy_idx.data(Qt.UserRole + 1020)
+            self.assertTrue(dummy_entry.empty and dummy_entry.loading)
+
+            self.model.ensureLoaded(idx)
+            self.wait(lambda: not self.model.busy)
+            final_idx = view.index(0, 0, idx)
+            self.assertFalse(bool(final_idx.data(Qt.UserRole + 5001)))
+            final_entry = final_idx.data(Qt.UserRole + 1020)
+            self.assertEqual(final_entry.name, expected_child)
+            self.assertFalse(final_entry.loading)
+            self.assertEqual(final_entry.empty, expected_child == 'Empty')
         self.assertFalse(self.failures)
 
 

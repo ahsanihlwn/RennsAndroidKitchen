@@ -63,7 +63,24 @@ pub fn lstat_entry(path: &Path, block_size: u32) -> io::Result<StatInfo> {
     const SYMLINK_MAGIC: &[u8] = b"!<symlink>\xff\xfe";
     const SYMLINK_MAXSIZE: u64 = 1024;
 
-    let meta = fs::metadata(path)?;
+    let lmeta = fs::symlink_metadata(path)?;
+    if lmeta.file_type().is_symlink() {
+        let mtime = system_time_to_unix_u32(lmeta.modified());
+        let mut target = fs::read_link(path)?.to_string_lossy().into_owned();
+        let max_len = (block_size as usize).saturating_sub(1);
+        if target.len() > max_len {
+            target.truncate(max_len);
+        }
+        return Ok(StatInfo {
+            kind: EntryKind::Symlink,
+            st_mode: S_IFLNK | 0o777,
+            size: target.len() as u64,
+            mtime,
+            link_target: Some(target),
+        });
+    }
+
+    let meta = lmeta;
     let mtime = system_time_to_unix_u32(meta.modified());
 
     if meta.is_dir() {

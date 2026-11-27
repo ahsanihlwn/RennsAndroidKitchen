@@ -43,13 +43,16 @@ def discover():
     return result
 
 
-def launch_arguments(provider, model='', session='', *, effort='',workspace_dirs=(),instructions=''):
+def launch_arguments(provider, model='', session='', *, effort='',workspace_dirs=(),instructions='',probe=False):
     kind = provider['protocol']
     if kind == 'codex': return ['app-server', '--listen', 'stdio://']
     if kind == 'acp': return ['acp']
     if kind == 'claude':
         args = ['--print', '--input-format', 'stream-json', '--output-format', 'stream-json',
                 '--verbose', '--include-partial-messages', '--permission-prompt-tool', 'stdio']
+        if probe:
+            args += ['--no-session-persistence']
+            return args
         if instructions:args+=['--append-system-prompt',instructions]
         if model: args += ['--model', model]
         if session: args += ['--resume', session]
@@ -57,6 +60,9 @@ def launch_arguments(provider, model='', session='', *, effort='',workspace_dirs
         return args
     if kind!='agy':raise ValueError('Unsupported agent protocol: '+str(kind))
     args = ['--input-format', 'stream-json', '--output-format', 'stream-json', '--dangerously-skip-permissions']
+    if probe:
+        if session: args += ['--conversation', session]
+        return args
     if workspace_dirs:
         if not session:args+=['--new-project']
         for path in dict.fromkeys(workspace_dirs):args+=['--add-dir',path]

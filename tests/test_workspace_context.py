@@ -52,6 +52,104 @@ class ContextTests(unittest.TestCase):
         mirror=str(self.base/'apktool_dec/folder.apk')
         node.setData(0,APKTOOL_LINK_ROLE,mirror)
         self.assertEqual(_directory(self.session,str(path)),mirror)
+
+    def test_boot_menu_offers_unpack_and_combined_action_in_order(self):
+        path, _ = self.entry('boot_2.img', 'BOOT')
+        keys = [row.get('key') for row in self.actions(path)]
+        unpack = keys.index('unpack_boot')
+        self.assertEqual(keys[unpack + 1], 'unpack_boot_decompile')
+        self.assertNotIn('compile_kernel_sources', keys)
+        kernel, _ = self.entry('kernel')
+        kernel_keys = [row.get('key') for row in self.actions(kernel)]
+        self.assertIn('decompile_kernel', kernel_keys)
+        self.assertIn('decompile_kernel_dwarf', kernel_keys)
+        vendor, _ = self.entry('vendor_boot.img', 'VNDRBOOT')
+        self.assertNotIn('unpack_boot_decompile', [row.get('key') for row in self.actions(vendor)])
+
+    def test_compile_action_only_from_sources_folder(self):
+        folder, _ = self.entry('kernel_src', folder=True)
+        self.assertNotIn('compile_kernel_sources', [row.get('key') for row in self.actions(folder)])
+        manifest = folder / 'reconstruction_manifest.json'
+        manifest.write_text('{"kernel_info":null}')
+        self.assertNotIn('compile_kernel_sources', [row.get('key') for row in self.actions(folder)])
+        manifest.write_text('{"kernel_info":{"is_kernel":true}}')
+        self.assertIn('compile_kernel_sources', [row.get('key') for row in self.actions(folder)])
+
+    def test_dwarf_decompile_form_dispatches_reference_and_unlimited_selection(self):
+        path, _ = self.entry("kernel")
+        self.session._operation_serial = 0
+        dialogs = []
+        self.session.presentationRequested = SimpleNamespace(emit=lambda *args: dialogs.append(args))
+        results = []
+        reference = str(self.base / "vmlinux")
+        def run_operation(_session, _label, worker, **_options):
+            results.append(worker())
+        with patch("ui.workspace_actions.operation", side_effect=run_operation), \
+                patch("core.kernel_workspace.decompile", return_value="finished") as decompile:
+            dispatch_tool(self.session, "decompile_kernel_dwarf", str(path), {})
+            kind, dialog = dialogs[0]
+            self.assertEqual(kind, "actionDialog")
+            self.session._forms.pop(dialog["token"])({"reference": reference, "limit": "0"})
+        self.assertEqual(results, [(True, "finished")])
+        self.assertEqual(Path(decompile.call_args.args[0]).resolve(), path.resolve())
+        self.assertEqual(decompile.call_args.kwargs, {"dwarf_reference": reference, "max_funcs_per_file": None})
+
+    def test_gki_badge_is_scoped_to_real_boot_folder_and_direct_sources(self):
+        from core.boot_image import META_DIR, _write_bootconf
+        from core.directory_scan import scan_tree_directory
+        from core.kernel_workspace import SOURCE_DIR, gki_boot_folder, source_destination
+        from core.magiskboot_tree import META_NAME
+
+        boot = self.base / 'boot_itel'
+        metadata = boot / META_DIR
+        src = boot / SOURCE_DIR
+        other = self.base / SOURCE_DIR
+        metadata.mkdir(parents=True)
+        src.mkdir()
+        other.mkdir()
+        (metadata / META_NAME).write_text('{"boot_kind":"boot","visible_components":["kernel"]}')
+        kernel = boot / 'kernel'
+        kernel.write_bytes(b'kernel fixture')
+        for folder in (src, other):
+            (folder / 'reconstruction_manifest.json').write_text('{"kernel_info":{"is_kernel":true}}')
+        _write_bootconf(self.base, boot.name, 'boot', gki='11279209-' + 'a' * 40)
+        self.assertTrue(gki_boot_folder(boot))
+        self.assertEqual(source_destination(kernel), src)
+        for root, name, expected in ((self.base, boot.name, True), (self.base, SOURCE_DIR, False), (boot, SOURCE_DIR, True)):
+            ok, payload = scan_tree_directory({'base':str(self.base),'path':str(root),'show_apktool_dec':False})
+            self.assertTrue(ok)
+            row = next(row for row in payload['entries'] if row['name'] == name)
+            self.assertIs(row['gki'], expected)
+        _write_bootconf(self.base, boot.name, 'boot')
+        self.assertFalse(gki_boot_folder(boot))
+
+    def test_kernel_setup_offers_download_only_for_a_matched_release(self):
+        from core import gki_checkout, kernel_version
+
+        def run_operation(_session, _label, worker, done, **_kwargs):
+            done(worker())
+
+        path, _ = self.entry('boot.img', 'BOOT')
+        info = kernel_version.KernelVersionInfo(str(path), version_string='6.12.38')
+        self.session.message = lambda *args, **kwargs: self.messages.append((args, kwargs))
+        release = gki_checkout.GkiRelease('123', 'gki-fixture', 'a' * 40, '', b'', 2)
+        with patch('ui.workspace_actions.operation', side_effect=run_operation), \
+             patch.object(gki_checkout, 'inspect_release', side_effect=[(info, release, ''), (info, release, ''), (info, None, 'Vendor build')]), \
+             patch.object(gki_checkout, 'cache_checkout', side_effect=[{}, {'state': 'ready', 'path': '/home/test/gki'}]), \
+             patch.object(gki_checkout, 'require_linux_tools'), \
+             patch.object(gki_checkout, 'sync_release', return_value='/home/test/gki') as sync:
+            dispatch_tool(self.session, 'prepare_kernel_build', str(path), {})
+            confirm = self.messages[-1][1]['confirm']
+            sync.assert_not_called()
+            confirm()
+            sync.assert_called_once_with(release, distro=None)
+            self.assertIn('/home/test/gki/common', self.messages[-1][0][0])
+            dispatch_tool(self.session, 'prepare_kernel_build', str(path), {})
+            self.assertNotIn('confirm', self.messages[-1][1])
+            sync.assert_called_once()
+            dispatch_tool(self.session, 'prepare_kernel_build', str(path), {})
+            self.assertNotIn('confirm', self.messages[-1][1])
+            self.assertIn('compile_commands.json', self.messages[-1][0][0])
     def test_image_group_order_and_mounted_root_keep_basic_actions(self):
         path,_=self.entry('system.img','EXT4');rows=self.actions(path)
         self.assertEqual([row.get('key') for row in rows[12:]], [None,'unpack_ext','convert_img',None,'mount',None,'create_flashable'])

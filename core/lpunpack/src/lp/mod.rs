@@ -25,9 +25,11 @@ pub use reader::{
 };
 pub use writer::{
     serialize_geometry, serialize_metadata, write_empty_image_file, write_split_image_files,
-    write_to_image_file, ImageBuilder,
+    write_to_image_file, write_to_image_file_with_progress, ImageBuilder,
 };
 pub use unpack::{
-    extract_partition_to_dir, filter_partitions, inspect_super_image, select_partitions_for_extract,
-    strip_slot_suffix, unpack_super_image, unsparse_super_image, SparseHoleWriter, SuperImageInfo,
+    extract_partition_to_dir, extract_partition_to_dir_with_progress, filter_partitions,
+    inspect_super_image, select_partitions_for_extract, strip_slot_suffix, unpack_super_image,
+    unpack_super_image_with_progress, unsparse_super_image, unsparse_super_image_with_progress,
+    SparseHoleWriter, SuperImageInfo,
 };

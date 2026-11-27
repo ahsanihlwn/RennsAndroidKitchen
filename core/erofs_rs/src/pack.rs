@@ -15,9 +15,9 @@ use crate::format::{
     FEATURE_COMPAT_XATTR_FILTER, FEATURE_INCOMPAT_BIG_PCLUSTER, FEATURE_INCOMPAT_COMPR_CFGS,
     FEATURE_INCOMPAT_LZ4_0PADDING, FT_DIR, FT_REG_FILE, FT_SYMLINK, INODE_DATALAYOUT_SHIFT,
     INODE_VERSION_COMPACT, INODE_VERSION_EXTENDED, S_IFDIR, S_IFLNK, S_IFREG, SuperBlock,
-    XATTR_INDEX_SECURITY, Z_ADVISE_BIG_PCLUSTER_1, Z_LCLUSTER_HEAD1, Z_LCLUSTER_NONHEAD,
-    Z_LCLUSTER_PLAIN, Z_LI_D0_CBLKCNT, align_up, align_up_usize, div_round_up, format_uuid,
-    parse_uuid, write_u16_le, write_u32_le, write_u64_le,
+    XATTR_INDEX_SECURITY, Z_ADVISE_BIG_PCLUSTER_1, Z_ADVISE_BIG_PCLUSTER_2, Z_LCLUSTER_HEAD1,
+    Z_LCLUSTER_NONHEAD, Z_LCLUSTER_PLAIN, Z_LI_D0_CBLKCNT, align_up, align_up_usize, div_round_up,
+    format_uuid, parse_uuid, write_u16_le, write_u32_le, write_u64_le,
 };
 use crate::reader::build_dirent_blocks;
 use crate::xattr::{
@@ -30,6 +30,8 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -136,7 +138,7 @@ struct RawXattr {
 
 #[derive(Debug, Clone)]
 enum NodeKind {
-    Dir { children: Vec<usize> },
+    Dir { children: Vec<(Vec<u8>, usize)> },
     File { host_path: PathBuf },
     Symlink { target: Vec<u8> },
 }
@@ -145,7 +147,6 @@ enum NodeKind {
 struct BuildNode {
     id: usize,
     parent_id: usize,
-    name: Vec<u8>,
     rel_path: String,
     kind: NodeKind,
     mode: u16,
@@ -177,7 +178,25 @@ enum PreparedPayload {
 }
 
 /// Build an EROFS image from a local source directory.
+fn emit_monotonic<F: Fn(u8, &str)>(last: &Mutex<u8>, cb: &F, pct: u8, stage: &str) {
+    let clamped = pct.min(100);
+    let mut guard = last.lock().unwrap();
+    if clamped > *guard || clamped == 0 {
+        *guard = clamped.max(*guard);
+        cb(clamped, stage);
+    }
+}
+
 pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
+    pack_directory_with_progress(opts, |_, _| {})
+}
+
+pub fn pack_directory_with_progress<F>(opts: &PackOptions, on_progress: F) -> Result<PackReport>
+where
+    F: Fn(u8, &str) + Sync,
+{
+    let last_pct = Mutex::new(0u8);
+    emit_monotonic(&last_pct, &on_progress, 2, "Scanning directory");
     if !opts.source_dir.is_dir() {
         return Err(ErofsError::InvalidArg(format!(
             "source directory does not exist: {}",
@@ -215,6 +234,21 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         );
     }
 
+    let mut effective_mp = opts.mount_point.clone();
+    if effective_mp.trim_matches('/').is_empty() {
+        if let Some(dir_name) = opts.source_dir.file_name().and_then(|s| s.to_str()) {
+            let has_pfx = fs_cfg
+                .as_ref()
+                .is_some_and(|c| c.has_partition_prefix(dir_name))
+                || file_ctx
+                    .as_ref()
+                    .is_some_and(|f| f.has_partition_prefix(dir_name));
+            if has_pfx {
+                effective_mp = format!("/{dir_name}");
+            }
+        }
+    }
+
     let now_epoch = opts.timestamp.unwrap_or_else(|| {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -226,11 +260,19 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
 
     // 1. Scan source directory into in-memory tree.
     let mut nodes: Vec<BuildNode> = Vec::new();
+    let mut hardlink_map: HashMap<(u64, u64), usize> = HashMap::new();
     let root_id = 0usize;
+    let root_mtime = opts.timestamp.unwrap_or_else(|| {
+        fs::symlink_metadata(&opts.source_dir)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(now_epoch)
+    });
     nodes.push(BuildNode {
         id: root_id,
         parent_id: root_id,
-        name: Vec::new(),
         rel_path: "/".to_string(),
         kind: NodeKind::Dir {
             children: Vec::new(),
@@ -238,7 +280,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         mode: S_IFDIR | 0o755,
         uid: 0,
         gid: 0,
-        mtime: now_epoch,
+        mtime: root_mtime,
         size: 0,
         nlink: 2,
         xattrs: Vec::new(),
@@ -246,6 +288,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
     apply_android_attrs(
         &mut nodes[root_id],
         opts,
+        &effective_mp,
         fs_cfg.as_ref(),
         file_ctx.as_ref(),
         'd',
@@ -256,12 +299,23 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         root_id,
         "",
         opts,
+        &effective_mp,
         fs_cfg.as_ref(),
         file_ctx.as_ref(),
         &excludes,
         now_epoch,
+        &mut hardlink_map,
         &mut nodes,
     )?;
+
+    let (sb_epoch, sb_build_time) = match opts.timestamp {
+        Some(ts) => (ts, 0u32),
+        None => {
+            let min_mtime = nodes.iter().map(|n| n.mtime).min().unwrap_or(now_epoch);
+            let delta = now_epoch.saturating_sub(min_mtime).min(u32::MAX as u64) as u32;
+            (min_mtime, delta)
+        }
+    };
 
     // Fix directory nlink counts (= 2 + number of subdirectory children)
     let dir_sub_counts: Vec<(usize, u32)> = nodes
@@ -270,7 +324,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
             NodeKind::Dir { children } => {
                 let subdirs = children
                     .iter()
-                    .filter(|&&cid| matches!(nodes[cid].kind, NodeKind::Dir { .. }))
+                    .filter(|&&(_, cid)| matches!(nodes[cid].kind, NodeKind::Dir { .. }))
                     .count() as u32;
                 Some((n.id, 2 + subdirs))
             }
@@ -282,6 +336,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
     }
 
     // 2. Build shared xattr deduplication table (any xattr appearing >= 2 times becomes shared).
+    emit_monotonic(&last_pct, &on_progress, 12, "Deduplicating metadata");
     let mut xattr_freq: HashMap<RawXattr, usize> = HashMap::new();
     for n in &nodes {
         for xa in &n.xattrs {
@@ -319,6 +374,9 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         .filter(|n| matches!(n.kind, NodeKind::File { .. }))
         .map(|n| n.id)
         .collect();
+    let total_files = file_ids.len().max(1);
+    let done_files = AtomicUsize::new(0);
+    emit_monotonic(&last_pct, &on_progress, 16, "Compressing EROFS files");
 
     let compress_one = |&id: &usize| -> Result<(usize, PreparedPayload)> {
         let host_path = match &nodes[id].kind {
@@ -326,30 +384,35 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
             _ => unreachable!(),
         };
         let data = fs::read(host_path)?;
-        if opts.algorithm == CompressionAlg::None || data.len() <= bs {
-            return Ok((id, PreparedPayload::Raw { data }));
-        }
-        // Try compressing into pclusters
-        let chunks = compress_file_into_pclusters(
-            &data,
-            opts.algorithm,
-            opts.level,
-            pcluster_size,
-            bs,
-        )?;
-        let total_comp_blks: usize = chunks.iter().map(|c| c.cblks).sum();
-        let raw_blks = (data.len() + bs - 1) / bs;
-        if total_comp_blks < raw_blks && chunks.iter().any(|c| c.is_compressed) {
-            Ok((
-                id,
-                PreparedPayload::Compressed {
-                    chunks,
-                    total_size: data.len() as u64,
-                },
-            ))
+        let res = if opts.algorithm == CompressionAlg::None || data.len() <= bs {
+            (id, PreparedPayload::Raw { data })
         } else {
-            Ok((id, PreparedPayload::Raw { data }))
-        }
+            // Try compressing into pclusters
+            let chunks = compress_file_into_pclusters(
+                &data,
+                opts.algorithm,
+                opts.level,
+                pcluster_size,
+                bs,
+            )?;
+            let total_comp_blks: usize = chunks.iter().map(|c| c.cblks).sum();
+            let raw_blks = (data.len() + bs - 1) / bs;
+            if total_comp_blks < raw_blks && chunks.iter().any(|c| c.is_compressed) {
+                (
+                    id,
+                    PreparedPayload::Compressed {
+                        chunks,
+                        total_size: data.len() as u64,
+                    },
+                )
+            } else {
+                (id, PreparedPayload::Raw { data })
+            }
+        };
+        let done = done_files.fetch_add(1, Ordering::Relaxed) + 1;
+        let pct = 16 + ((done * 56) / total_files).min(56) as u8;
+        emit_monotonic(&last_pct, &on_progress, pct, "Compressing EROFS files");
+        Ok(res)
     };
 
     let prepared_vec: Vec<(usize, PreparedPayload)> = if opts.threads == 1 {
@@ -402,6 +465,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
     }
 
     // 4. Precompute xattr ibody blobs and whether each inode is compact or extended.
+    emit_monotonic(&last_pct, &on_progress, 74, "Building EROFS metadata");
     let mut xattr_ibodies: Vec<(Vec<u8>, u16)> = Vec::with_capacity(nodes.len());
     let mut is_extended_vec: Vec<bool> = Vec::with_capacity(nodes.len());
     for n in &nodes {
@@ -415,8 +479,8 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
                     || n.uid > u16::MAX as u32
                     || n.gid > u16::MAX as u32
                     || n.nlink > u16::MAX as u32
-                    || n.mtime < now_epoch
-                    || n.mtime.saturating_sub(now_epoch) > u32::MAX as u64
+                    || n.mtime < sb_epoch
+                    || n.mtime.saturating_sub(sb_epoch) > u32::MAX as u64
             }
         };
         is_extended_vec.push(ext);
@@ -428,13 +492,13 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
             let mut dummy_entries = Vec::with_capacity(children.len() + 2);
             dummy_entries.push((0u64, b".".to_vec(), FT_DIR));
             dummy_entries.push((0u64, b"..".to_vec(), FT_DIR));
-            for &cid in children {
-                let ft = match nodes[cid].kind {
+            for (child_name, cid) in children {
+                let ft = match nodes[*cid].kind {
                     NodeKind::Dir { .. } => FT_DIR,
                     NodeKind::File { .. } => FT_REG_FILE,
                     NodeKind::Symlink { .. } => FT_SYMLINK,
                 };
-                dummy_entries.push((0u64, nodes[cid].name.clone(), ft));
+                dummy_entries.push((0u64, child_name.clone(), ft));
             }
             let dir_bytes = build_dirent_blocks(&dummy_entries, bs)?;
             nodes[id].size = dir_bytes.len() as u64;
@@ -454,6 +518,16 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
             payloads.get(&id),
             Some(PreparedPayload::Compressed { .. })
         );
+
+        // Keep fixed inode header (and xattrs if <= block_size) inside a single metadata block.
+        if (meta_cursor % (bs as u64)) + hdr_sz > bs as u64 {
+            meta_cursor = align_up(meta_cursor, bs as u64);
+        }
+        if hdr_sz + xattr_sz <= bs as u64
+            && (meta_cursor % (bs as u64)) + hdr_sz + xattr_sz > bs as u64
+        {
+            meta_cursor = align_up(meta_cursor, bs as u64);
+        }
 
         let (layout, tail_meta_sz) = if is_compressed {
             let lclusters = div_round_up(nodes[id].size, bs as u64);
@@ -476,7 +550,6 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
             }
         };
 
-        // Ensure header does not straddle a block boundary awkwardly for compact inline
         let off = meta_cursor;
         meta_offsets[id] = off;
         nids[id] = off / EROFS_ISLOT_SIZE;
@@ -490,13 +563,13 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
             let mut entries = Vec::with_capacity(children.len() + 2);
             entries.push((nids[id], b".".to_vec(), FT_DIR));
             entries.push((nids[nodes[id].parent_id], b"..".to_vec(), FT_DIR));
-            for &cid in children {
-                let ft = match nodes[cid].kind {
+            for (child_name, cid) in children {
+                let ft = match nodes[*cid].kind {
                     NodeKind::Dir { .. } => FT_DIR,
                     NodeKind::File { .. } => FT_REG_FILE,
                     NodeKind::Symlink { .. } => FT_SYMLINK,
                 };
-                entries.push((nids[cid], nodes[cid].name.clone(), ft));
+                entries.push((nids[*cid], child_name.clone(), ft));
             }
             let dir_bytes = build_dirent_blocks(&entries, bs)?;
             debug_assert_eq!(dir_bytes.len() as u64, nodes[id].size);
@@ -603,7 +676,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         } else {
             write_u16_le(&mut meta_region, off + 6, n.nlink.min(u16::MAX as u32) as u16);
             write_u32_le(&mut meta_region, off + 8, n.size as u32);
-            write_u32_le(&mut meta_region, off + 12, n.mtime.saturating_sub(now_epoch) as u32);
+            write_u32_le(&mut meta_region, off + 12, n.mtime.saturating_sub(sb_epoch) as u32);
             write_u32_le(&mut meta_region, off + 16, start_blk_field);
             write_u32_le(&mut meta_region, off + 20, (id + 1) as u32);
             write_u16_le(&mut meta_region, off + 24, n.uid as u16);
@@ -618,7 +691,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         }
     }
 
-    // 7. Build SuperBlock + COMPR_CFGS in Block 0.
+    // 7. Build SuperBlock (+ optional COMPR_CFGS) in Block 0.
     let align_blks = opts.align_blocks.max(1);
     let total_blocks = align_up(next_data_blk.max(1), align_blks);
 
@@ -627,14 +700,24 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         feature_compat |= FEATURE_COMPAT_SB_CHKSUM;
     }
 
+    let need_compr_cfgs = compressed_files > 0
+        && (use_big_pcluster
+            || !matches!(opts.algorithm, CompressionAlg::Lz4 | CompressionAlg::Lz4Hc));
+
     let mut feature_incompat = 0u32;
     let mut available_compr_algs = 0u16;
+    let mut lz4_max_distance = 0u16;
     if compressed_files > 0 {
-        feature_incompat |= FEATURE_INCOMPAT_LZ4_0PADDING | FEATURE_INCOMPAT_COMPR_CFGS;
-        if use_big_pcluster {
-            feature_incompat |= FEATURE_INCOMPAT_BIG_PCLUSTER;
+        feature_incompat |= FEATURE_INCOMPAT_LZ4_0PADDING;
+        if need_compr_cfgs {
+            feature_incompat |= FEATURE_INCOMPAT_COMPR_CFGS;
+            if use_big_pcluster {
+                feature_incompat |= FEATURE_INCOMPAT_BIG_PCLUSTER;
+            }
+            available_compr_algs = 1u16 << compr_alg_id;
+        } else {
+            lz4_max_distance = 65535;
         }
-        available_compr_algs = 1u16 << compr_alg_id;
     }
 
     let sb = SuperBlock {
@@ -647,7 +730,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         sb_size: EROFS_SUPER_BASE_SIZE,
         root_nid: nids[root_id],
         inos: nodes.len() as u64,
-        epoch: now_epoch,
+        epoch: sb_epoch,
         fixed_nsec: 0,
         blocks: total_blocks,
         meta_blkaddr,
@@ -656,7 +739,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         volume_name: opts.volume_label.clone(),
         feature_incompat,
         available_compr_algs,
-        lz4_max_distance: 0,
+        lz4_max_distance,
         extra_devices: 0,
         devt_slotoff: 0,
         dirblkbits: 0,
@@ -665,7 +748,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         packed_nid: 0,
         xattr_filter_reserved: 0,
         ishare_xattr_prefix_id: 0,
-        build_time: 0,
+        build_time: sb_build_time,
         metabox_nid: 0,
     };
 
@@ -674,7 +757,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
     let sb_off = EROFS_SUPER_OFFSET as usize;
     block0[sb_off..sb_off + sb_bytes.len()].copy_from_slice(&sb_bytes);
 
-    if compressed_files > 0 {
+    if need_compr_cfgs {
         let cfg_off = sb_off + sb_bytes.len();
         let cfg_blob = encode_compr_cfg(compr_alg_id, max_pcluster_blks);
         block0[cfg_off..cfg_off + cfg_blob.len()].copy_from_slice(&cfg_blob);
@@ -690,6 +773,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
     };
 
     // 8. Write final image file cleanly.
+    emit_monotonic(&last_pct, &on_progress, 84, "Writing EROFS image");
     if let Some(par) = opts.output_image.parent() {
         if !par.as_os_str().is_empty() {
             fs::create_dir_all(par)?;
@@ -704,8 +788,21 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         out_file.write_all(&xblk)?;
     }
 
-    out_file.write_all(&meta_region)?;
-    out_file.write_all(&data_region)?;
+    let total_payload = (meta_region.len() + data_region.len()).max(1);
+    let mut written_payload = 0usize;
+    let write_chunk_sz = 2 * 1024 * 1024;
+    for chunk in meta_region.chunks(write_chunk_sz) {
+        out_file.write_all(chunk)?;
+        written_payload += chunk.len();
+        let pct = 84 + ((written_payload * 15) / total_payload).min(15) as u8;
+        emit_monotonic(&last_pct, &on_progress, pct, "Writing EROFS image");
+    }
+    for chunk in data_region.chunks(write_chunk_sz) {
+        out_file.write_all(chunk)?;
+        written_payload += chunk.len();
+        let pct = 84 + ((written_payload * 15) / total_payload).min(15) as u8;
+        emit_monotonic(&last_pct, &on_progress, pct, "Writing EROFS image");
+    }
 
     let written_bytes = (bs as u64) + xattr_blocks * (bs as u64) + (meta_region.len() as u64) + (data_region.len() as u64);
     let target_bytes = total_blocks * (bs as u64);
@@ -713,6 +810,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         out_file.write_all(&vec![0u8; (target_bytes - written_bytes) as usize])?;
     }
     out_file.flush()?;
+    emit_monotonic(&last_pct, &on_progress, 100, "Done");
 
     let files = nodes
         .iter()
@@ -740,7 +838,7 @@ pub fn pack_directory(opts: &PackOptions) -> Result<PackReport> {
         shared_xattrs: shared_entries.len(),
         algorithm: opts.algorithm.name().to_string(),
         uuid: format_uuid(&uuid),
-        timestamp: now_epoch,
+        timestamp: sb_epoch.saturating_add(sb_build_time as u64),
         crc32c,
     })
 }
@@ -751,10 +849,12 @@ fn scan_dir_recursive(
     parent_id: usize,
     rel_prefix: &str,
     opts: &PackOptions,
+    effective_mp: &str,
     fs_cfg: Option<&FsConfigTable>,
     file_ctx: Option<&FileContextsMatcher>,
     excludes: &[Regex],
     default_epoch: u64,
+    hardlink_map: &mut HashMap<(u64, u64), usize>,
     nodes: &mut Vec<BuildNode>,
 ) -> Result<()> {
     // Read and sort entries deterministically by raw UTF-8 name.
@@ -765,7 +865,7 @@ fn scan_dir_recursive(
         entries.insert(fname, ent.path());
     }
 
-    let mut child_ids = Vec::new();
+    let mut child_ids: Vec<(Vec<u8>, usize)> = Vec::new();
     for (fname, path) in entries {
         let rel = if rel_prefix.is_empty() {
             fname.clone()
@@ -785,13 +885,12 @@ fn scan_dir_recursive(
                 .unwrap_or(default_epoch)
         });
 
-        let id = nodes.len();
-        let (kind, default_mode, mode_ch) = if ft.is_symlink() {
+        let (kind, default_mode, mode_ch, hardlink_key) = if ft.is_symlink() {
             let target = fs::read_link(&path)?
                 .to_string_lossy()
                 .replace('\\', "/")
                 .into_bytes();
-            (NodeKind::Symlink { target }, S_IFLNK | 0o777, 'l')
+            (NodeKind::Symlink { target }, S_IFLNK | 0o777, 'l', None)
         } else if ft.is_dir() {
             (
                 NodeKind::Dir {
@@ -799,24 +898,41 @@ fn scan_dir_recursive(
                 },
                 S_IFDIR | 0o755,
                 'd',
+                None,
             )
         } else if ft.is_file() {
-            #[cfg(unix)]
-            let perm = {
-                use std::os::unix::fs::PermissionsExt;
-                (meta.permissions().mode() as u16) & 0o7777
-            };
-            #[cfg(not(unix))]
-            let perm = 0o644u16;
-            (NodeKind::File { host_path: path.clone() }, S_IFREG | perm, '-')
+            if let Some(target) = try_read_cygwin_symlink(&path, &meta) {
+                (NodeKind::Symlink { target }, S_IFLNK | 0o777, 'l', None)
+            } else {
+                let hkey = host_hardlink_key(&path, &meta);
+                if let Some(k) = hkey {
+                    if let Some(&existing_id) = hardlink_map.get(&k) {
+                        nodes[existing_id].nlink += 1;
+                        child_ids.push((fname.into_bytes(), existing_id));
+                        continue;
+                    }
+                }
+                #[cfg(unix)]
+                let perm = {
+                    use std::os::unix::fs::PermissionsExt;
+                    (meta.permissions().mode() as u16) & 0o7777
+                };
+                #[cfg(not(unix))]
+                let perm = 0o644u16;
+                (NodeKind::File { host_path: path.clone() }, S_IFREG | perm, '-', hkey)
+            }
         } else {
             continue;
         };
 
+        let id = nodes.len();
+        if let Some(k) = hardlink_key {
+            hardlink_map.insert(k, id);
+        }
+        let fname_bytes = fname.into_bytes();
         let mut node = BuildNode {
             id,
             parent_id,
-            name: fname.into_bytes(),
             rel_path: format!("/{rel}"),
             kind,
             mode: default_mode,
@@ -827,9 +943,9 @@ fn scan_dir_recursive(
             nlink: 1,
             xattrs: Vec::new(),
         };
-        apply_android_attrs(&mut node, opts, fs_cfg, file_ctx, mode_ch);
+        apply_android_attrs(&mut node, opts, effective_mp, fs_cfg, file_ctx, mode_ch);
         nodes.push(node);
-        child_ids.push(id);
+        child_ids.push((fname_bytes, id));
 
         if ft.is_dir() {
             scan_dir_recursive(
@@ -837,10 +953,12 @@ fn scan_dir_recursive(
                 id,
                 &rel,
                 opts,
+                effective_mp,
                 fs_cfg,
                 file_ctx,
                 excludes,
                 default_epoch,
+                hardlink_map,
                 nodes,
             )?;
         }
@@ -852,15 +970,110 @@ fn scan_dir_recursive(
     Ok(())
 }
 
+fn try_read_cygwin_symlink(path: &Path, meta: &fs::Metadata) -> Option<Vec<u8>> {
+    let len = meta.len();
+    if !(12..=8192).contains(&len) {
+        return None;
+    }
+    let raw = fs::read(path).ok()?;
+    if raw.starts_with(b"!<symlink>\xFF\xFE") && raw.len() >= 14 {
+        let body = &raw[12..];
+        let mut u16s = Vec::with_capacity(body.len() / 2);
+        for chunk in body.chunks_exact(2) {
+            let code = u16::from_le_bytes([chunk[0], chunk[1]]);
+            if code == 0 {
+                break;
+            }
+            u16s.push(code);
+        }
+        let target = String::from_utf16(&u16s).ok()?;
+        return Some(target.into_bytes());
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_SYSTEM: u32 = 0x0000_0004;
+        if (meta.file_attributes() & FILE_ATTRIBUTE_SYSTEM) != 0
+            && raw.starts_with(b"!<symlink>")
+            && raw.len() > 11
+            && raw.last() == Some(&0)
+        {
+            let body = &raw[10..];
+            let end = body.iter().position(|&b| b == 0).unwrap_or(body.len());
+            return Some(body[..end].to_vec());
+        }
+    }
+    None
+}
+
+#[cfg(unix)]
+fn host_hardlink_key(_path: &Path, meta: &fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    if meta.nlink() > 1 {
+        Some((meta.dev(), meta.ino()))
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn host_hardlink_key(path: &Path, _meta: &fs::Metadata) -> Option<(u64, u64)> {
+    use core::ffi::c_void;
+    use std::os::windows::io::AsRawHandle;
+
+    #[repr(C)]
+    struct FileTime {
+        dw_low_date_time: u32,
+        dw_high_date_time: u32,
+    }
+
+    #[repr(C)]
+    struct ByHandleFileInformation {
+        dw_file_attributes: u32,
+        ft_creation_time: FileTime,
+        ft_last_access_time: FileTime,
+        ft_last_write_time: FileTime,
+        dw_volume_serial_number: u32,
+        n_file_size_high: u32,
+        n_file_size_low: u32,
+        n_number_of_links: u32,
+        n_file_index_high: u32,
+        n_file_index_low: u32,
+    }
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn GetFileInformationByHandle(
+            file: *mut c_void,
+            info: *mut ByHandleFileInformation,
+        ) -> i32;
+    }
+
+    let file = File::open(path).ok()?;
+    let mut info = core::mem::MaybeUninit::<ByHandleFileInformation>::zeroed();
+    let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+    if ok == 0 {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    if info.n_number_of_links > 1 {
+        let idx = ((info.n_file_index_high as u64) << 32) | (info.n_file_index_low as u64);
+        Some((info.dw_volume_serial_number as u64, idx))
+    } else {
+        None
+    }
+}
+
 fn apply_android_attrs(
     node: &mut BuildNode,
     opts: &PackOptions,
+    mount_point: &str,
     fs_cfg: Option<&FsConfigTable>,
     file_ctx: Option<&FileContextsMatcher>,
     mode_char: char,
 ) {
     if let Some(cfg) = fs_cfg {
-        if let Some(e) = cfg.lookup(&node.rel_path, &opts.mount_point) {
+        if let Some(e) = cfg.lookup(&node.rel_path, mount_point) {
             node.uid = e.uid;
             node.gid = e.gid;
             node.mode = (node.mode & 0o170000) | (e.mode & 0o7777);
@@ -876,7 +1089,7 @@ fn apply_android_attrs(
     }
 
     if let Some(ctx_matcher) = file_ctx {
-        if let Some(label) = ctx_matcher.lookup(&node.rel_path, mode_char, &opts.mount_point) {
+        if let Some(label) = ctx_matcher.lookup(&node.rel_path, mode_char, mount_point) {
             if let Some((idx, suffix)) = split_xattr_name("security.selinux") {
                 node.xattrs.push(RawXattr {
                     name_index: idx,
@@ -1085,7 +1298,7 @@ fn encode_compact_4b_zmap(
     let mut out = Vec::new();
     // z_erofs_map_header (8 bytes)
     let advise: u16 = if big_pcluster {
-        Z_ADVISE_BIG_PCLUSTER_1
+        Z_ADVISE_BIG_PCLUSTER_1 | Z_ADVISE_BIG_PCLUSTER_2
     } else {
         0
     };

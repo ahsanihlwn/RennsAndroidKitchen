@@ -146,10 +146,9 @@ class NativeImageToolsTests(unittest.TestCase):
         ):
             self.assertTrue(binary_handler.is_available(name, bin_root=str(empty_bin)), name)
 
-        reg_path = Path(__file__).resolve().parents[1] / "app_ext" / "dependency_registry" / "packagesa.json"
+        reg_path = Path(__file__).resolve().parents[1] / "package" / "package.json"
         reg_data = json.loads(reg_path.read_text(encoding="utf-8"))
-        for pkg in ("ext_tool", "make_ext4fs", "lpunpack", "brotli_env"):
-            self.assertNotIn(pkg, reg_data)
+        self.assertEqual(list(reg_data.keys()), ["apktool"])
 
         with patch.object(dependency_manager, "BIN_ROOT", str(empty_bin)), \
              patch.object(dependency_manager, "LOCAL_CACHE_JSON", str(empty_bin / "package.json")):
@@ -160,9 +159,11 @@ class NativeImageToolsTests(unittest.TestCase):
                 "lpunpack": {"display": "Lpunpack", "binaries": [{"name": "lpunpack.exe"}]},
                 "brotli_env": {"display": "Brotli", "binaries": [{"name": "brotli.exe"}]},
                 "erofs_env": {"display": "EROFS Environment", "binaries": [{"name": "mkfs.erofs.exe"}]},
+                "pac_extractor": {"display": "PAC Extractor", "binaries": [{"name": "extractor.exe"}]},
+                "apktool": {"display": "Apktool Suite", "binaries": [{"name": "apktool.jar"}]},
             }
             names = [pkg["name"] for pkg in mgr.list_packages()]
-            self.assertEqual(names, ["erofs_env"])
+            self.assertEqual(names, ["apktool"])
 
         env_info = cli_environment.describe(str(self.root))
         self.assertEqual(env_info["tools"]["lpunpack.exe"].get("backend"), "rak_native")
@@ -450,6 +451,277 @@ class NativeImageToolsTests(unittest.TestCase):
         self.assertTrue(new_img.is_file())
         v_new = native_backend.erofs_verify(str(new_img))
         self.assertTrue(v_new["ok"])
+
+    def test_erofs_symlinks_and_metadata_roundtrip(self):
+        from core.erofs import unpack_erofs, repack_erofs
+        from core.symlink import read_symlink_target
+
+        src_dir = self.root / "vendor_src"
+        (src_dir / "bin").mkdir(parents=True, exist_ok=True)
+        (src_dir / "app" / "App+One(v1)").mkdir(parents=True, exist_ok=True)
+        (src_dir / "bin" / "toybox").write_bytes(b"#!/system/bin/sh\necho toybox\n")
+        (src_dir / "bin" / "run-as").write_bytes(b"runas-binary")
+        (src_dir / "app" / "App+One(v1)" / "base.apk").write_bytes(b"APKDATA")
+
+        # Stage a Cygwin UTF-16LE symlink in source tree (works unprivileged on Windows & Linux)
+        sh_link = src_dir / "bin" / "sh"
+        sh_payload = b"!<symlink>\xff\xfe" + "/vendor/bin/toybox".encode("utf-16le") + b"\x00\x00"
+        sh_link.write_bytes(sh_payload)
+
+        in_cfg = self.root / "in_fs_config"
+        in_cfg.write_text(
+            "/ 0 0 0755\n"
+            "vendor 0 2000 0755\n"
+            "vendor/bin 0 2000 0755\n"
+            "vendor/bin/toybox 0 2000 0755\n"
+            "vendor/bin/sh 0 2000 0777\n"
+            "vendor/bin/run-as 0 2000 0750 capabilities=0xC0\n"
+            "vendor/app 0 0 0755\n"
+            "vendor/app/App+One(v1) 0 0 0755\n"
+            "vendor/app/App+One(v1)/base.apk 0 0 0644\n",
+            encoding="utf-8",
+        )
+        in_ctx = self.root / "in_file_contexts"
+        in_ctx.write_text(
+            "/ u:object_r:vendor_file:s0\n"
+            "/vendor(/.*)? u:object_r:vendor_file:s0\n"
+            "/vendor/bin/run-as u:object_r:runas_exec:s0\n"
+            r"/vendor/app/App\+One\(v1\)/base\.apk u:object_r:vendor_app_file:s0" + "\n",
+            encoding="utf-8",
+        )
+
+        img_path = self.root / "vendor.img"
+        native_backend.erofs_pack(
+            str(src_dir),
+            str(img_path),
+            algo="lz4hc",
+            pcluster_size=16384,
+            mount_point="/vendor",
+            fs_config=str(in_cfg),
+            file_contexts=str(in_ctx),
+            timestamp=1700000000,
+        )
+
+        ok_u, msg_u = unpack_erofs(str(img_path))
+        self.assertTrue(ok_u, msg_u)
+
+        unpacked_dir = self.root / "vendor"
+        unpacked_sh = unpacked_dir / "bin" / "sh"
+        self.assertTrue(unpacked_sh.exists() or unpacked_sh.is_symlink())
+        if unpacked_sh.is_symlink():
+            self.assertEqual(os.readlink(unpacked_sh), "/vendor/bin/toybox")
+        else:
+            self.assertEqual(read_symlink_target(str(unpacked_sh)), "/vendor/bin/toybox")
+
+        cfg_dir = self.root / "config"
+        fc_text = (cfg_dir / "vendor_file_contexts").read_text(encoding="utf-8")
+        self.assertIn(r"App\+One\(v1\)", fc_text)
+        fs_cfg_text = (cfg_dir / "vendor_fs_config").read_text(encoding="utf-8")
+        self.assertIn("vendor/bin/run-as 0 2000 0750 capabilities=0xc0", fs_cfg_text.lower())
+
+        # Add a brand-new Cygwin symlink not yet in fs_config so _patch_fs_config assigns 0777
+        extra_link = unpacked_dir / "bin" / "grep"
+        extra_link.write_bytes(b"!<symlink>\xff\xfe" + "toybox".encode("utf-16le") + b"\x00\x00")
+
+        ok_r, msg_r = repack_erofs(str(unpacked_dir))
+        self.assertTrue(ok_r, msg_r)
+        repacked = self.root / "vendor_new.img"
+        self.assertTrue(native_backend.erofs_verify(str(repacked))["ok"])
+
+        sh_stat = native_backend.erofs_stat(str(repacked), "/bin/sh")
+        self.assertTrue(sh_stat["is_link"])
+        self.assertEqual(sh_stat["target"], "/vendor/bin/toybox")
+        self.assertEqual(sh_stat["mode"] & 0o7777, 0o777)
+
+        grep_stat = native_backend.erofs_stat(str(repacked), "/bin/grep")
+        self.assertTrue(grep_stat["is_link"])
+        self.assertEqual(grep_stat["target"], "toybox")
+        self.assertEqual(grep_stat["mode"] & 0o7777, 0o777)
+
+        runas_stat = native_backend.erofs_stat(str(repacked), "/bin/run-as")
+        self.assertEqual(runas_stat["capabilities"], 0xC0)
+        self.assertEqual(runas_stat["selinux"], "u:object_r:runas_exec:s0")
+        self.assertEqual(runas_stat["mode"] & 0o7777, 0o750)
+
+        apk_stat = native_backend.erofs_stat(str(repacked), "/app/App+One(v1)/base.apk")
+        self.assertEqual(apk_stat["selinux"], "u:object_r:vendor_app_file:s0")
+
+    def test_erofs_to_ext4_and_ext4_to_erofs_aosp_conversion(self):
+        import shutil
+        from core.erofs import unpack_erofs, repack_erofs
+        from core.filesystem_converter import convert_filesystem_metadata
+
+        # 1. Build an EROFS /vendor image without an explicit lost+found rule in file_contexts
+        src_dir = self.root / "conv_src"
+        (src_dir / "bin").mkdir(parents=True, exist_ok=True)
+        (src_dir / "bin" / "toybox").write_bytes(b"#!/vendor/bin/sh\necho ok\n")
+        (src_dir / "bin" / "hwtool").write_bytes(b"HWTOOL")
+        (src_dir / "bin" / "sh").write_bytes(
+            b"!<symlink>\xff\xfe" + "/vendor/bin/toybox".encode("utf-16le") + b"\x00\x00"
+        )
+
+        in_cfg = self.root / "conv_fs_config"
+        in_cfg.write_text(
+            "/ 0 2000 0755\n"
+            "vendor 0 2000 0755\n"
+            "vendor/bin 0 2000 0755\n"
+            "vendor/bin/toybox 0 2000 0755\n"
+            "vendor/bin/sh 0 2000 0777\n"
+            "vendor/bin/hwtool 0 2000 0750 capabilities=0x1000\n",
+            encoding="utf-8",
+        )
+        in_ctx = self.root / "conv_file_contexts"
+        in_ctx.write_text(
+            "/ u:object_r:vendor_file:s0\n"
+            "/vendor u:object_r:vendor_file:s0\n"
+            "/vendor/bin/.* -- u:object_r:vendor_file:s0\n"
+            "/vendor/bin/hwtool u:object_r:hal_exec:s0\n",
+            encoding="utf-8",
+        )
+
+        erofs_img = self.root / "vendor.img"
+        native_backend.erofs_pack(
+            str(src_dir),
+            str(erofs_img),
+            algo="lz4hc",
+            mount_point="/vendor",
+            fs_config=str(in_cfg),
+            file_contexts=str(in_ctx),
+            timestamp=1700000000,
+        )
+
+        # 2. Unpack EROFS, remove lost+found rule manually to verify converter adds it, then convert EROFS -> EXT4
+        ok_u, msg_u = unpack_erofs(str(erofs_img))
+        self.assertTrue(ok_u, msg_u)
+        vendor_dir = self.root / "vendor"
+        cfg_dir = self.root / "config"
+        fc_file = cfg_dir / "vendor_file_contexts"
+        fc_lines = [
+            ln for ln in fc_file.read_text(encoding="utf-8").splitlines()
+            if "lost" not in ln
+        ]
+        fc_file.write_text("\n".join(fc_lines) + "\n", encoding="utf-8")
+
+        ok_c1, msg_c1 = convert_filesystem_metadata(str(vendor_dir), "EXT4")
+        self.assertTrue(ok_c1, msg_c1)
+        self.assertTrue((cfg_dir / "vendor_info").is_file())
+        self.assertFalse((cfg_dir / "vendor_fs_options").is_file())
+        self.assertIn(r"/vendor/lost\+found", fc_file.read_text(encoding="utf-8"))
+
+        ok_ext, ext_out = repack_ext4.main(str(vendor_dir))
+        self.assertTrue(ok_ext, ext_out)
+        self.assertEqual(check_ext4.check_ext4_magic(ext_out), "EXT4")
+
+        # 3. Unpack converted EXT4 (which creates lost+found on disk) & convert back EXT4 -> EROFS
+        ext_stage = self.root / "ext_round"
+        ext_stage.mkdir()
+        ext_copy = ext_stage / "vendor.img"
+        shutil.copy2(ext_out, ext_copy)
+
+        ok_eu, ext_unpacked = unpack_ext4.main(str(ext_copy))
+        self.assertTrue(ok_eu, ext_unpacked)
+        ext_cfg_dir = ext_stage / "config"
+        ext_fs_cfg = (ext_cfg_dir / "vendor_fs_config").read_text(encoding="utf-8")
+        self.assertIn("vendor 0 2000 0755", ext_fs_cfg)
+        self.assertIn("capabilities=0x1000", ext_fs_cfg.lower())
+        self.assertTrue((Path(ext_unpacked) / "lost+found").is_dir())
+
+        ok_c2, msg_c2 = convert_filesystem_metadata(ext_unpacked, "EROFS")
+        self.assertTrue(ok_c2, msg_c2)
+        self.assertFalse((Path(ext_unpacked) / "lost+found").exists())
+        self.assertTrue((ext_cfg_dir / "vendor_fs_options").is_file())
+        self.assertFalse((ext_cfg_dir / "vendor_info").is_file())
+
+        ok_er, erofs_out = repack_erofs(ext_unpacked)
+        self.assertTrue(ok_er, erofs_out)
+        repacked_erofs = ext_stage / "vendor_new.img"
+        self.assertTrue(native_backend.erofs_verify(str(repacked_erofs))["ok"])
+        paths = [e["path"] for e in native_backend.erofs_list(str(repacked_erofs))]
+        self.assertNotIn("/lost+found", paths)
+        sh_stat = native_backend.erofs_stat(str(repacked_erofs), "/bin/sh")
+        self.assertTrue(sh_stat["is_link"])
+        self.assertEqual(sh_stat["target"], "/vendor/bin/toybox")
+        hw_stat = native_backend.erofs_stat(str(repacked_erofs), "/bin/hwtool")
+        self.assertEqual(hw_stat["capabilities"], 0x1000)
+        self.assertEqual(hw_stat["selinux"], "u:object_r:hal_exec:s0")
+
+    def test_loading_progress_for_erofs_ext4_super_and_payload(self):
+        import struct
+        from compression import zstd as std_zstd
+        from core.threader_control import progress_scope
+        from core import payload_extract, update_metadata_pb2
+
+        # 1. EROFS pack & unpack progress
+        erofs_src = self.root / "prog_erofs_src"
+        erofs_src.mkdir()
+        (erofs_src / "hello.txt").write_bytes(b"hello progress\n" * 64)
+        erofs_img = self.root / "prog_erofs.img"
+        erofs_out = self.root / "prog_erofs_out"
+
+        pack_ev = []
+        with progress_scope(lambda pct, stage: pack_ev.append((pct, stage))):
+            native_backend.erofs_pack(str(erofs_src), str(erofs_img), algo="none")
+        self.assertTrue(any(p >= 100 for p, _ in pack_ev), f"erofs_pack events: {pack_ev}")
+
+        unpack_ev = []
+        with progress_scope(lambda pct, stage: unpack_ev.append((pct, stage))):
+            native_backend.erofs_unpack(str(erofs_img), str(erofs_out), image_base_name="prog")
+        self.assertTrue(any(p >= 100 for p, _ in unpack_ev), f"erofs_unpack events: {unpack_ev}")
+
+        # 2. EXT4 make_fs & unpack progress
+        ext_img = self.root / "prog_ext.img"
+        ext_make_ev = []
+        with progress_scope(lambda pct, stage: ext_make_ev.append((pct, stage))):
+            native_backend.ext_make_fs(str(ext_img), str(erofs_src), size_bytes=16 * 1024 * 1024, mount_point="prog")
+        self.assertTrue(any(p >= 100 for p, _ in ext_make_ev), f"ext_make_fs events: {ext_make_ev}")
+
+        ext_unpack_ev = []
+        with progress_scope(lambda pct, stage: ext_unpack_ev.append((pct, stage))):
+            native_backend.ext_unpack(str(ext_img))
+        self.assertTrue(any(p >= 100 for p, _ in ext_unpack_ev), f"ext_unpack events: {ext_unpack_ev}")
+
+        # 3. Super unsparse & extract (lpunpack) progress
+        super_sparse = self.root / "prog_super.img"
+        _build_super_fixture(super_sparse, sparse=True)
+        super_ev = []
+        with progress_scope(lambda pct, stage: super_ev.append((pct, stage))):
+            native_backend.super_extract(str(super_sparse), str(self.root / "prog_super_out"), normalize=True)
+        self.assertTrue(any(p >= 100 for p, _ in super_ev), f"super_extract events: {super_ev}")
+
+        unsparse_dir = self.root / "prog_unsparse"
+        unsparse_dir.mkdir()
+        unsparse_ev = []
+        with progress_scope(lambda pct, stage: unsparse_ev.append((pct, stage))):
+            native_backend.super_unsparse(str(super_sparse), str(unsparse_dir))
+        self.assertTrue(any(p >= 100 for p, _ in unsparse_ev), f"super_unsparse events: {unsparse_ev}")
+
+        # 4. Payload (unsigned + REPLACE_ZSTD) progress
+        block0 = (b"BOOT_KERNEL_BLOCK_" * 256)[:4096]
+        compressed = std_zstd.compress(block0)
+        manifest = update_metadata_pb2.DeltaArchiveManifest()
+        manifest.block_size = 4096
+        manifest.minor_version = 0
+        part = manifest.partitions.add()
+        part.partition_name = "boot"
+        op = part.operations.add()
+        op.type = update_metadata_pb2.InstallOperation.REPLACE_ZSTD
+        op.data_offset = 0
+        op.data_length = len(compressed)
+        ext = op.dst_extents.add()
+        ext.start_block = 0
+        ext.num_blocks = 1
+
+        manifest_bytes = manifest.SerializeToString()
+        payload_path = self.root / "payload.bin"
+        payload_path.write_bytes(
+            struct.pack(">4sQQI", b"CrAU", 2, len(manifest_bytes), 0) + manifest_bytes + compressed
+        )
+        payload_out = self.root / "payload_out"
+        payload_ev = []
+        with open(payload_path, "rb") as stream, progress_scope(lambda pct, stage: payload_ev.append((pct, stage))):
+            payload_extract.extract_partitions_from_payload(stream, ["boot"], str(payload_out))
+        self.assertEqual((payload_out / "boot.img").read_bytes(), block0)
+        self.assertTrue(any(p >= 100 for p, _ in payload_ev), f"payload events: {payload_ev}")
 
     def test_erofs_binary_resolver_and_cli_environment(self):
         from core.app_paths import BIN_DIR

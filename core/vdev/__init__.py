@@ -2,6 +2,7 @@
 # Analyze unpacked ROM partitions without executing firmware.
 from __future__ import annotations
 
+import os
 import time
 
 from core.vdev.context import Context
@@ -10,10 +11,53 @@ from core.vdev.report import Report, StageResult, Finding, BLOCKER, WARN, INFO, 
 
 print("[CORE STAGE] VDEV")
 
-__all__ = ["analyze", "Report", "Finding", "BLOCKER", "WARN", "INFO", "PASS"]
+__all__ = [
+    "analyze",
+    "analyze_workspace_mounts",
+    "compare_firmwares",
+    "Report",
+    "Finding",
+    "BLOCKER",
+    "WARN",
+    "INFO",
+    "PASS",
+]
 
 
-def analyze(port_dir, options=None, progress=None):
+def compare_firmwares(stock_target, port_target, options=None):
+    from core.vdev.diff import compare_firmwares as _cmp
+    return _cmp(stock_target, port_target, options=options)
+
+
+def analyze_workspace_mounts(workspace_mounts, base=None, options=None, progress=None):
+    """Analyze a workspace project reusing images currently mounted in WorkspaceMounts."""
+    opts = dict(options or {})
+    mounted = {}
+    image_base = getattr(workspace_mounts, "_image_base", {}) or {}
+    registries = getattr(workspace_mounts, "_registries", {}) or {}
+    target_base = base
+    for img_path, img_base in image_base.items():
+        if target_base and os.path.normpath(img_base) != os.path.normpath(target_base):
+            continue
+        if not target_base:
+            target_base = img_base
+        reg = registries.get(img_base)
+        meta = (getattr(reg, "metadata", {}) or {}).get(img_path, {})
+        physical = meta.get("physical") or img_path
+        name = os.path.splitext(os.path.basename(img_path))[0]
+        mounted[name] = physical
+    if mounted:
+        prev = opts.get("mounted_images")
+        if isinstance(prev, dict):
+            merged = dict(prev)
+            merged.update(mounted)
+            opts["mounted_images"] = merged
+        else:
+            opts["mounted_images"] = mounted
+    return analyze(target_base or "", options=opts, progress=progress)
+
+
+def analyze(port_dir, options=None, progress=None, on_vfs=None, on_stage=None):
 
     options = options or {}
     report = Report(port_dir=port_dir, options=dict(options))
@@ -26,17 +70,16 @@ def analyze(port_dir, options=None, progress=None):
                 pass
 
     try:
-        note("Scanning port folder…")
-        layout = scan_layout(port_dir)
+        note("Scanning firmware source…")
+        layout = scan_layout(port_dir, options, progress=note)
         if not layout.any_partition:
             report.error = (
-                "No analysable partition in this folder — neither an unpacked "
-                "folder nor an EXT/EROFS image. Point this at a ROM folder "
-                "containing system.img (or an unpacked system)."
+                "No analysable partition staged — add super.img, system.img "
+                "(or unpacked partitions), or a firmware .zip first."
             )
             return report
 
-        note("Building mount table…")
+        note("Mounting virtual filesystem…")
         vfs, ramdisk_vfs = build_vfs(layout)
         fstab, fstab_origin = find_fstab(vfs, ramdisk_vfs, layout)
         layout.fstab_origin = fstab_origin
@@ -46,12 +89,19 @@ def analyze(port_dir, options=None, progress=None):
             for m in sorted(vfs.mounts, key=lambda x: x.point)
         ]
 
+        if on_vfs is not None:
+            try:
+                on_vfs(vfs, ramdisk_vfs, layout, fstab, fstab_origin)
+            except Exception:
+                pass
+
         ctx = Context(port_dir, layout, vfs, ramdisk_vfs,
                       fstab=fstab, fstab_origin=fstab_origin,
                       options=options, progress=progress)
 
         from core.vdev.stages import STAGES
-        for mod in STAGES:
+        total_stages = max(1, len(STAGES))
+        for stage_idx, mod in enumerate(STAGES, start=1):
             res = StageResult(key=mod.KEY, label=mod.LABEL)
 
 
@@ -60,20 +110,24 @@ def analyze(port_dir, options=None, progress=None):
             if missing_req:
                 res.ran = False
                 res.skipped_reason = (
-                    "Partition " + ", ".join(missing_req) + " is not in this project"
+                    "Partition " + ", ".join(missing_req) + " is not staged"
                 )
                 res.findings = [Finding(
                     mod.KEY, "stage-skipped", INFO,
                     f"{mod.LABEL} skipped — {res.skipped_reason}",
-                    "This stage can only judge anything when that partition is "
-                    "unpacked in the same folder.",
-                    "Unpack " + ", ".join(missing_req) + " into this project "
-                    "for a full analysis.",
+                    "This stage requires that partition to be staged in the SUPER container.",
+                    "Stage " + ", ".join(missing_req) + " for a full analysis.",
                 )]
                 report.stages.append(res)
+                if on_stage is not None:
+                    try:
+                        on_stage(res, ctx)
+                    except Exception:
+                        pass
                 continue
 
-            note(mod.LABEL + "…")
+            pct = int(stage_idx * 100 / total_stages)
+            note(f"Stage {stage_idx}/{total_stages}: {mod.LABEL} ({pct}%)…")
             t0 = time.perf_counter()
             try:
                 res.findings = mod.run(ctx) or []
@@ -93,6 +147,11 @@ def analyze(port_dir, options=None, progress=None):
                 )]
             res.duration_ms = int((time.perf_counter() - t0) * 1000)
             report.stages.append(res)
+            if on_stage is not None:
+                try:
+                    on_stage(res, ctx)
+                except Exception:
+                    pass
 
 
             if ctx.profile.get("no_rom"):
@@ -107,6 +166,33 @@ def analyze(port_dir, options=None, progress=None):
         report.profile["link_hops"] = vfs.link_hops
         report.profile["vbmeta"] = ctx.shared.get("vbmeta", {})
         report.readiness = ctx.shared.get("readiness", {})
+        report.boot_simulation = ctx.shared.get("boot_simulation", {})
+        report.boot_trace = list(ctx.shared.get("boot_trace", ()) or ())
+        # Build prioritized Root-Cause Verdict list (BLOCKERs first, then WARNs)
+        causes = []
+        rank = 0
+        for f in report.sorted_findings():
+            if f.severity not in (BLOCKER, WARN):
+                continue
+            if f.code == "sim-verdict":
+                continue
+            rank += 1
+            causes.append({
+                "rank": rank,
+                "severity": f.severity,
+                "stage": f.stage,
+                "code": f.code,
+                "title": f.title,
+                "detail": f.detail,
+                "hint": f.hint,
+                "path": f.path,
+            })
+        report.root_causes = causes
+        try:
+            from core.vdev.autofix import build_autofix_plan
+            report.autofix = build_autofix_plan(ctx, report)
+        except Exception:
+            report.autofix = []
 
     except Exception as exc:                       # noqa: BLE001
         import traceback

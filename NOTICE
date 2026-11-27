@@ -1,5 +1,5 @@
 Renns Android Kitchen
-Copyright (c) 2025-2026 ahsanihlwn (rennsproject)
+Copyright (c) 2025-2026 rennsproject
 
 Project-authored public source files are licensed under the Mozilla Public
 License, version 2.0. See LICENSE. The source is available at:
@@ -49,9 +49,12 @@ Third-party files retain their original licenses and copyright notices:
 Copies of additional vendored license texts are in licenses/.
 Installed and bundled dependencies retain their respective licenses.
 
-Binary Lab's Rust dependencies added for binary inspection use the MIT license
-option. Original copyright and permission notices, including new transitive
-dependencies, are in licenses/BINARY-LAB-THIRD-PARTY.txt.
+- core/ghidra_scripts/rea/: MIT, Copyright (c) 2026 morluto, adapted from
+  morluto/rea (`bridge/ghidra/`). See core/ghidra_scripts/rea/LICENSE and
+  licenses/REA-MIT-LICENSE.txt.
+- Binary Lab's Rust dependencies added for binary inspection use the MIT license
+  option. Original copyright and permission notices, including new transitive
+  dependencies, are in licenses/BINARY-LAB-THIRD-PARTY.txt.
 Ghidra is an optional, separately installed external program. No Ghidra,
 Rizin, Cutter, or rz-ghidra implementation source or runtime is included by
 Binary Lab. See docs/binary_lab.md for the integration and distribution boundary.

@@ -390,7 +390,13 @@ impl CpioArchive {
                 let text = String::from_utf8_lossy(&entry.data);
                 for line in text.lines() {
                     if let Some(rest) = line.strip_prefix("#STOCKSHA1=") {
-                        let hash = rest.trim().chars().take(40).collect::<String>();
+                        let hash = rest
+                            .trim()
+                            .trim_matches('\'')
+                            .trim_matches('"')
+                            .chars()
+                            .take(40)
+                            .collect::<String>();
                         if !hash.is_empty() {
                             return Some(hash);
                         }

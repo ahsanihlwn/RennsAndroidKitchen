@@ -113,6 +113,9 @@ def check_magic(filepath: str) -> str:
     if data.startswith(b"AVB0"):
         return "VBMETA"
 
+    if data.startswith(b"\xd7\xb7\xab\x1e"):
+        return "DTBO"
+
     try:
         from core.native_backend import oem_detect_magic
         oem_kind = oem_detect_magic(filepath)

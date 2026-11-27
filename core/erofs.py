@@ -3,10 +3,7 @@ import os
 import re
 import shlex
 
-from core.app_paths import BIN_DIR
-from core.binary_handler import resolve_binary
-
-BIN_PATH = BIN_DIR
+from core.binary_handler import is_available
 
 UUID_RE = re.compile(
     r"Filesystem UUID:\s*([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-"
@@ -33,9 +30,8 @@ def get_uuid_from_fs_options(fs_options_path):
 
 
 def unpack_erofs(img_path):
-    UNPACK_EROFS = resolve_binary(BIN_PATH, "extract.erofs.exe")
-    if not UNPACK_EROFS:
-        return False, "EROFS Environtment not found"
+    if not is_available("extract.erofs.exe"):
+        return False, "Native EROFS engine (rak_native) not available"
 
     # FS CHECK — pakai header_magic (no binary spawn)
     from core.header_magic import is_fs_image as _check_fs
@@ -50,8 +46,8 @@ def unpack_erofs(img_path):
     if not os.path.exists(parent):
         os.makedirs(parent, exist_ok=True)
 
-    from core.storage_detector import get_optimal_io_workers
-    threads = get_optimal_io_workers(parent, max_cap=64, hdd_cap=4)
+    from core.threader_control import threader_control
+    threads = threader_control.recommend_tool_threads(parent, max_cap=64, hdd_cap=4)
 
     try:
         from core.native_backend import erofs_unpack
@@ -69,52 +65,20 @@ def unpack_erofs(img_path):
         return False, f"erofs_unpack failed: {e}"
 
 
-def _patch_fs_config(fs_config_file: str, folder_path: str, part_name: str):
-    # Baca entry yang sudah ada (key = path string)
-    existing = set()
-    try:
-        with open(fs_config_file, "r", encoding="utf-8", errors="ignore") as f:
-            for ln in f:
-                s = ln.strip()
-                if s and not s.startswith("#"):
-                    existing.add(s.split()[0])
-    except Exception as e:
-        print(f"[PATCH_FSCFG] read error: {e}")
-        return
-
-    new_lines = []
-
-    # Walk folder dan cari path yang missing
-    for root, dirs, files in os.walk(folder_path):
-        rel_dir = os.path.relpath(root, os.path.dirname(folder_path)).replace("\\", "/")
-        if rel_dir not in existing:
-            new_lines.append(f"{rel_dir} 0 0 0755")
-            existing.add(rel_dir)
-
-        for fname in files:
-            rel_file = os.path.join(
-                os.path.relpath(root, os.path.dirname(folder_path)), fname
-            ).replace("\\", "/")
-            if rel_file not in existing:
-                new_lines.append(f"{rel_file} 0 0 0644")
-                existing.add(rel_file)
-
-    if not new_lines:
-        return
-
-    print(f"[PATCH_FSCFG] adding {len(new_lines)} missing entries to fs_config")
-    try:
-        with open(fs_config_file, "a", encoding="utf-8", newline="\n") as f:
-            for ln in new_lines:
-                f.write(ln + "\n")
-    except Exception as e:
-        print(f"[PATCH_FSCFG] write error: {e}")
+def _patch_fs_config(fs_config_file: str, folder_path: str, part_name: str, *, mount_point: str | None = None):
+    from core.aosp_fs_helper import patch_missing_fs_config
+    patch_missing_fs_config(
+        fs_config_file,
+        folder_path,
+        part_name,
+        mount_point=mount_point,
+        skip_lost_found=True,
+    )
 
 
 def repack_erofs(folder_path, part_name=None):
-    MKFS_BIN = resolve_binary(BIN_PATH, "mkfs.erofs.exe")
-    if not MKFS_BIN:
-        return False, "EROFS ENVIRONTMENT NOT FOUND"
+    if not is_available("mkfs.erofs.exe"):
+        return False, "Native EROFS engine (rak_native) not available"
 
     # Ambil nama partisi otomatis
     if part_name is None:
@@ -143,11 +107,22 @@ def repack_erofs(folder_path, part_name=None):
     # Pastikan file-file config lain ada
     if not os.path.isfile(fs_config_file):
         return False, f"fs_config tidak ditemukan: {fs_config_file}"
+
+    from core.aosp_fs_helper import parse_erofs_mount_point, prepare_tree_and_configs_for_target
+    mount_point = parse_erofs_mount_point(fs_options_file, part_name)
+
+    # Pastikan tree & config memenuhi spesifikasi AOSP EROFS (tanpa empty lost+found, fallback file_contexts, dll.)
+    from core.threader_control import report_progress
+    report_progress(2, "Updating fs_config")
+    prepare_tree_and_configs_for_target(
+        folder_path,
+        part_name,
+        cfg_dir,
+        "EROFS",
+        mount_point=mount_point,
+    )
     if not os.path.isfile(file_contexts):
         return False, f"file_context tidak ditemukan: {file_contexts}"
-
-    # AUTO-PATCH fs_config: tambahkan entry yang missing
-    _patch_fs_config(fs_config_file, folder_path, part_name)
 
     # Output img baru
     out_img = os.path.join(parent, f"{name}_new.img")
@@ -155,8 +130,8 @@ def repack_erofs(folder_path, part_name=None):
     from core.repack_policy import get_erofs_args
 
     z_arg, t_arg, erofs_mode = get_erofs_args()
-    from core.storage_detector import get_optimal_io_workers
-    workers = get_optimal_io_workers(folder_path, max_cap=64, hdd_cap=4)
+    from core.threader_control import threader_control
+    workers = threader_control.recommend_tool_threads(folder_path, max_cap=64, hdd_cap=4)
 
     ts = 0
     t_parts = shlex.split(t_arg, posix=False)
@@ -181,7 +156,7 @@ def repack_erofs(folder_path, part_name=None):
             source_dir=folder_path,
             output_image=out_img,
             algo=z_arg,
-            mount_point=f"/{part_name}",
+            mount_point=mount_point,
             fs_config=fs_config_file,
             file_contexts=file_contexts,
             uuid=uuid_val,

@@ -10,6 +10,15 @@ use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+/// Random-access backing trait for virtual/composite image sources (e.g., LP extents in super.img).
+pub trait RandomAccessBacking: Send + Sync {
+    fn len(&self) -> u64;
+    fn is_sparse(&self) -> bool {
+        false
+    }
+    fn read_at(&self, pos: u64, buf: &mut [u8]) -> Result<usize>;
+}
+
 /// Thread-safe random-access image backing store.
 pub enum ImageBacking {
     Raw {
@@ -25,6 +34,7 @@ pub enum ImageBacking {
     Memory {
         data: Arc<Vec<u8>>,
     },
+    Custom(Arc<dyn RandomAccessBacking>),
 }
 
 #[derive(Clone)]
@@ -38,6 +48,12 @@ impl ImageSource {
             inner: Arc::new(ImageBacking::Memory {
                 data: Arc::new(data),
             }),
+        }
+    }
+
+    pub fn from_custom(backing: Arc<dyn RandomAccessBacking>) -> Self {
+        Self {
+            inner: Arc::new(ImageBacking::Custom(backing)),
         }
     }
 
@@ -66,7 +82,11 @@ impl ImageSource {
     }
 
     pub fn is_sparse(&self) -> bool {
-        matches!(&*self.inner, ImageBacking::Sparse { .. })
+        match &*self.inner {
+            ImageBacking::Sparse { .. } => true,
+            ImageBacking::Custom(b) => b.is_sparse(),
+            _ => false,
+        }
     }
 
     pub fn len(&self) -> u64 {
@@ -74,6 +94,7 @@ impl ImageSource {
             ImageBacking::Raw { len, .. } => *len,
             ImageBacking::Sparse { sparse, offset } => sparse.total_size.saturating_sub(*offset),
             ImageBacking::Memory { data } => data.len() as u64,
+            ImageBacking::Custom(b) => b.len(),
         }
     }
 
@@ -117,6 +138,7 @@ impl ImageSource {
                 buf[..avail].copy_from_slice(&data[start..start + avail]);
                 Ok(avail)
             }
+            ImageBacking::Custom(b) => b.read_at(pos, buf),
         }
     }
 

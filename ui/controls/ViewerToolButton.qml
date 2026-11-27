@@ -8,7 +8,7 @@ RakButton {
     implicitHeight: primary?28:24
     font.pixelSize: 11; font.weight: primary?Font.Medium:Font.Normal
     leftPadding: primary?10:8; rightPadding: leftPadding; cornerRadius: 4
-    edgeWidth: primary?1:0; edgeColor: primary?(colors.BTN_PRIMARY_EDGE || colors.a38):"transparent"; hoverEdgeColor: primary?(colors.BTN_PRIMARY_EDGE_HOVER || colors.a55):colors.b12
+    edgeWidth: primary?1:0; edgeColor: primary?(colors.BTN_PRIMARY_EDGE || colors.a38):"transparent"; hoverEdgeColor: primary?(colors.BTN_PRIMARY_EDGE_HOVER || colors.a55):colors.b10
     fillColor: primary?(colors.BTN_PRIMARY_BG || colors.a18):"transparent"
     hoverFillColor: primary?(colors.BTN_PRIMARY_HOVER || colors.a28):colors.b08
     downFillColor: primary?(colors.BTN_PRIMARY_DOWN || colors.a40):colors.b12

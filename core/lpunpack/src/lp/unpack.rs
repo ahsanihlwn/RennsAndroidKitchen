@@ -100,9 +100,22 @@ impl SparseHoleWriter {
         source: &mut R,
         extent: &LpMetadataExtent,
     ) -> Result<(), LpError> {
+        self.write_extent_with_progress(source, extent, |_| {})
+    }
+
+    pub fn write_extent_with_progress<R: Read + Seek, F>(
+        &mut self,
+        source: &mut R,
+        extent: &LpMetadataExtent,
+        mut on_bytes: F,
+    ) -> Result<(), LpError>
+    where
+        F: FnMut(u64),
+    {
         let total_bytes = extent.num_sectors * LP_SECTOR_SIZE;
         if extent.target_type == LP_TARGET_TYPE_ZERO {
             self.hole_size += total_bytes;
+            on_bytes(total_bytes);
             return Ok(());
         }
         if extent.target_type != LP_TARGET_TYPE_LINEAR {
@@ -123,6 +136,7 @@ impl SparseHoleWriter {
             source.read_exact(&mut buf[..to_read])?;
             self.write_batched(&buf[..to_read])?;
             remaining -= to_read as u64;
+            on_bytes(to_read as u64);
         }
         Ok(())
     }
@@ -208,6 +222,29 @@ pub fn extract_partition_to_dir(
     out_name: &str,
     output_dir: &Path,
 ) -> Result<PathBuf, LpError> {
+    extract_partition_to_dir_with_progress(
+        super_path,
+        primary_source,
+        metadata,
+        partition,
+        out_name,
+        output_dir,
+        |_| {},
+    )
+}
+
+pub fn extract_partition_to_dir_with_progress<F>(
+    super_path: &Path,
+    primary_source: &mut ImageSource<File>,
+    metadata: &LpMetadata,
+    partition: &LpMetadataPartition,
+    out_name: &str,
+    output_dir: &Path,
+    mut on_bytes: F,
+) -> Result<PathBuf, LpError>
+where
+    F: FnMut(u64),
+{
     let out_path = output_dir.join(format!("{out_name}.img"));
     let out_file = OpenOptions::new()
         .create(true)
@@ -224,10 +261,10 @@ pub fn extract_partition_to_dir(
             if let Some(mut alt_src) =
                 open_device_source(super_path, metadata, extent.target_source)?
             {
-                writer.write_extent(&mut alt_src, extent)?;
+                writer.write_extent_with_progress(&mut alt_src, extent, &mut on_bytes)?;
             }
         } else {
-            writer.write_extent(primary_source, extent)?;
+            writer.write_extent_with_progress(primary_source, extent, &mut on_bytes)?;
         }
     }
 
@@ -294,6 +331,21 @@ pub fn unpack_super_image(
     slot: u32,
     normalize: bool,
 ) -> Result<Vec<PathBuf>, LpError> {
+    unpack_super_image_with_progress(super_path, out_dir, partitions, slot, normalize, |_, _| {})
+}
+
+pub fn unpack_super_image_with_progress<F>(
+    super_path: &Path,
+    out_dir: &Path,
+    partitions: &[String],
+    slot: u32,
+    normalize: bool,
+    mut on_progress: F,
+) -> Result<Vec<PathBuf>, LpError>
+where
+    F: FnMut(u8, &str),
+{
+    on_progress(2, "Reading super metadata");
     let file = File::open(super_path)?;
     let mut source = ImageSource::open(file)?;
     let (mut metadata, is_empty) = read_metadata_auto(&mut source, slot)?;
@@ -307,22 +359,52 @@ pub fn unpack_super_image(
         fs::create_dir_all(out_dir)?;
     }
     let plan = select_partitions_for_extract(&metadata, normalize, slot);
+    let total_bytes: u64 = plan
+        .iter()
+        .map(|(part, _)| metadata.partition_size(part))
+        .sum::<u64>()
+        .max(1);
+    let mut written_bytes: u64 = 0;
+    let mut last_pct: u8 = 2;
     let mut outputs = Vec::with_capacity(plan.len());
     for (part, out_name) in &plan {
-        let out_path = extract_partition_to_dir(
+        let stage = format!("Extracting {out_name}");
+        on_progress(last_pct, &stage);
+        let out_path = extract_partition_to_dir_with_progress(
             super_path,
             &mut source,
             &metadata,
             part,
             out_name,
             out_dir,
+            |delta| {
+                written_bytes = written_bytes.saturating_add(delta);
+                let pct = 2 + ((written_bytes.saturating_mul(97)) / total_bytes).min(97) as u8;
+                if pct > last_pct {
+                    last_pct = pct;
+                    on_progress(pct, &stage);
+                }
+            },
         )?;
         outputs.push(out_path);
     }
+    on_progress(100, "Done");
     Ok(outputs)
 }
 
 pub fn unsparse_super_image(src_path: &Path, output_dir: Option<&Path>) -> Result<PathBuf, LpError> {
+    unsparse_super_image_with_progress(src_path, output_dir, |_, _| {})
+}
+
+pub fn unsparse_super_image_with_progress<F>(
+    src_path: &Path,
+    output_dir: Option<&Path>,
+    mut on_progress: F,
+) -> Result<PathBuf, LpError>
+where
+    F: FnMut(u8, &str),
+{
+    on_progress(2, "Reading sparse super header");
     let file_name = src_path
         .file_name()
         .ok_or_else(|| LpError::InvalidMetadata("Invalid image filename.".into()))?;
@@ -360,7 +442,14 @@ pub fn unsparse_super_image(src_path: &Path, output_dir: Option<&Path>) -> Resul
             .write(true)
             .truncate(true)
             .open(&tmp_path)?;
-        reader.write_raw_to(&mut out_file)?;
+        let mut last_pct: u8 = 2;
+        reader.write_raw_to_with_progress(&mut out_file, |pct| {
+            let mapped = 2 + ((pct as u16 * 97) / 100) as u8;
+            if mapped > last_pct {
+                last_pct = mapped;
+                on_progress(mapped, "Unsparsing image");
+            }
+        })?;
         out_file.flush()?;
         Ok(())
     })();
@@ -377,5 +466,6 @@ pub fn unsparse_super_image(src_path: &Path, output_dir: Option<&Path>) -> Resul
         return Err(LpError::Io(e));
     }
 
+    on_progress(100, "Done");
     Ok(target_path)
 }

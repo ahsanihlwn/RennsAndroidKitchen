@@ -31,6 +31,7 @@ const TYPE_INT_BOOLEAN: u8 = 0x12;
 const ATTR_ID_LABEL: u32 = 0x0101_0001;
 const ATTR_ID_ICON: u32 = 0x0101_0002;
 const ATTR_ID_NAME: u32 = 0x0101_0003;
+const ATTR_ID_ENABLED: u32 = 0x0101_000e;
 const ATTR_ID_MIN_SDK: u32 = 0x0101_020c;
 const ATTR_ID_VERSION_CODE: u32 = 0x0101_021b;
 const ATTR_ID_VERSION_NAME: u32 = 0x0101_021c;
@@ -98,7 +99,7 @@ fn decode_utf16_len(data: &[u8], pos: &mut usize) -> Option<usize> {
     }
 }
 
-fn parse_string_pool(chunk: &[u8]) -> Option<Vec<String>> {
+pub(crate) fn parse_string_pool(chunk: &[u8]) -> Option<Vec<String>> {
     if chunk.len() < 28 {
         return None;
     }
@@ -157,20 +158,31 @@ fn parse_string_pool(chunk: &[u8]) -> Option<Vec<String>> {
 }
 
 #[derive(Default)]
-struct ManifestParsed {
-    package: String,
-    version_name: String,
-    version_code: String,
-    min_sdk: String,
-    target_sdk: String,
-    label: String,
-    label_res_id: Option<u32>,
-    icon_raw: String,
-    icon_res_id: Option<u32>,
-    permissions: Vec<String>,
+pub(crate) struct ManifestParsed {
+    pub package: String,
+    pub version_name: String,
+    pub version_code: String,
+    pub min_sdk: String,
+    pub target_sdk: String,
+    pub label: String,
+    pub label_res_id: Option<u32>,
+    pub icon_raw: String,
+    pub icon_res_id: Option<u32>,
+    pub permissions: Vec<String>,
+    pub shared_user_id: String,
+    pub uses_libraries: Vec<(String, bool)>,
+    pub overlay_target: String,
+    pub overlay_target_name: String,
+    pub overlay_is_static: bool,
+    pub overlay_priority: i32,
+    pub overlay_required_prop_name: String,
+    pub overlay_required_prop_value: String,
+    pub is_launcher: bool,
+    pub declared_permissions: Vec<(String, u32)>,
+    pub components: Vec<(String, String)>,
 }
 
-fn parse_axml_manifest(data: &[u8]) -> Option<ManifestParsed> {
+pub(crate) fn parse_axml_manifest(data: &[u8]) -> Option<ManifestParsed> {
     if data.len() < 8 || r_u16(data, 0)? != RES_XML_TYPE {
         return None;
     }
@@ -219,6 +231,12 @@ fn parse_axml_manifest(data: &[u8]) -> Option<ManifestParsed> {
 
                     if attr_size >= 20 {
                         let attrs_base = body + attr_start;
+                        let mut lib_name = String::new();
+                        let mut lib_req = true;
+                        let mut perm_decl_name = String::new();
+                        let mut perm_decl_prot: u32 = 0;
+                        let mut comp_name = String::new();
+                        let mut comp_enabled = true;
                         for a in 0..attr_count {
                             let a_off = attrs_base + a * attr_size;
                             if a_off + 20 > chunk.len() {
@@ -267,6 +285,8 @@ fn parse_axml_manifest(data: &[u8]) -> Option<ManifestParsed> {
                                         manifest.version_name = val_str;
                                     } else if attr_res_id == ATTR_ID_VERSION_CODE || attr_name == "versionCode" {
                                         manifest.version_code = val_str;
+                                    } else if attr_res_id == 0x0101_000b || attr_name == "sharedUserId" {
+                                        manifest.shared_user_id = val_str;
                                     }
                                 }
                                 "uses-sdk" => {
@@ -284,6 +304,51 @@ fn parse_axml_manifest(data: &[u8]) -> Option<ManifestParsed> {
                                         manifest.permissions.push(val_str);
                                     }
                                 }
+                                "uses-library" => {
+                                    if attr_res_id == ATTR_ID_NAME || attr_name == "name" {
+                                        lib_name = val_str;
+                                    } else if attr_res_id == 0x0101_028e || attr_name == "required" {
+                                        lib_req = val_str.trim().to_ascii_lowercase() != "false" && val_str != "0";
+                                    }
+                                }
+                                "overlay" => {
+                                    if (attr_res_id == 0x0101_0021 || attr_name == "targetPackage")
+                                        && !val_str.is_empty()
+                                    {
+                                        manifest.overlay_target = val_str;
+                                    } else if attr_name == "targetName" && !val_str.is_empty() {
+                                        manifest.overlay_target_name = val_str;
+                                    } else if attr_name == "isStatic" {
+                                        manifest.overlay_is_static =
+                                            val_str == "true" || val_str == "1" || typed_data != 0;
+                                    } else if (attr_res_id == 0x0101_001c || attr_name == "priority")
+                                        && (data_type == TYPE_INT_DEC || data_type == TYPE_INT_HEX)
+                                    {
+                                        manifest.overlay_priority = typed_data as i32;
+                                    } else if attr_name == "requiredSystemPropertyName"
+                                        && !val_str.is_empty()
+                                    {
+                                        manifest.overlay_required_prop_name = val_str;
+                                    } else if attr_name == "requiredSystemPropertyValue"
+                                        && !val_str.is_empty()
+                                    {
+                                        manifest.overlay_required_prop_value = val_str;
+                                    }
+                                }
+                                "category" => {
+                                    if (attr_res_id == ATTR_ID_NAME || attr_name == "name")
+                                        && val_str == "android.intent.category.HOME"
+                                    {
+                                        manifest.is_launcher = true;
+                                    }
+                                }
+                                "permission" => {
+                                    if attr_res_id == ATTR_ID_NAME || attr_name == "name" {
+                                        perm_decl_name = val_str;
+                                    } else if attr_res_id == 0x0101_0009 || attr_name == "protectionLevel" {
+                                        perm_decl_prot = typed_data;
+                                    }
+                                }
                                 "application" => {
                                     if attr_res_id == ATTR_ID_LABEL || attr_name == "label" {
                                         if data_type == TYPE_REFERENCE {
@@ -297,10 +362,39 @@ fn parse_axml_manifest(data: &[u8]) -> Option<ManifestParsed> {
                                         } else {
                                             manifest.icon_raw = val_str;
                                         }
+                                    } else if attr_res_id == ATTR_ID_NAME || attr_name == "name" {
+                                        comp_name = val_str;
+                                    } else if attr_res_id == ATTR_ID_ENABLED || attr_name == "enabled" {
+                                        if data_type == TYPE_INT_BOOLEAN || data_type == TYPE_INT_DEC {
+                                            comp_enabled = typed_data != 0;
+                                        }
+                                    }
+                                }
+                                "service" | "provider" => {
+                                    if attr_res_id == ATTR_ID_NAME || attr_name == "name" {
+                                        comp_name = val_str;
+                                    } else if attr_res_id == ATTR_ID_ENABLED || attr_name == "enabled" {
+                                        if data_type == TYPE_INT_BOOLEAN || data_type == TYPE_INT_DEC {
+                                            comp_enabled = typed_data != 0;
+                                        }
                                     }
                                 }
                                 _ => {}
                             }
+                        }
+                        if elem_name == "uses-library" && !lib_name.is_empty() {
+                            manifest.uses_libraries.push((lib_name, lib_req));
+                        }
+                        if elem_name == "permission" && !perm_decl_name.is_empty() {
+                            manifest.declared_permissions.push((perm_decl_name, perm_decl_prot));
+                        }
+                        if matches!(elem_name, "application" | "service" | "provider")
+                            && comp_enabled
+                            && !comp_name.is_empty()
+                            && !comp_name.starts_with('@')
+                            && manifest.components.len() < 64
+                        {
+                            manifest.components.push((elem_name.to_string(), comp_name));
                         }
                     }
                 }
@@ -309,6 +403,17 @@ fn parse_axml_manifest(data: &[u8]) -> Option<ManifestParsed> {
         }
 
         pos += chunk_size;
+    }
+
+    if !manifest.package.is_empty() {
+        let pkg = manifest.package.clone();
+        for (_tag, cname) in &mut manifest.components {
+            if cname.starts_with('.') {
+                *cname = format!("{pkg}{cname}");
+            } else if !cname.contains('.') {
+                *cname = format!("{pkg}.{cname}");
+            }
+        }
     }
 
     Some(manifest)

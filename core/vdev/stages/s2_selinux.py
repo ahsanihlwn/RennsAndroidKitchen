@@ -165,4 +165,37 @@ def run(ctx):
             KEY, "contexts", PASS, "System and vendor context files are complete",
         ))
 
+    # ── 4) Static secilc CIL symbol & duplicate-type assembly check ──
+    from core.vdev.selinux import audit_cil_symbols
+    cil_audit = audit_cil_symbols(vfs)
+    ctx.shared["selinux_cil"] = cil_audit
+    dups = cil_audit.get("duplicate_types") or []
+    unres = cil_audit.get("unresolved_symbols") or []
+    will_compile_at_boot = (not has_precompiled) or (bool(vnd_sha and sys_sha and vnd_sha != sys_sha))
+
+    if dups:
+        detail = "; ".join(f"{nm} declared as both (type) in {p1} and (typeattribute) in {p2}" for nm, p1, p2 in dups)
+        findings.append(Finding(
+            KEY, "cil-duplicate-type", BLOCKER if will_compile_at_boot else WARN,
+            f"{len(dups)} SELinux CIL type/typeattribute collision(s) across policy files",
+            f"secilc rejects symbols declared as both concrete type and typeattribute at boot: {detail}.",
+            "Resolve the conflicting type vs typeattribute declaration in vendor/odm/product CIL or align policy versions.",
+            dups[0][2],
+        ))
+    if unres:
+        detail = "; ".join(f"{sym} ({kind} in {vp})" for sym, vp, kind in unres)
+        findings.append(Finding(
+            KEY, "cil-symbol-unresolved", BLOCKER if will_compile_at_boot else WARN,
+            f"{len(unres)} unresolved SELinux CIL symbol(s) in assembled policy",
+            f"secilc fails to compile policy when referenced types/attributes are undeclared: {detail}.",
+            "Align vendor_sepolicy.cil / mapping/<ver>.cil with plat_sepolicy.cil so all referenced types exist.",
+            unres[0][1],
+        ))
+    if cil_audit.get("files") and not dups and not unres:
+        findings.append(Finding(
+            KEY, "cil-assembly-ok", PASS,
+            f"SELinux CIL symbol assembly valid ({cil_audit['type_count']} types · {cil_audit['attr_count']} attributes across {len(cil_audit['files'])} files)",
+            "Verified zero duplicate concrete types and zero unresolved type/attribute references for secilc.",
+        ))
+
     return findings

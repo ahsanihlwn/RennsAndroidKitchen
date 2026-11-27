@@ -10,6 +10,8 @@ import shutil
 from core import kitchen_process as subprocess
 import sys
 import tempfile
+import threading
+import time
 import logging
 from contextlib import nullcontext
 
@@ -74,11 +76,23 @@ def _parse_version(text: str) -> str:
     return m.group(1) if m else ""
 
 
+_DISTRO_CACHE_LOCK = threading.Lock()
+_DISTRO_CACHE: dict[str, object] = {"ts": 0.0, "distros": None, "probing": False}
+
+
+def update_distro_cache(distros: list[str] | tuple[str, ...]) -> list[str]:
+    cleaned = [str(d).strip() for d in distros if str(d).strip()]
+    with _DISTRO_CACHE_LOCK:
+        _DISTRO_CACHE["distros"] = cleaned
+        _DISTRO_CACHE["ts"] = time.monotonic()
+    return cleaned
+
+
 def list_distros() -> list[str]:
 
     rc, out = _run(["-l", "-q"], probe=True)
     if rc is None or rc != 0 or not out:
-        return []
+        return update_distro_cache([])
     distros = []
     for line in out.splitlines():
         # -l -q can still emit NUL padding between glyphs on some builds; the
@@ -86,7 +100,39 @@ def list_distros() -> list[str]:
         name = line.replace("\x00", "").strip()
         if name:
             distros.append(name)
-    return distros
+    return update_distro_cache(distros)
+
+
+def cached_distros(*, trigger_refresh: bool = True) -> list[str]:
+    """Non-blocking WSL distro list for UI menus; seeds from disk cache and refreshes in background."""
+    if sys.platform != "win32" or not _wsl_path():
+        return []
+    now = time.monotonic()
+    with _DISTRO_CACHE_LOCK:
+        cached = _DISTRO_CACHE["distros"]
+        stale = cached is None or (now - float(_DISTRO_CACHE["ts"])) >= 60.0
+        if cached is not None and not stale:
+            return list(cached)
+        should_probe = trigger_refresh and not _DISTRO_CACHE["probing"]
+        if should_probe:
+            _DISTRO_CACHE["probing"] = True
+    seed = list(cached) if cached is not None else [
+        row["distro"] for row in load_disk_usage_cache() if row.get("distro")
+    ]
+    if should_probe:
+        def _refresh():
+            try:
+                list_distros()
+            finally:
+                with _DISTRO_CACHE_LOCK:
+                    _DISTRO_CACHE["probing"] = False
+        threading.Thread(target=_refresh, name="rak-wsl-probe", daemon=True).start()
+    return seed
+
+
+def has_wsl_cached() -> bool:
+    """Fast non-blocking check whether a WSL Linux distribution is available."""
+    return bool(cached_distros(trigger_refresh=True))
 
 
 def distro_for_path(path: str) -> str | None:

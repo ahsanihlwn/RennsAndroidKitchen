@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: MPL-2.0
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout,
-    QLabel, QPushButton, QWidget
+    QLabel, QPushButton, QWidget, QListWidget, QListWidgetItem, QTextEdit
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
 from main_ext.class_ThemeUi import theme as _th
 from core.ui_lang import t
-from core.rennsproject_bridge import private_bundle_enabled
+from core.license_texts import license_entries, blocks_to_html
 
 
 def _btn_neutral():
@@ -22,39 +23,19 @@ def _btn_neutral():
     QPushButton:pressed {{ background: {_th.border_color(0.14)}; }}
     """
 
-def _lbl(text, size=12, color=None, bold=False, selectable=False):
-    c = color or _th.FG_MUTED
-    l = QLabel(text)
-    l.setStyleSheet(
-        f"color:{c}; font-size:{size}px; font-weight:{'600' if bold else '400'};"
-        " background:transparent; border:none;"
-    )
-    l.setTextFormat(Qt.RichText)
-    l.setWordWrap(True)
-    if selectable:
-        l.setTextInteractionFlags(Qt.TextSelectableByMouse)
-    return l
-
-def _sep():
-    d = QWidget()
-    d.setFixedHeight(1)
-    d.setStyleSheet(f"background: {_th.border_color(0.07)}; border:none;")
-    return d
-
 
 class LicenseWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle(t("lic_title"))
         self.setModal(True)
-        self.setFixedWidth(400)
+        self.setFixedSize(700, 520)
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setAttribute(Qt.WA_TranslucentBackground)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
-        # Convert _th.BG2 → rgba (efek kaca di atas BlurOverlay)
         _hex = _th.BG2.lstrip("#")
         _r, _g, _b = int(_hex[0:2], 16), int(_hex[2:4], 16), int(_hex[4:6], 16)
 
@@ -71,69 +52,83 @@ class LicenseWindow(QDialog):
         outer.addWidget(box)
 
         lay = QVBoxLayout(box)
-        lay.setContentsMargins(22, 20, 22, 18)
-        lay.setSpacing(0)
+        lay.setContentsMargins(24, 20, 24, 16)
+        lay.setSpacing(12)
 
-        title = _lbl(t("lic_title"), size=15, color=_th.FG, bold=True)
-        title.setAlignment(Qt.AlignCenter)
-        lay.addWidget(title)
-        lay.addSpacing(16)
-        lay.addWidget(_sep())
-        lay.addSpacing(16)
-
-        badge_row = QHBoxLayout()
-        badge_row.setContentsMargins(0, 0, 0, 0)
-        badge_lbl = QLabel("MPL-2.0")
-        badge_lbl.setStyleSheet(f"""
-            color: {_th.FG_BLUE};
-            font-size: 11px; font-weight: 600;
-            background: {_th.accent(0.12)};
-            border: 1px solid {_th.accent(0.25)};
-            border-radius: 4px; padding: 2px 10px;
-        """)
-        badge_lbl.setAlignment(Qt.AlignCenter)
-        badge_row.addStretch()
-        badge_row.addWidget(badge_lbl)
-        badge_row.addStretch()
-        lay.addLayout(badge_row)
-        lay.addSpacing(16)
-
-        copy_lbl = _lbl(t("lic_copyright"), size=12, color=_th.FG_BLUE_MUTED)
-        copy_lbl.setAlignment(Qt.AlignCenter)
-        lay.addWidget(copy_lbl)
-        lay.addSpacing(12)
-
-        notice = _lbl(t("lic_notice"), size=11, color=_th.FG_MUTED)
-        notice.setAlignment(Qt.AlignCenter)
-        lay.addWidget(notice)
-        if private_bundle_enabled():
-            lay.addSpacing(8)
-            private_notice = _lbl(t("lic_private_notice"), size=11, color=_th.FG_MUTED)
-            private_notice.setAlignment(Qt.AlignCenter)
-            lay.addWidget(private_notice)
-        lay.addSpacing(8)
-        source_link = _lbl(
-            f'<a href="https://github.com/ahsanihlwn/RennsAndroidKitchen" '
-            f'style="color:{_th.FG_BLUE};">{t("lic_source")}</a>', size=11,
+        title = QLabel(t("lic_title"))
+        title.setStyleSheet(
+            f"color:{_th.FG}; font-size:16px; font-weight:600; background:transparent; border:none;"
         )
-        source_link.setAlignment(Qt.AlignCenter)
-        source_link.setOpenExternalLinks(True)
-        lay.addWidget(source_link)
-        lay.addSpacing(16)
-        lay.addWidget(_sep())
-        lay.addSpacing(14)
+        lay.addWidget(title)
 
-        tp_title = _lbl(t("lic_third_party"), size=11, color=_th.FG_MUTED)
-        tp_title.setAlignment(Qt.AlignCenter)
-        lay.addWidget(tp_title)
-        lay.addSpacing(8)
+        body_row = QHBoxLayout()
+        body_row.setSpacing(12)
 
-        tp_lbl = _lbl(t("lic_pyside6"), size=11, color=_th.FG_MUTED)
-        tp_lbl.setAlignment(Qt.AlignCenter)
-        lay.addWidget(tp_lbl)
-        lay.addSpacing(16)
-        lay.addWidget(_sep())
-        lay.addSpacing(14)
+        self._entries = license_entries()
+        nav = QListWidget()
+        nav.setFixedWidth(200)
+        nav.setStyleSheet(f"""
+            QListWidget {{
+                background: transparent;
+                border: none;
+                outline: none;
+                color: {_th.FG};
+                font-family: "Poppins";
+                font-size: 12px;
+            }}
+            QListWidget::item {{
+                padding: 8px 10px;
+                border-radius: 8px;
+            }}
+            QListWidget::item:selected {{
+                background: {_th.accent(0.14)};
+                color: {_th.FG_BRIGHT};
+            }}
+        """)
+        for entry in self._entries:
+            nav.addItem(QListWidgetItem(f"{entry['name']}\n{entry['meta']}"))
+        body_row.addWidget(nav)
+
+        divider = QWidget()
+        divider.setFixedWidth(1)
+        divider.setStyleSheet(f"background: {_th.border_color(0.07)}; border: none;")
+        body_row.addWidget(divider)
+
+        detail_col = QVBoxLayout()
+        detail_col.setSpacing(6)
+        doc_summary = QLabel()
+        doc_summary.setWordWrap(True)
+        doc_summary.setStyleSheet(f"color:{_th.FG_BLUE_MUTED}; font-size:11px;")
+
+        viewer = QTextEdit()
+        viewer.setReadOnly(True)
+        viewer.setFont(QFont("Poppins", 10))
+        viewer.setStyleSheet(
+            f"QTextEdit {{ background: transparent; color: {_th.FG_MUTED}; border: none; }}"
+        )
+
+        detail_col.addWidget(doc_summary)
+        detail_col.addWidget(viewer, 1)
+        body_row.addLayout(detail_col, 1)
+        lay.addLayout(body_row, 1)
+
+        def select_entry(row: int) -> None:
+            if not 0 <= row < len(self._entries):
+                return
+            entry = self._entries[row]
+            summary_text = str(entry["summary"] or "")
+            doc_summary.setVisible(bool(summary_text))
+            doc_summary.setText(summary_text)
+            viewer.setHtml(blocks_to_html(
+                entry["blocks"],
+                accent=_th.FG_BLUE,
+                fg_bright=_th.FG_BRIGHT,
+                fg=_th.FG,
+                fg_muted=_th.FG_MUTED,
+            ))
+
+        nav.currentRowChanged.connect(select_entry)
+        nav.setCurrentRow(0)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(0)
@@ -146,5 +141,3 @@ class LicenseWindow(QDialog):
         btn_close.clicked.connect(self.accept)
         btn_row.addWidget(btn_close)
         lay.addLayout(btn_row)
-
-        self.adjustSize()

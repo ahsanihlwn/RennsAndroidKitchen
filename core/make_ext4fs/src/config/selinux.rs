@@ -260,7 +260,6 @@ impl FileContexts {
                     b'd' => S_IFDIR,
                     b'p' => S_IFIFO,
                     b'l' => S_IFLNK,
-                    #[cfg(not(windows))]
                     b's' => S_IFSOCK,
                     b'-' => S_IFREG,
                     _ => {
@@ -338,7 +337,7 @@ impl FileContexts {
         }
 
         let cleaned;
-        let key_ref = if key.contains("//") {
+        let mut key_ref = if key.contains("//") {
             let mut s = String::with_capacity(key.len());
             let mut prev_slash = false;
             for ch in key.chars() {
@@ -357,6 +356,13 @@ impl FileContexts {
         } else {
             key
         };
+
+        if key_ref.len() > 1 && key_ref.ends_with('/') {
+            key_ref = &key_ref[..key_ref.len() - 1];
+        }
+        if key_ref.is_empty() {
+            return None;
+        }
 
         let (file_stem_id, tail) = if let Some(stem) = get_stem_from_file_name(key_ref) {
             if let Some(id) = self.stems.iter().position(|s| s == stem) {

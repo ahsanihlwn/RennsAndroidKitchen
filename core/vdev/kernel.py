@@ -186,9 +186,67 @@ def vermagic_matches(kernel_vermagic, vermagic, has_crcs=False):
     if has_crcs:
         # strcspn(x, " ") — buang segmen pertama (versi) beserta pemisahnya.
         if " " not in a:
-
-
             return None
         a = a.split(" ", 1)[1]
         b = b.split(" ", 1)[1] if " " in b else ""
     return a == b
+
+
+_GKI_KMI_RE = re.compile(r"\b(\d+\.\d+)(?:\.\d+)?-(android\d+-\d+)\b")
+_MAJ_MIN_RE = re.compile(r"\b(\d+\.\d+)(?:\.\d+)?\b")
+
+
+def extract_kmi_release(ver_str: str) -> tuple[str, str]:
+    """Return (major_minor, gki_kmi) from a kernel version or vermagic string.
+
+    Example: '6.12.38-android16-5-gb575a0-4k' -> ('6.12', '6.12-android16-5').
+    """
+    s = (ver_str or "").strip()
+    if not s:
+        return ("", "")
+    m = _GKI_KMI_RE.search(s)
+    if m:
+        return (m.group(1), f"{m.group(1)}-{m.group(2)}")
+    m2 = _MAJ_MIN_RE.search(s)
+    return (m2.group(1) if m2 else "", "")
+
+
+def kmi_matches_kernel(
+    kernel_version: str,
+    kernel_arch: str,
+    mod_vermagic: str,
+    has_crcs: bool = False,
+) -> tuple[bool | None, str]:
+    """Compare kernel release + arch against a .ko module's vermagic (GKI-aware)."""
+    k_mm, k_kmi = extract_kmi_release(kernel_version)
+    m_mm, m_kmi = extract_kmi_release(mod_vermagic)
+    if not k_mm or not m_mm:
+        return (None, "unable to parse kernel/module release")
+
+    ka = (kernel_arch or "").strip().lower()
+    mv = (mod_vermagic or "").strip()
+    if ka == "arm64" and ("ARMv7" in mv or "ARMv6" in mv or "x86" in mv):
+        return (False, f"arch mismatch (kernel={ka}, module={mv})")
+    if ka == "arm" and ("aarch64" in mv or "x86" in mv):
+        return (False, f"arch mismatch (kernel={ka}, module={mv})")
+
+    if k_mm != m_mm:
+        return (False, f"kernel series mismatch (kernel={k_mm}, module={m_mm})")
+    if k_kmi and m_kmi and k_kmi != m_kmi:
+        return (False, f"GKI KMI mismatch (kernel={k_kmi}, module={m_kmi})")
+    if k_kmi and m_kmi and k_kmi == m_kmi:
+        if has_crcs or "modversions" in mv:
+            return (True, f"GKI KMI {k_kmi} + CONFIG_MODVERSIONS match")
+        # Non-modversions build with same KMI prefix
+        k_tok = (kernel_version or "").split()[0]
+        m_tok = mv.split()[0]
+        if k_tok == m_tok:
+            return (True, f"exact release match ({k_tok})")
+        return (False, f"non-modversions release mismatch (kernel={k_tok}, module={m_tok})")
+    if has_crcs or "modversions" in mv:
+        return (True, f"kernel {k_mm} + CONFIG_MODVERSIONS match")
+    k_tok = (kernel_version or "").split()[0]
+    m_tok = mv.split()[0]
+    if k_tok == m_tok:
+        return (True, f"exact release match ({k_tok})")
+    return (False, f"release mismatch (kernel={k_tok}, module={m_tok})")

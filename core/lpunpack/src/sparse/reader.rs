@@ -263,31 +263,55 @@ impl<R: Read + Seek> SparseReader<R> {
 
     /// Unpack the sparse image sequentially into `writer`.
     pub fn write_raw_to<W: io::Write + Seek>(&mut self, writer: &mut W) -> io::Result<()> {
+        self.write_raw_to_with_progress(writer, |_| {})
+    }
+
+    /// Unpack the sparse image sequentially into `writer` while emitting 0..=100 progress.
+    pub fn write_raw_to_with_progress<W: io::Write + Seek, F>(
+        &mut self,
+        writer: &mut W,
+        mut on_progress: F,
+    ) -> io::Result<()>
+    where
+        F: FnMut(u8),
+    {
         let mut buf = vec![0u8; COPY_BUF_SIZE];
         let mut hole: u64 = 0;
+        let total = self.total_size.max(1);
+        let mut processed: u64 = 0;
+        let mut last_pct: u8 = 0;
 
         for chunk in &self.chunks {
             match chunk.kind {
                 ChunkKind::DontCare => {
                     hole += chunk.len;
+                    processed += chunk.len;
                 }
                 ChunkKind::Fill(fill) => {
                     if fill == [0, 0, 0, 0] {
                         hole += chunk.len;
+                        processed += chunk.len;
+                    } else {
+                        if hole > 0 {
+                            writer.seek(SeekFrom::Current(hole as i64))?;
+                            hole = 0;
+                        }
+                        for slot in buf.chunks_exact_mut(4) {
+                            slot.copy_from_slice(&fill);
+                        }
+                        let mut rem = chunk.len;
+                        while rem > 0 {
+                            let step = (rem as usize).min(buf.len());
+                            writer.write_all(&buf[..step])?;
+                            rem -= step as u64;
+                            processed += step as u64;
+                            let pct = ((processed.saturating_mul(100)) / total).min(100) as u8;
+                            if pct > last_pct {
+                                last_pct = pct;
+                                on_progress(pct);
+                            }
+                        }
                         continue;
-                    }
-                    if hole > 0 {
-                        writer.seek(SeekFrom::Current(hole as i64))?;
-                        hole = 0;
-                    }
-                    for slot in buf.chunks_exact_mut(4) {
-                        slot.copy_from_slice(&fill);
-                    }
-                    let mut rem = chunk.len;
-                    while rem > 0 {
-                        let step = (rem as usize).min(buf.len());
-                        writer.write_all(&buf[..step])?;
-                        rem -= step as u64;
                     }
                 }
                 ChunkKind::Raw { file_offset } => {
@@ -302,8 +326,20 @@ impl<R: Read + Seek> SparseReader<R> {
                         self.inner.read_exact(&mut buf[..step])?;
                         writer.write_all(&buf[..step])?;
                         rem -= step as u64;
+                        processed += step as u64;
+                        let pct = ((processed.saturating_mul(100)) / total).min(100) as u8;
+                        if pct > last_pct {
+                            last_pct = pct;
+                            on_progress(pct);
+                        }
                     }
+                    continue;
                 }
+            }
+            let pct = ((processed.saturating_mul(100)) / total).min(100) as u8;
+            if pct > last_pct {
+                last_pct = pct;
+                on_progress(pct);
             }
         }
 
@@ -311,6 +347,7 @@ impl<R: Read + Seek> SparseReader<R> {
             writer.seek(SeekFrom::Current(hole as i64 - 1))?;
             writer.write_all(&[0])?;
         }
+        on_progress(100);
         Ok(())
     }
 }

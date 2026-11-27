@@ -209,4 +209,82 @@ def run(ctx):
             "binary there does not affect boot. Not checked.",
         ))
 
+    # ── Duplicate service declarations (init silently ignores later duplicates) ──
+    dupes = getattr(model, "duplicate_services", None) or {}
+    if dupes:
+        d_items = "; ".join(f"{nm} ({', '.join(origs)})" for nm, origs in sorted(dupes.items()))
+        findings.append(Finding(
+            KEY, "duplicate-service", WARN,
+            f"{len(dupes)} duplicate init service name(s) across .rc files",
+            f"Android init ignores duplicate service blocks after the first definition: {d_items}.",
+            "Remove the stale duplicate service block so the intended HAL/daemon actually starts.",
+        ))
+
+    # ── Reachable `exec` / `exec_background` command target binaries ──
+    _RUNTIME_EXEC_PREFIXES = (
+        "/apex/", "/data/", "/dev/", "/proc/", "/sys/", "/mnt/",
+        "/storage/", "/tmp/", "/cache/", "/metadata/", "/debug_ramdisk/", "/acct/",
+    )
+    exec_missing = []
+    exec_checked = 0
+    for cmd_nm, bpath, trig, orig in getattr(model, "exec_commands", None) or ():
+        if not bpath.startswith("/") or "${" in bpath or bpath.startswith(_RUNTIME_EXEC_PREFIXES):
+            continue
+        exec_checked += 1
+        if not vfs.is_file(bpath):
+            exec_missing.append(f"{cmd_nm} {bpath} (on {trig} in {orig})")
+    if exec_missing:
+        findings.append(Finding(
+            KEY, "exec-missing", WARN,
+            f"{len(exec_missing)} reachable init exec command(s) target missing binaries",
+            "; ".join(exec_missing),
+            "Provide the executable or remove the obsolete exec line from the .rc file.",
+        ))
+
+    # ── Explicit `start` / `exec_start` targeting undeclared service names ──
+    unk_starts = []
+    seen_unk = set()
+    for sname, trig in getattr(model, "unknown_explicit_starts", None) or ():
+        if "${" in sname or (sname, trig) in seen_unk:
+            continue
+        seen_unk.add((sname, trig))
+        unk_starts.append(f"{sname} (on {trig})")
+    if unk_starts:
+        findings.append(Finding(
+            KEY, "start-unknown-service", INFO,
+            f"{len(unk_starts)} reachable start/exec_start command(s) reference undeclared service(s)",
+            "; ".join(unk_starts),
+            "If this service comes from a separate OEM partition or APEX, it may be harmless; otherwise restore its .rc file.",
+        ))
+
+    # ── Structured chronological trigger timeline for full boot trace ──
+    trig_order = list(getattr(model, "trigger_order", None) or ())
+    if any(t == "vold-decrypt" for t, _ in model.executed):
+        trig_order.append("vold-decrypt")
+    by_trig_cls = {}
+    for cls, trig in model.class_starts:
+        by_trig_cls.setdefault(trig, []).append(cls)
+    by_trig_start = {}
+    for sname, trig in model.explicit_starts:
+        by_trig_start.setdefault(trig, []).append(sname)
+    by_trig_ma = {}
+    for ma, trig in model.mount_all:
+        by_trig_ma.setdefault(trig, []).append(ma)
+    by_trig_exec = {}
+    for cmd_nm, bpath, trig, _o in getattr(model, "exec_commands", None) or ():
+        by_trig_exec.setdefault(trig, []).append(f"{cmd_nm} {bpath}")
+    timeline = []
+    for trig in trig_order:
+        timeline.append({
+            "trigger": trig,
+            "mount_all": by_trig_ma.get(trig, []),
+            "class_starts": by_trig_cls.get(trig, []),
+            "explicit_starts": by_trig_start.get(trig, []),
+            "execs": by_trig_exec.get(trig, []),
+        })
+    ctx.shared["init"]["trigger_timeline"] = timeline
+    ctx.shared["init"]["setprops"] = list(getattr(model, "setprops", None) or ())
+    ctx.shared["init"]["duplicate_services"] = dupes
+    ctx.shared["init"]["exec_commands"] = list(getattr(model, "exec_commands", None) or ())
+
     return findings
